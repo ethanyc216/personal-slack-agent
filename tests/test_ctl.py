@@ -101,6 +101,23 @@ def test_show_config_prints_path_and_contents_when_file_exists(tmp_path, monkeyp
     assert "allowed_actor_ids" in captured.out
 
 
+def test_show_config_redacts_slack_api_token(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "[defaults]\nallowed_actor_ids=[\"U123\"]\nslack_api_token=\"xoxc-secret\"\n",
+        encoding="utf-8",
+    )
+
+    exit_code = ctl_main(["show-config"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "***REDACTED***" in captured.out
+    assert "xoxc-secret" not in captured.out
+
+
 def test_show_config_prints_not_found_message_when_missing(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
 
@@ -180,6 +197,31 @@ def test_start_spawns_bob_agent_process_with_config_and_interval(tmp_path, monke
         "12.0",
     ]
     assert calls["kwargs"]["start_new_session"] is True
+    assert "started" in captured.out.lower()
+
+
+def test_start_removes_stale_stop_request_file_before_spawn(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("[defaults]\nallowed_actor_ids=[\"U123\"]\n", encoding="utf-8")
+    paths = build_runtime_paths()
+    paths.stop_request_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.stop_request_file.write_text("stop\n", encoding="utf-8")
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            self.pid = 33333
+            paths.pid_file.parent.mkdir(parents=True, exist_ok=True)
+            paths.pid_file.write_text(str(self.pid), encoding="utf-8")
+
+    monkeypatch.setattr(ctl_module.subprocess, "Popen", FakePopen)
+
+    exit_code = ctl_main(["start"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert not paths.stop_request_file.exists()
     assert "started" in captured.out.lower()
 
 

@@ -151,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         if running:
             print("bob-agent is already running (pid {0}).".format(running[0]))
             return 0
+        _remove_lock_file(paths.stop_request_file)
         pid = _read_lock_pid(paths.pid_file) or _read_lock_pid(paths.lock_file)
         if pid is not None and not _is_pid_running(pid):
             _remove_lock_file(paths.lock_file)
