@@ -125,6 +125,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=30.0,
         help="Polling interval for bob-agent in seconds (default: 30).",
     )
+    restart_parser = subparsers.add_parser("restart", help="Restart Bob.")
+    restart_parser.add_argument(
+        "--config",
+        default=str(default_config_file()),
+        help="Path to the Bob configuration file to pass to bob-agent.",
+    )
+    restart_parser.add_argument(
+        "--poll-interval-seconds",
+        type=_positive_float,
+        default=30.0,
+        help="Polling interval for bob-agent in seconds (default: 30).",
+    )
     subparsers.add_parser("stop", help="Stop Bob.")
     subparsers.add_parser("status", help="Show Bob status.")
     tail_parser = subparsers.add_parser("tail-log", help="Tail Bob logs.")
@@ -182,6 +194,20 @@ def main(argv: list[str] | None = None) -> int:
 
         print("Started bob-agent in background (pid {0}).".format(process.pid))
         return 0
+
+    if args.command == "restart":
+        stop_exit = main(["stop"])
+        if stop_exit not in (0, 1):
+            return stop_exit
+        return main(
+            [
+                "start",
+                "--config",
+                str(paths.config_file),
+                "--poll-interval-seconds",
+                str(float(args.poll_interval_seconds)),
+            ]
+        )
 
     if args.command == "stop":
         running = _running_pids(paths)

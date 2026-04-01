@@ -20,7 +20,7 @@ Working pieces:
 - Slack root-message pickup from configured channels
 - thread/session mapping to local Codex sessions
 - thread reply resume for existing sessions
-- local process control with `bobctl start|stop|status|tail-log|show-config|doctor`
+- local process control with `bobctl start|stop|restart|status|tail-log|show-config|doctor`
 
 Current constraints:
 
@@ -152,6 +152,12 @@ Check status:
 
 ```bash
 .venv/bin/bobctl status
+```
+
+Restart Bob:
+
+```bash
+.venv/bin/bobctl restart --config ~/.config/personal-slack-agent/bob.toml --poll-interval-seconds 10
 ```
 
 Tail logs:

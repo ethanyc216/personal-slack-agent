@@ -200,6 +200,45 @@ def test_start_spawns_bob_agent_process_with_config_and_interval(tmp_path, monke
     assert "started" in captured.out.lower()
 
 
+def test_restart_stops_then_starts_with_same_config_and_interval(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("[defaults]\nallowed_actor_ids=[\"U123\"]\n", encoding="utf-8")
+    paths = build_runtime_paths()
+    paths.pid_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.pid_file.write_text("43210", encoding="utf-8")
+
+    spawned = {}
+    running_states = iter([True, False, False])
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            spawned["cmd"] = list(cmd)
+            spawned["kwargs"] = dict(kwargs)
+            self.pid = 33333
+            paths.pid_file.write_text(str(self.pid), encoding="utf-8")
+
+    monkeypatch.setattr(ctl_module, "_is_pid_running", lambda pid: next(running_states, False))
+    monkeypatch.setattr(ctl_module.subprocess, "Popen", FakePopen)
+
+    exit_code = ctl_main(["restart", "--poll-interval-seconds", "12"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "stopped" in captured.out.lower()
+    assert "started" in captured.out.lower()
+    assert spawned["cmd"] == [
+        str(Path(sys.executable)),
+        "-m",
+        "personal_slack_agent.cli.agent",
+        "--config",
+        str(config_file),
+        "--poll-interval-seconds",
+        "12.0",
+    ]
+
+
 def test_start_removes_stale_stop_request_file_before_spawn(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
