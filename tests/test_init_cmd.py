@@ -51,3 +51,75 @@ def test_init_force_overwrites_existing_file(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert config_file.read_text(encoding="utf-8") != "original"
+
+
+def test_discover_slack_auth_updates_workspace_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "bob.toml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(tmp_path),
+                'allowed_actor_ids = ["U123"]',
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'allowed_actor_ids = ["U123"]',
+                'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeAdapter:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def set_workspace_urls(self, workspace_urls):
+            self.workspace_urls = dict(workspace_urls)
+
+        def discover_api_session(self, workspace_name):
+            assert workspace_name == "oracle"
+            return ("xoxc-demo-token", "https://example.enterprise.slack.com")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("personal_slack_agent.cli.init_cmd.PlaywrightSlackAdapter", FakeAdapter)
+
+    exit_code = init_main(
+        [
+            "--discover-slack-auth",
+            "--workspace",
+            "oracle",
+            "--config",
+            str(config_file),
+        ]
+    )
+
+    assert exit_code == 0
+    updated = load_config(config_file)
+    assert updated.workspaces[0].slack_api_origin == "https://example.enterprise.slack.com"
+    assert updated.workspaces[0].slack_api_token == "xoxc-demo-token"
+
+
+def test_discover_slack_auth_requires_workspace_name(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "bob.toml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(tmp_path),
+                'allowed_actor_ids = ["U123"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = init_main(["--discover-slack-auth", "--config", str(config_file)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "workspace" in captured.err.lower()

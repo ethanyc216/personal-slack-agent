@@ -1,6 +1,6 @@
 import pytest
 
-from personal_slack_agent.config import ConfigError, load_config
+from personal_slack_agent.config import ConfigError, dump_config, load_config
 
 
 def test_defaults_include_slack_signin_url_when_omitted(tmp_path):
@@ -317,3 +317,34 @@ def test_paths_are_expanded_and_resolved_relative_to_config(tmp_path, monkeypatc
     config = load_config(config_path)
 
     assert config.defaults.default_cwd == str(project_root.resolve())
+
+
+def test_dump_config_round_trips_workspace_api_fields(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "workspace-slack-api.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "workspace"
+        allowed_actor_ids = ["U123"]
+        slack_url = "https://app.slack.com/client/T12345678/C12345678"
+        slack_api_origin = "https://example.enterprise.slack.com"
+        slack_api_token = "xoxc-demo-token"
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+    rendered = dump_config(loaded)
+    rewritten = tmp_path / "rewritten.toml"
+    rewritten.write_text(rendered, encoding="utf-8")
+    reloaded = load_config(rewritten)
+
+    assert reloaded.workspaces[0].slack_api_origin == "https://example.enterprise.slack.com"
+    assert reloaded.workspaces[0].slack_api_token == "xoxc-demo-token"

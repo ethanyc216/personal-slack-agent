@@ -4,7 +4,9 @@ import argparse
 import sys
 from pathlib import Path
 
+from ..config import dump_config, load_config
 from ..paths import default_config_file
+from ..slack.playwright_adapter import PlaywrightSlackAdapter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -13,9 +15,23 @@ def build_parser() -> argparse.ArgumentParser:
         description="Initialize local Bob config and state directories.",
     )
     parser.add_argument(
+        "--config",
+        default=str(default_config_file()),
+        help="Path to the Bob configuration file.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite existing generated files.",
+    )
+    parser.add_argument(
+        "--discover-slack-auth",
+        action="store_true",
+        help="Discover Slack Web API auth from the logged-in browser session and write it into config.",
+    )
+    parser.add_argument(
+        "--workspace",
+        help="Workspace name to update when using --discover-slack-auth.",
     )
     return parser
 
@@ -52,8 +68,47 @@ def _starter_config(default_cwd: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config_file = default_config_file()
+    config_file = Path(args.config).expanduser()
     config_file.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.discover_slack_auth:
+        if not args.workspace:
+            print("--workspace is required with --discover-slack-auth.", file=sys.stderr)
+            return 2
+        if not config_file.exists():
+            print(
+                "Config file does not exist at {0}. Run bob-init first.".format(config_file),
+                file=sys.stderr,
+            )
+            return 1
+        config = load_config(config_file)
+        workspace = next((item for item in config.workspaces if item.name == args.workspace), None)
+        if workspace is None:
+            print("Workspace not found in config: {0}".format(args.workspace), file=sys.stderr)
+            return 1
+        adapter = PlaywrightSlackAdapter(
+            browser_mode=config.defaults.browser_mode,
+            cdp_url=config.defaults.cdp_url,
+            slack_signin_url=config.defaults.slack_signin_url,
+            chrome_executable_path=config.defaults.chrome_executable_path,
+            browser_user_data_dir=config.defaults.browser_user_data_dir,
+        )
+        adapter.set_workspace_urls(
+            {
+                item.name: item.slack_url
+                for item in config.workspaces
+                if item.slack_url
+            }
+        )
+        try:
+            token, origin = adapter.discover_api_session(args.workspace)
+        finally:
+            adapter.close()
+        workspace.slack_api_origin = origin
+        workspace.slack_api_token = token
+        config_file.write_text(dump_config(config), encoding="utf-8")
+        print("Updated Slack API auth for workspace {0} in {1}".format(args.workspace, config_file))
+        return 0
 
     if config_file.exists() and not args.force:
         print(

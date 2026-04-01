@@ -68,6 +68,13 @@ This writes:
 ~/.config/personal-slack-agent/bob.toml
 ```
 
+Also included in the repo:
+
+```text
+config/bob.sample.toml
+docs/setup.md
+```
+
 ### Example config
 
 ```toml
@@ -112,6 +119,15 @@ post_terminal_threads_here = true
 - `slack_api_token`
   This is currently the browser-session token used for the private Slack web API path.
   Treat it as sensitive.
+
+### Automatic Slack auth bootstrap
+
+If the target workspace is already open in your debuggable Chrome session, you can populate
+`slack_api_origin` and `slack_api_token` automatically:
+
+```bash
+.venv/bin/bob-init --discover-slack-auth --workspace my-workspace
+```
 
 - `browser_mode`
   Supported values:
@@ -220,6 +236,10 @@ Run the full test suite:
   package source
 - `tests/`
   automated tests
+- `config/bob.sample.toml`
+  committed sample config template
+- `docs/setup.md`
+  dedicated setup guide
 - `pyproject.toml`
   packaging metadata
 

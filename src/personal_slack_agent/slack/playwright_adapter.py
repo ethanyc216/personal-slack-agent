@@ -196,6 +196,9 @@ class PlaywrightSlackAdapter:
         self._api_sessions[workspace_name] = (token, origin)
         return token, origin
 
+    def discover_api_session(self, workspace_name: str) -> Tuple[str, str]:
+        return self._discover_api_session(workspace_name)
+
     def _call_slack_api(
         self,
         workspace_name: str,

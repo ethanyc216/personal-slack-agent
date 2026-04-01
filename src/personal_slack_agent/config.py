@@ -40,6 +40,79 @@ def load_config(config_path: Union[str, Path]) -> AppConfig:
     return AppConfig(defaults=defaults, workspaces=workspaces)
 
 
+def dump_config(config: AppConfig) -> str:
+    lines = [
+        "[defaults]",
+        'default_cwd = "{0}"'.format(_toml_escape(config.defaults.default_cwd)),
+    ]
+    if config.defaults.additional_roots:
+        lines.append(
+            "additional_roots = [{0}]".format(
+                ", ".join('"{}"'.format(_toml_escape(item)) for item in config.defaults.additional_roots)
+            )
+        )
+    lines.append(
+        "allowed_actor_ids = [{0}]".format(
+            ", ".join('"{}"'.format(_toml_escape(item)) for item in config.defaults.allowed_actor_ids)
+        )
+    )
+    lines.append(
+        "accept_root_bob_requests = {0}".format("true" if config.defaults.accept_root_bob_requests else "false")
+    )
+    lines.append('slack_signin_url = "{0}"'.format(_toml_escape(config.defaults.slack_signin_url)))
+    lines.append('browser_mode = "{0}"'.format(_toml_escape(config.defaults.browser_mode)))
+    lines.append('browser_url = "{0}"'.format(_toml_escape(config.defaults.browser_url)))
+    lines.append('cdp_url = "{0}"'.format(_toml_escape(config.defaults.cdp_url)))
+    if config.defaults.chrome_executable_path is not None:
+        lines.append('chrome_executable_path = "{0}"'.format(_toml_escape(config.defaults.chrome_executable_path)))
+    if config.defaults.browser_user_data_dir is not None:
+        lines.append('browser_user_data_dir = "{0}"'.format(_toml_escape(config.defaults.browser_user_data_dir)))
+    if config.defaults.reminder_minutes:
+        lines.append(
+            "reminder_minutes = [{0}]".format(", ".join(str(item) for item in config.defaults.reminder_minutes))
+        )
+    if config.defaults.auto_close_minutes is not None:
+        lines.append("auto_close_minutes = {0}".format(config.defaults.auto_close_minutes))
+
+    for workspace in config.workspaces:
+        lines.extend(
+            [
+                "",
+                "[[workspaces]]",
+                'name = "{0}"'.format(_toml_escape(workspace.name)),
+                "allowed_actor_ids = [{0}]".format(
+                    ", ".join('"{}"'.format(_toml_escape(item)) for item in workspace.allowed_actor_ids)
+                ),
+            ]
+        )
+        if workspace.slack_url is not None:
+            lines.append('slack_url = "{0}"'.format(_toml_escape(workspace.slack_url)))
+        if workspace.slack_api_origin is not None:
+            lines.append('slack_api_origin = "{0}"'.format(_toml_escape(workspace.slack_api_origin)))
+        if workspace.slack_api_token is not None:
+            lines.append('slack_api_token = "{0}"'.format(_toml_escape(workspace.slack_api_token)))
+        for channel in workspace.channels:
+            lines.extend(
+                [
+                    "",
+                    "[[workspaces.channels]]",
+                    'name = "{0}"'.format(_toml_escape(channel.name)),
+                ]
+            )
+            if channel.default_cwd is not None:
+                lines.append('default_cwd = "{0}"'.format(_toml_escape(channel.default_cwd)))
+            if channel.accept_root_bob_requests is not None:
+                lines.append(
+                    "accept_root_bob_requests = {0}".format(
+                        "true" if channel.accept_root_bob_requests else "false"
+                    )
+                )
+            if channel.post_terminal_threads_here:
+                lines.append("post_terminal_threads_here = true")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
     if not isinstance(raw_defaults, Mapping):
         raise ConfigError("Missing required [defaults] table.")
@@ -293,6 +366,10 @@ def _optional_string(value: Any, field_name: str) -> Optional[str]:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError("{0} must be a non-empty string.".format(field_name))
     return value.strip()
+
+
+def _toml_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _directory_list(value: Any, field_name: str, base_dir: Path) -> List[str]:

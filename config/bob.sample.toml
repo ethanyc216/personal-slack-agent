@@ -1,0 +1,26 @@
+[defaults]
+default_cwd = "/Users/you/Code"
+additional_roots = ["/Users/you/Code"]
+allowed_actor_ids = ["U12345678"]
+accept_root_bob_requests = true
+slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+browser_mode = "shared_browser"
+browser_url = "http://127.0.0.1:9222"
+cdp_url = "http://127.0.0.1:9222"
+# chrome_executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+# browser_user_data_dir = "~/.config/personal-slack-agent/chrome-profile"
+reminder_minutes = [30]
+auto_close_minutes = 120
+
+[[workspaces]]
+name = "my-workspace"
+allowed_actor_ids = ["U12345678"]
+slack_url = "https://app.slack.com/client/T12345678/C12345678"
+slack_api_origin = "https://example.enterprise.slack.com"
+slack_api_token = "xoxc-..."
+
+[[workspaces.channels]]
+name = "my-private-channel"
+default_cwd = "/Users/you/Code"
+accept_root_bob_requests = true
+post_terminal_threads_here = true
