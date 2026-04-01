@@ -1,0 +1,2 @@
+"""Personal Slack Agent package."""
+

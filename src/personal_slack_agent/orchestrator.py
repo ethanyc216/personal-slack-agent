@@ -1,0 +1,559 @@
+from typing import List, Optional, Protocol, Tuple
+
+from .codex_runner import CodexRunResult
+from .models import AppConfig, ChannelConfig, OutboundIntentRecord, SessionRecord, SessionStatus
+from .slack import SlackBrowserAdapter
+from .state import BobStateStore
+
+
+class CodexRunner(Protocol):
+    def run_new_session(self, prompt: str, cwd: str, additional_roots: List[str]) -> CodexRunResult:
+        ...
+
+    def resume_session(self, session_id: str, prompt: str, cwd: str) -> CodexRunResult:
+        ...
+
+
+class BobOrchestrator:
+    _PURPOSE_ROOT_REQUEST = "root_request"
+    _PURPOSE_THREAD_REPLY = "thread_reply"
+
+    def __init__(
+        self,
+        browser: SlackBrowserAdapter,
+        state_store: BobStateStore,
+        codex_runner: CodexRunner,
+        config: AppConfig,
+    ) -> None:
+        self.browser = browser
+        self.state_store = state_store
+        self.codex_runner = codex_runner
+        self.config = config
+
+    def handle_new_root_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+        author_actor_id: str,
+        text: str,
+    ) -> None:
+        workspace = self._find_workspace(workspace_name)
+        channel = self._find_channel(workspace, channel_name) if workspace else None
+        if workspace is None or channel is None:
+            return
+        if not self._is_bob_root_message(text):
+            return
+        if not self._is_actor_allowed(workspace_name, author_actor_id):
+            return
+
+        claimed = self.state_store.claim_processed_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=message_ts,
+            message_ts=message_ts,
+            author_actor_id=author_actor_id,
+            purpose=self._PURPOSE_ROOT_REQUEST,
+        )
+        if not claimed:
+            return
+
+        if not channel.effective_accept_root_bob_requests:
+            return
+
+        existing = self.state_store.get_by_thread(workspace_name, channel_name, message_ts)
+        if existing is not None:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                intent_key="duplicate-session-warning",
+                text=(
+                    "Bob already has a session in this thread: {0}".format(
+                        existing.codex_session_id
+                    )
+                ),
+            )
+            return
+
+        cwd = self._resolve_default_cwd(workspace_name, channel_name)
+        try:
+            run_result = self.codex_runner.run_new_session(
+                prompt=text,
+                cwd=cwd,
+                additional_roots=list(self.config.defaults.additional_roots),
+            )
+        except Exception:
+            self.state_store.release_processed_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                message_ts=message_ts,
+                purpose=self._PURPOSE_ROOT_REQUEST,
+            )
+            raise
+        session_id = run_result.session_id or "unknown-session"
+        self.state_store.upsert_session(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=message_ts,
+            root_ts=message_ts,
+            codex_session_id=session_id,
+            cwd=cwd,
+            owner_actor_id=author_actor_id,
+            status=SessionStatus.RUNNING,
+        )
+        try:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                intent_key="start-status",
+                text="Bob is working on it: {0}".format(session_id),
+            )
+            self._process_run_result(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                session_id=session_id,
+                run_result=run_result,
+                result_key_suffix=message_ts,
+            )
+        except Exception:
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                status=SessionStatus.FAILED,
+            )
+            raise
+
+    def handle_thread_reply(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        author_actor_id: str,
+        text: str,
+    ) -> None:
+        record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
+        if record is None:
+            return
+        if not self._is_actor_allowed(workspace_name, author_actor_id):
+            return
+
+        claimed = self.state_store.claim_processed_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            author_actor_id=author_actor_id,
+            purpose=self._PURPOSE_THREAD_REPLY,
+        )
+        if not claimed:
+            return
+
+        if record.status is SessionStatus.WAITING_FOR_APPROVAL:
+            self._handle_approval_reply(
+                record=record,
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                message_ts=message_ts,
+                text=text,
+                author_actor_id=author_actor_id,
+            )
+            return
+
+        if record.status is SessionStatus.WAITING_FOR_INPUT:
+            if author_actor_id != record.owner_actor_id:
+                return
+            self._resume_record(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                session_id=record.codex_session_id,
+                prompt=text,
+            )
+            return
+
+        if record.status in (
+            SessionStatus.CLOSED_IDLE,
+            SessionStatus.CLOSED_TIMEOUT,
+            SessionStatus.CLOSED_MANUAL,
+            SessionStatus.FAILED,
+        ):
+            if author_actor_id != record.owner_actor_id:
+                return
+            self._resume_record(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                session_id=record.codex_session_id,
+                prompt=text,
+            )
+            return
+
+    def _handle_approval_reply(
+        self,
+        record: SessionRecord,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+        text: str,
+        author_actor_id: str,
+    ) -> None:
+        if author_actor_id != record.owner_actor_id and not self._is_actor_allowed(
+            workspace_name,
+            author_actor_id,
+        ):
+            return
+
+        action, approval_id = self._parse_approval_reply(text)
+        current_approval_id = record.approval_request_id or ""
+        if approval_id != current_approval_id or action not in ("approve", "deny", "cancel"):
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=record.thread_ts,
+                intent_key="approval-id-mismatch-{0}".format(message_ts),
+                text=self._approval_needed_text(record),
+            )
+            return
+
+        if action in ("deny", "cancel"):
+            action_text = "denied" if action == "deny" else "canceled"
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=record.thread_ts,
+                intent_key="approval-{0}-{1}".format(action, approval_id),
+                text="Bob {0} command request {1}.".format(action_text, approval_id),
+            )
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=record.thread_ts,
+                status=SessionStatus.CLOSED_MANUAL,
+            )
+            return
+
+        try:
+            run_result = self.codex_runner.resume_session(record.codex_session_id, text, record.cwd)
+        except Exception:
+            self.state_store.release_processed_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=record.thread_ts,
+                message_ts=message_ts,
+                purpose=self._PURPOSE_THREAD_REPLY,
+            )
+            raise
+        self.state_store.update_status(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=record.thread_ts,
+            status=SessionStatus.RUNNING,
+        )
+        try:
+            self._process_run_result(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=record.thread_ts,
+                session_id=record.codex_session_id,
+                run_result=run_result,
+                result_key_suffix=message_ts,
+            )
+        except Exception:
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=record.thread_ts,
+                status=SessionStatus.FAILED,
+            )
+            raise
+
+    def _process_run_result(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        session_id: str,
+        run_result: CodexRunResult,
+        result_key_suffix: str,
+    ) -> None:
+        if run_result.wait_kind == "input":
+            wait_message = run_result.wait_message or "Please reply in this thread."
+            waiting_message_ts = self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="wait-input-{0}".format(result_key_suffix),
+                text="Bob needs input: {0}".format(wait_message),
+            )
+            self.state_store.set_waiting_state(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.WAITING_FOR_INPUT,
+                waiting_message_ts=waiting_message_ts,
+                approval_request_id=None,
+                approval_command_summary=None,
+                reminder_due_at=None,
+                auto_close_due_at=None,
+            )
+            return
+
+        if run_result.wait_kind == "approval":
+            approval_request_id = self._extract_approval_request_id(run_result.wait_message)
+            if approval_request_id is None:
+                approval_request_id = "APR-{0}".format(thread_ts.replace(".", "")[-6:])
+            approval_summary = run_result.wait_message or "Command requires approval"
+            waiting_message_ts = self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="wait-approval-{0}-{1}".format(
+                    approval_request_id,
+                    result_key_suffix,
+                ),
+                text=(
+                    "Bob needs approval: {0} "
+                    "(reply with `approve {1}`, `deny {1}`, or `cancel {1}`)"
+                ).format(approval_summary, approval_request_id),
+            )
+            self.state_store.set_waiting_state(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.WAITING_FOR_APPROVAL,
+                waiting_message_ts=waiting_message_ts,
+                approval_request_id=approval_request_id,
+                approval_command_summary=approval_summary,
+                reminder_due_at=None,
+                auto_close_due_at=None,
+            )
+            return
+
+        if run_result.final_output:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
+                text="codex Bob: {0}".format(run_result.final_output),
+            )
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.CLOSED_IDLE,
+            )
+            return
+
+        if run_result.failure_text:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="failure-{0}".format(session_id),
+                text="Bob hit an error: {0}".format(run_result.failure_text),
+            )
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.FAILED,
+            )
+
+    def _resume_record(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        session_id: str,
+        prompt: str,
+    ) -> None:
+        record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
+        if record is None:
+            return
+        try:
+            run_result = self.codex_runner.resume_session(session_id, prompt, record.cwd)
+        except Exception:
+            self.state_store.release_processed_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                purpose=self._PURPOSE_THREAD_REPLY,
+            )
+            raise
+        self.state_store.update_status(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            status=SessionStatus.RUNNING,
+        )
+        try:
+            self._process_run_result(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                session_id=session_id,
+                run_result=run_result,
+                result_key_suffix=message_ts,
+            )
+        except Exception:
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.FAILED,
+            )
+            raise
+
+    def _deliver_thread_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        intent_key: str,
+        text: str,
+    ) -> Optional[str]:
+        self.state_store.upsert_outbound_intent(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key=intent_key,
+            action="post_thread_reply",
+            text=text,
+            delivered=False,
+            message_ts=None,
+        )
+        pending_intent = self._find_pending_intent(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key=intent_key,
+        )
+        if pending_intent is None:
+            return None
+
+        if pending_intent.delivery_state == "attempted":
+            existing_messages = self.browser.find_existing_bob_messages(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+            )
+            if text in existing_messages:
+                reconciled_ts = "{0}.reconciled".format(thread_ts.split(".")[0])
+                self.state_store.mark_outbound_intent_delivered(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    intent_key=intent_key,
+                    message_ts=reconciled_ts,
+                )
+                return reconciled_ts
+
+        try:
+            reply_ts = self.browser.post_thread_reply(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                text=text,
+            )
+        except Exception:
+            self.state_store.mark_outbound_intent_attempted(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key=intent_key,
+            )
+            raise
+
+        self.state_store.mark_outbound_intent_delivered(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key=intent_key,
+            message_ts=reply_ts,
+        )
+        return reply_ts
+
+    def _find_pending_intent(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        intent_key: str,
+    ) -> Optional[OutboundIntentRecord]:
+        pending = self.state_store.list_pending_outbound_intents()
+        for intent in pending:
+            if (
+                intent.workspace_name == workspace_name
+                and intent.channel_name == channel_name
+                and intent.thread_ts == thread_ts
+                and intent.intent_key == intent_key
+            ):
+                return intent
+        return None
+
+    def _resolve_default_cwd(self, workspace_name: str, channel_name: str) -> str:
+        workspace = self._find_workspace(workspace_name)
+        channel = self._find_channel(workspace, channel_name) if workspace else None
+        if channel is not None and channel.effective_default_cwd:
+            return channel.effective_default_cwd
+        return self.config.defaults.default_cwd
+
+    def _is_actor_allowed(self, workspace_name: str, actor_id: str) -> bool:
+        workspace = self._find_workspace(workspace_name)
+        if workspace is None:
+            return False
+        allowed = workspace.allowed_actor_ids
+        return actor_id in allowed
+
+    def _find_workspace(self, workspace_name: str):
+        for workspace in self.config.workspaces:
+            if workspace.name == workspace_name:
+                return workspace
+        return None
+
+    def _find_channel(self, workspace, channel_name: str) -> Optional[ChannelConfig]:
+        if workspace is None:
+            return None
+        for channel in workspace.channels:
+            if channel.name == channel_name:
+                return channel
+        return None
+
+    def _parse_approval_reply(self, text: str) -> Tuple[str, str]:
+        parts = text.strip().split()
+        if len(parts) < 2:
+            return "", ""
+        return parts[0].lower(), parts[1]
+
+    def _is_bob_root_message(self, text: str) -> bool:
+        normalized = text.strip().lower()
+        return normalized.startswith("bob")
+
+    def _extract_approval_request_id(self, wait_message: Optional[str]) -> Optional[str]:
+        if not wait_message:
+            return None
+        for token in wait_message.split():
+            if token.startswith("APR-"):
+                return token
+        return None
+
+    def _approval_needed_text(self, record: SessionRecord) -> str:
+        approval_id = record.approval_request_id or "APR-unknown"
+        summary = record.approval_command_summary or "pending command"
+        return (
+            "Bob needs approval: {0} (reply with `approve {1}`, `deny {1}`, or `cancel {1}`)".format(
+                summary,
+                approval_id,
+            )
+        )

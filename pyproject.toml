@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-slack-agent"
+version = "0.1.0"
+description = "Local Slack Web to Codex bridge for Bob."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "playwright>=1.54.0",
+    "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+bob-agent = "personal_slack_agent.cli:agent_main"
+bobctl = "personal_slack_agent.cli:ctl_main"
+bob = "personal_slack_agent.cli:wrapper_main"
+bob-init = "personal_slack_agent.cli:init_main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

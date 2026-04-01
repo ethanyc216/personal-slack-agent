@@ -1,0 +1,336 @@
+from pathlib import Path
+from typing import Any, List, Mapping, Optional, Union
+from urllib.parse import urlparse
+
+from .models import (
+    DEDICATED_BROWSER_MODE,
+    DEFAULT_SLACK_SIGNIN_URL,
+    SHARED_BROWSER_MODE,
+    AppConfig,
+    ChannelConfig,
+    DefaultSettings,
+    WorkspaceConfig,
+)
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
+    import tomli as tomllib  # type: ignore[no-redef]
+
+
+class ConfigError(ValueError):
+    pass
+
+
+def apply_channel_defaults(defaults: DefaultSettings, channel: ChannelConfig) -> ChannelConfig:
+    channel.effective_default_cwd = channel.default_cwd or defaults.default_cwd
+    channel.effective_accept_root_bob_requests = (
+        defaults.accept_root_bob_requests
+        if channel.accept_root_bob_requests is None
+        else channel.accept_root_bob_requests
+    )
+    return channel
+
+
+def load_config(config_path: Union[str, Path]) -> AppConfig:
+    path = Path(config_path).expanduser().resolve()
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    defaults = _parse_defaults(raw.get("defaults"), path.parent)
+    workspaces = _parse_workspaces(raw.get("workspaces"), defaults, path.parent)
+    return AppConfig(defaults=defaults, workspaces=workspaces)
+
+
+def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
+    if not isinstance(raw_defaults, Mapping):
+        raise ConfigError("Missing required [defaults] table.")
+
+    return DefaultSettings(
+        default_cwd=_directory_path(raw_defaults.get("default_cwd"), "defaults.default_cwd", base_dir),
+        additional_roots=_directory_list(
+            raw_defaults.get("additional_roots"),
+            "defaults.additional_roots",
+            base_dir,
+        ),
+        accept_root_bob_requests=_optional_bool(raw_defaults.get("accept_root_bob_requests"), "defaults.accept_root_bob_requests", default=True),
+        allowed_actor_ids=_string_list(raw_defaults.get("allowed_actor_ids"), "defaults.allowed_actor_ids"),
+        slack_signin_url=_optional_https_url(
+            raw_defaults.get("slack_signin_url"),
+            "defaults.slack_signin_url",
+            default=DEFAULT_SLACK_SIGNIN_URL,
+        ),
+        browser_mode=_browser_mode(
+            raw_defaults.get("browser_mode"),
+            "defaults.browser_mode",
+            default=DEDICATED_BROWSER_MODE,
+        ),
+        browser_url=_optional_url(
+            raw_defaults.get("browser_url"),
+            "defaults.browser_url",
+            default="http://127.0.0.1:9222",
+        ),
+        cdp_url=_optional_url(
+            raw_defaults.get("cdp_url"),
+            "defaults.cdp_url",
+            default="http://127.0.0.1:9222",
+        ),
+        chrome_executable_path=_optional_path(
+            raw_defaults.get("chrome_executable_path"),
+            "defaults.chrome_executable_path",
+            base_dir=base_dir,
+        ),
+        browser_user_data_dir=_optional_path(
+            raw_defaults.get("browser_user_data_dir"),
+            "defaults.browser_user_data_dir",
+            base_dir=base_dir,
+        ),
+        reminder_minutes=_int_list(raw_defaults.get("reminder_minutes"), "defaults.reminder_minutes"),
+        auto_close_minutes=_optional_int(raw_defaults.get("auto_close_minutes"), "defaults.auto_close_minutes"),
+    )
+
+
+def _parse_workspaces(raw_workspaces: Any, defaults: DefaultSettings, base_dir: Path) -> List[WorkspaceConfig]:
+    if raw_workspaces is None:
+        return []
+    if not isinstance(raw_workspaces, list):
+        raise ConfigError("workspaces must be an array of tables.")
+
+    result = []
+    seen_names = set()
+    for index, raw_workspace in enumerate(raw_workspaces):
+        if not isinstance(raw_workspace, Mapping):
+            raise ConfigError("Each workspace must be a table.")
+        name = raw_workspace.get("name")
+        if not isinstance(name, str) or not name:
+            raise ConfigError("workspace.name must be a non-empty string.")
+        if name in seen_names:
+            raise ConfigError(f"Duplicate workspace name: {name}")
+        seen_names.add(name)
+
+        channels = _parse_channels(
+            raw_workspace.get("channels"),
+            defaults=defaults,
+            workspace_index=index,
+            base_dir=base_dir,
+        )
+        raw_allowed_actor_ids = raw_workspace.get("allowed_actor_ids")
+        if raw_allowed_actor_ids is None:
+            allowed_actor_ids = list(defaults.allowed_actor_ids)
+        else:
+            allowed_actor_ids = _string_list(
+                raw_allowed_actor_ids,
+                "workspaces.allowed_actor_ids",
+            )
+        if not allowed_actor_ids:
+            raise ConfigError(
+                "workspace.allowed_actor_ids must be configured directly or inherited from defaults.allowed_actor_ids."
+            )
+        result.append(
+            WorkspaceConfig(
+                name=name,
+                channels=channels,
+                allowed_actor_ids=allowed_actor_ids,
+                slack_url=_optional_https_url(
+                    raw_workspace.get("slack_url"),
+                    "workspaces.slack_url",
+                ),
+                slack_api_origin=_optional_https_url(
+                    raw_workspace.get("slack_api_origin"),
+                    "workspaces.slack_api_origin",
+                ),
+                slack_api_token=_optional_string(
+                    raw_workspace.get("slack_api_token"),
+                    "workspaces.slack_api_token",
+                ),
+            )
+        )
+
+    return result
+
+
+def _parse_channels(
+    raw_channels: Any,
+    defaults: DefaultSettings,
+    workspace_index: int,
+    base_dir: Path,
+) -> List[ChannelConfig]:
+    if raw_channels is None:
+        return []
+    if not isinstance(raw_channels, list):
+        raise ConfigError("workspaces.channels must be an array of tables.")
+
+    channels = []
+    seen_names = set()
+    for channel_index, raw_channel in enumerate(raw_channels):
+        if not isinstance(raw_channel, Mapping):
+            raise ConfigError("Each channel must be a table.")
+        channel_name = raw_channel.get("name")
+        if not isinstance(channel_name, str) or not channel_name:
+            raise ConfigError(
+                "Missing required workspaces[{0}].channels[{1}].name.".format(
+                    workspace_index, channel_index
+                )
+            )
+        if channel_name in seen_names:
+            raise ConfigError(f"Duplicate channel name in workspace[{workspace_index}]: {channel_name}")
+        seen_names.add(channel_name)
+
+        channel = ChannelConfig(
+            name=channel_name,
+            default_cwd=_optional_directory_path(
+                raw_channel.get("default_cwd"),
+                "channel.default_cwd",
+                base_dir,
+            ),
+            accept_root_bob_requests=_optional_bool(
+                raw_channel.get("accept_root_bob_requests"),
+                "channel.accept_root_bob_requests",
+            ),
+            post_terminal_threads_here=_optional_bool(
+                raw_channel.get("post_terminal_threads_here"),
+                "channel.post_terminal_threads_here",
+                default=False,
+            ),
+        )
+        channels.append(apply_channel_defaults(defaults, channel))
+    return channels
+
+
+def _string_list(value: Any, field_name: str) -> List[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+        raise ConfigError("{0} must be a list of strings.".format(field_name))
+    return list(value)
+
+
+def _int_list(value: Any, field_name: str) -> List[int]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(type(item) is int for item in value):
+        raise ConfigError("{0} must be a list of integers.".format(field_name))
+    return list(value)
+
+
+def _optional_bool(value: Any, field_name: str, default: Optional[bool] = None) -> Optional[bool]:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ConfigError("{0} must be a boolean.".format(field_name))
+    return value
+
+
+def _optional_int(value: Any, field_name: str) -> Optional[int]:
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise ConfigError("{0} must be an integer.".format(field_name))
+    return value
+
+
+def _optional_https_url(
+    value: Any,
+    field_name: str,
+    default: Optional[str] = None,
+) -> Optional[str]:
+    if value is None:
+        return default
+    return _https_url(value, field_name)
+
+
+def _optional_url(
+    value: Any,
+    field_name: str,
+    default: Optional[str] = None,
+) -> Optional[str]:
+    if value is None:
+        return default
+    return _url(value, field_name)
+
+
+def _url(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError("{0} must be a non-empty string.".format(field_name))
+    normalized = value.strip()
+    parsed = urlparse(normalized)
+    if not parsed.scheme or not parsed.netloc:
+        raise ConfigError("{0} must be an absolute URL.".format(field_name))
+    return normalized
+
+
+def _https_url(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError("{0} must be a non-empty string.".format(field_name))
+    normalized = value.strip()
+    parsed = urlparse(normalized)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ConfigError("{0} must be an https URL.".format(field_name))
+    return normalized
+
+
+def _browser_mode(value: Any, field_name: str, default: str) -> str:
+    if value is None:
+        return default
+    if value not in (SHARED_BROWSER_MODE, DEDICATED_BROWSER_MODE):
+        raise ConfigError(
+            "{0} must be one of: {1}, {2}.".format(
+                field_name,
+                SHARED_BROWSER_MODE,
+                DEDICATED_BROWSER_MODE,
+            )
+        )
+    return value
+
+
+def _optional_directory_path(value: Any, field_name: str, base_dir: Path) -> Optional[str]:
+    if value is None:
+        return None
+    return _directory_path(value, field_name, base_dir)
+
+
+def _optional_string(value: Any, field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError("{0} must be a non-empty string.".format(field_name))
+    return value.strip()
+
+
+def _directory_list(value: Any, field_name: str, base_dir: Path) -> List[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError("{0} must be a list of directory paths.".format(field_name))
+    return [_directory_path(item, field_name, base_dir) for item in value]
+
+
+def _directory_path(value: Any, field_name: str, base_dir: Path) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError("{0} must be a non-empty string.".format(field_name))
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    else:
+        path = path.resolve()
+
+    if not path.exists() or not path.is_dir():
+        raise ConfigError("{0} must point to an existing directory.".format(field_name))
+
+    return str(path)
+
+
+def _optional_path(value: Any, field_name: str, base_dir: Path) -> Optional[str]:
+    if value is None:
+        return None
+    return _path(value, field_name, base_dir)
+
+
+def _path(value: Any, field_name: str, base_dir: Path) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError("{0} must be a non-empty string.".format(field_name))
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    else:
+        path = path.resolve()
+    return str(path)
