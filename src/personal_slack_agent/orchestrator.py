@@ -17,11 +17,11 @@ class CodexRunner(Protocol):
 class BobOrchestrator:
     _PURPOSE_ROOT_REQUEST = "root_request"
     _PURPOSE_THREAD_REPLY = "thread_reply"
-    _LABEL_WORKING = "_*Bob is working on it :arrows_counterclockwise:::*_"
-    _LABEL_INPUT = "_*Bob needs input :exclamation:::*_"
-    _LABEL_APPROVAL = "_*Bob needs approval :exclamation:::*_"
-    _LABEL_DONE = "_*codex Bob :white_check_mark:::*_"
-    _LABEL_ERROR = "_*Bob hit an error :exclamation:::*_"
+    _LABEL_WORKING = "_*Bob is working on it :arrows_counterclockwise::*_"
+    _LABEL_INPUT = "_*Bob needs input :exclamation::*_"
+    _LABEL_APPROVAL = "_*Bob needs approval :exclamation::*_"
+    _LABEL_DONE = "_*codex Bob :white_check_mark::*_"
+    _LABEL_ERROR = "_*Bob hit an error :exclamation::*_"
 
     def __init__(
         self,
