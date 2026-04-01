@@ -187,9 +187,9 @@ Bob will:
 1. create or use the Slack thread for that request
 2. start a local Codex session
 3. post:
-   - `Bob is working on it: <session-id>`
+   - `_*Bob is working on it :arrows_counterclockwise:*_ <session-id>`
 4. post final output as:
-   - `codex Bob: ...`
+   - `_*codex Bob: :white_check_mark:*_ ...`
 
 If you reply in the thread later, Bob resumes the same local Codex session.
 

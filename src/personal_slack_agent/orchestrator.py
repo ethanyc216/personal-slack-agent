@@ -17,6 +17,11 @@ class CodexRunner(Protocol):
 class BobOrchestrator:
     _PURPOSE_ROOT_REQUEST = "root_request"
     _PURPOSE_THREAD_REPLY = "thread_reply"
+    _LABEL_WORKING = "_*Bob is working on it :arrows_counterclockwise:*_"
+    _LABEL_INPUT = "_*Bob needs input :exclamation:*_"
+    _LABEL_APPROVAL = "_*Bob needs approval :exclamation:*_"
+    _LABEL_DONE = "_*codex Bob: :white_check_mark:*_"
+    _LABEL_ERROR = "_*Bob hit an error :exclamation:*_"
 
     def __init__(
         self,
@@ -109,7 +114,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=message_ts,
                 intent_key="start-status",
-                text="Bob is working on it: {0}".format(session_id),
+                text="{0} {1}".format(self._LABEL_WORKING, session_id),
             )
             self._process_run_result(
                 workspace_name=workspace_name,
@@ -230,7 +235,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=record.thread_ts,
                 intent_key="approval-{0}-{1}".format(action, approval_id),
-                text="Bob {0} command request {1}.".format(action_text, approval_id),
+                text="_*Bob {0} command request :exclamation:*_ {1}.".format(action_text, approval_id),
             )
             self.state_store.update_status(
                 workspace_name=workspace_name,
@@ -291,7 +296,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 intent_key="wait-input-{0}".format(result_key_suffix),
-                text="Bob needs input: {0}".format(wait_message),
+                text="{0} {1}".format(self._LABEL_INPUT, wait_message),
             )
             self.state_store.set_waiting_state(
                 workspace_name=workspace_name,
@@ -320,9 +325,9 @@ class BobOrchestrator:
                     result_key_suffix,
                 ),
                 text=(
-                    "Bob needs approval: {0} "
-                    "(reply with `approve {1}`, `deny {1}`, or `cancel {1}`)"
-                ).format(approval_summary, approval_request_id),
+                    "{0} {1} "
+                    "(reply with `approve {2}`, `deny {2}`, or `cancel {2}`)"
+                ).format(self._LABEL_APPROVAL, approval_summary, approval_request_id),
             )
             self.state_store.set_waiting_state(
                 workspace_name=workspace_name,
@@ -343,7 +348,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
-                text="codex Bob: {0}".format(run_result.final_output),
+                text="{0} {1}".format(self._LABEL_DONE, run_result.final_output),
             )
             self.state_store.update_status(
                 workspace_name=workspace_name,
@@ -359,7 +364,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 intent_key="failure-{0}".format(session_id),
-                text="Bob hit an error: {0}".format(run_result.failure_text),
+                text="{0} {1}".format(self._LABEL_ERROR, run_result.failure_text),
             )
             self.state_store.update_status(
                 workspace_name=workspace_name,
@@ -552,7 +557,8 @@ class BobOrchestrator:
         approval_id = record.approval_request_id or "APR-unknown"
         summary = record.approval_command_summary or "pending command"
         return (
-            "Bob needs approval: {0} (reply with `approve {1}`, `deny {1}`, or `cancel {1}`)".format(
+            "{0} {1} (reply with `approve {2}`, `deny {2}`, or `cancel {2}`)".format(
+                self._LABEL_APPROVAL,
                 summary,
                 approval_id,
             )
