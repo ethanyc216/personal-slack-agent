@@ -133,8 +133,8 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     )
 
     thread_posts = browser.thread_posts["1743461000.000001"]
-    assert thread_posts[0].startswith("_*Bob is working on it :arrows_counterclockwise:*_ ")
-    assert thread_posts[1] == "_*codex Bob: :white_check_mark:*_ Final answer"
+    assert thread_posts[0].startswith("_*Bob is working on it :arrows_counterclockwise:::*_ ")
+    assert thread_posts[1] == "_*codex Bob :white_check_mark:::*_ Final answer"
     assert len(runner.new_session_calls) == 1
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
@@ -157,7 +157,7 @@ def test_waiting_for_input_posts_wait_message_and_saves_wait_state(fake_environm
         text="Bob, choose an option",
     )
 
-    assert browser.thread_posts["1743461000.000001"][-1] == "_*Bob needs input :exclamation:*_ Which option do you want?"
+    assert browser.thread_posts["1743461000.000001"][-1] == "_*Bob needs input :exclamation:::*_ Which option do you want?"
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.WAITING_FOR_INPUT
@@ -198,7 +198,7 @@ def test_duplicate_root_message_is_not_processed_twice(fake_environment):
     )
 
     assert len(runner.new_session_calls) == 1
-    assert browser.thread_posts["1743461000.000001"].count("_*codex Bob: :white_check_mark:*_ Final answer") == 1
+    assert browser.thread_posts["1743461000.000001"].count("_*codex Bob :white_check_mark:::*_ Final answer") == 1
 
 
 def test_non_bob_root_message_is_ignored(fake_environment):
@@ -242,7 +242,7 @@ def test_stale_approval_id_is_rejected(fake_environment):
     )
 
     assert runner.resume_calls == []
-    assert browser.thread_posts["1743461000.000001"][-1].startswith("_*Bob needs approval :exclamation:*_")
+    assert browser.thread_posts["1743461000.000001"][-1].startswith("_*Bob needs approval :exclamation:::*_")
 
 
 def test_new_root_message_failure_releases_processed_claim(fake_environment):
@@ -357,7 +357,7 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
 
     assert len(runner.resume_calls) == 1
     assert runner.resume_calls[0]["cwd"] == "/tmp/project"
-    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob: :white_check_mark:*_ Follow-up answer"
+    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark:::*_ Follow-up answer"
 
 
 def test_failed_reply_resumes_same_session(fake_environment):
@@ -388,7 +388,7 @@ def test_failed_reply_resumes_same_session(fake_environment):
 
     assert len(runner.resume_calls) == 1
     assert runner.resume_calls[0]["cwd"] == "/tmp/project"
-    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob: :white_check_mark:*_ Recovered answer"
+    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark:::*_ Recovered answer"
 
 
 def test_second_waiting_input_prompt_is_posted(fake_environment):
@@ -420,9 +420,9 @@ def test_second_waiting_input_prompt_is_posted(fake_environment):
     )
 
     posts = browser.thread_posts["1743461000.000001"]
-    assert "_*Bob needs input :exclamation:*_ First question?" in posts
-    assert "_*Bob needs input :exclamation:*_ Second question?" in posts
-    assert posts.count("_*Bob needs input :exclamation:*_ Second question?") == 1
+    assert "_*Bob needs input :exclamation:::*_ First question?" in posts
+    assert "_*Bob needs input :exclamation:::*_ Second question?" in posts
+    assert posts.count("_*Bob needs input :exclamation:::*_ Second question?") == 1
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
     assert record.waiting_message_ts is not None
@@ -448,7 +448,7 @@ def test_generated_approval_id_is_included_in_prompt(fake_environment):
     assert record is not None
     assert record.approval_request_id is not None
     last_post = browser.thread_posts["1743461000.000001"][-1]
-    assert "_*Bob needs approval :exclamation:*_" in last_post
+    assert "_*Bob needs approval :exclamation:::*_" in last_post
     assert record.approval_request_id in last_post
     assert "approve {0}".format(record.approval_request_id) in last_post
 
@@ -488,7 +488,7 @@ def test_approval_accept_resumes_same_session_with_cwd(fake_environment):
             "cwd": "/tmp/project",
         }
     ]
-    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob: :white_check_mark:*_ Approved answer"
+    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark:::*_ Approved answer"
 
 
 def test_deny_and_cancel_have_distinct_audit_messages(fake_environment):
