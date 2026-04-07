@@ -52,6 +52,7 @@ At minimum:
 
 - `allowed_actor_ids`
 - `slack_url`
+- one `[[workspaces.channels]]` `name`
 - `default_cwd`
 
 ## 5. Discover Slack API auth automatically

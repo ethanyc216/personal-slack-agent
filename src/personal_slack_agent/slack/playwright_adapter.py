@@ -39,11 +39,15 @@ class PlaywrightSlackAdapter:
         self._browser: Optional[Any] = None
         self._context: Optional[Any] = None
         self._workspace_urls: Dict[str, str] = {}
+        self._channel_urls: Dict[Tuple[str, str], str] = {}
         self._api_sessions: Dict[str, Tuple[str, str]] = {}
         self._workspace_api_contexts: Dict[str, Tuple[str, str]] = {}
 
     def set_workspace_urls(self, workspace_urls: Dict[str, str]) -> None:
         self._workspace_urls = dict(workspace_urls)
+
+    def set_channel_urls(self, channel_urls: Dict[Tuple[str, str], str]) -> None:
+        self._channel_urls = dict(channel_urls)
 
     def set_workspace_api_contexts(self, workspace_api_contexts: Dict[str, Tuple[str, str]]) -> None:
         self._workspace_api_contexts = dict(workspace_api_contexts)
@@ -136,6 +140,54 @@ class PlaywrightSlackAdapter:
 
     def _workspace_page(self, workspace_name: str) -> Any:
         return self.select_bob_tab(self._workspace_urls.get(workspace_name))
+
+    def _channel_url(self, workspace_name: str, channel_name: str) -> Optional[str]:
+        cached = self._channel_urls.get((workspace_name, channel_name))
+        if cached:
+            return cached
+        workspace_url = self._workspace_urls.get(workspace_name)
+        team_id, _channel_id = self._parse_workspace_target(workspace_url)
+        if not workspace_url or not team_id:
+            raise RuntimeError(
+                "Could not determine Slack workspace route for workspace {0}.".format(workspace_name)
+            )
+        resolved_channel_id = self._resolve_sidebar_channel_id(workspace_name, channel_name)
+        resolved_url = "https://app.slack.com/client/{0}/{1}".format(team_id, resolved_channel_id)
+        self._channel_urls[(workspace_name, channel_name)] = resolved_url
+        return resolved_url
+
+    def _resolve_sidebar_channel_id(self, workspace_name: str, channel_name: str) -> str:
+        page = self._workspace_page(workspace_name)
+        selector = '[data-qa="channel_sidebar_name_{0}"]'.format(
+            self._channel_sidebar_key(channel_name)
+        )
+        channel_id = page.evaluate(
+            """
+({ selector }) => {
+  const nameNode = document.querySelector(selector);
+  if (!nameNode) {
+    return null;
+  }
+  const channelNode = nameNode.closest('[data-qa-channel-sidebar-channel-id]');
+  if (channelNode) {
+    return channelNode.getAttribute('data-qa-channel-sidebar-channel-id');
+  }
+  const itemNode = nameNode.closest('[data-item-key], [id]');
+  if (!itemNode) {
+    return null;
+  }
+  return itemNode.getAttribute('data-item-key') || itemNode.id || null;
+}
+            """,
+            {"selector": selector},
+        )
+        if isinstance(channel_id, str) and channel_id.strip():
+            return channel_id.strip()
+        raise RuntimeError(
+            "Could not resolve Slack channel id from the rendered sidebar for channel {0}.".format(
+                channel_name
+            )
+        )
 
     def _api_page(self, origin: str) -> Any:
         runtime = self.connect()
@@ -370,7 +422,7 @@ async ({origin, methodName, token, params}) => {
         return replies
 
     def _ensure_channel_page(self, workspace_name: str, channel_name: str) -> Any:
-        page = self.select_bob_tab(self._workspace_urls.get(workspace_name))
+        page = self.select_bob_tab(self._channel_url(workspace_name, channel_name))
         if channel_name not in page.title():
             selector = '[data-qa="channel_sidebar_name_{0}"]'.format(
                 self._channel_sidebar_key(channel_name)
@@ -453,7 +505,7 @@ async ({origin, methodName, token, params}) => {
         thread_ts: str,
         text: str,
     ) -> str:
-        _team_id, channel_id = self._parse_workspace_target(self._workspace_urls.get(workspace_name))
+        _team_id, channel_id = self._parse_workspace_target(self._channel_url(workspace_name, channel_name))
         if not channel_id:
             raise RuntimeError("Could not determine Slack channel id for workspace {0}".format(workspace_name))
         payload = self._call_slack_api(
@@ -478,7 +530,7 @@ async ({origin, methodName, token, params}) => {
         workspace_name: str,
         channel_name: str,
     ) -> list[SlackRootMessage]:
-        _team_id, channel_id = self._parse_workspace_target(self._workspace_urls.get(workspace_name))
+        _team_id, channel_id = self._parse_workspace_target(self._channel_url(workspace_name, channel_name))
         if not channel_id:
             raise RuntimeError("Could not determine Slack channel id for workspace {0}".format(workspace_name))
         payload = self._call_slack_api(
@@ -503,7 +555,7 @@ async ({origin, methodName, token, params}) => {
         channel_name: str,
         thread_ts: str,
     ) -> list[SlackThreadReplyMessage]:
-        _team_id, channel_id = self._parse_workspace_target(self._workspace_urls.get(workspace_name))
+        _team_id, channel_id = self._parse_workspace_target(self._channel_url(workspace_name, channel_name))
         if not channel_id:
             raise RuntimeError("Could not determine Slack channel id for workspace {0}".format(workspace_name))
         payload = self._call_slack_api(

@@ -257,7 +257,7 @@ def test_run_once_builds_runtime_stack_and_executes_poll_cycle(tmp_path, monkeyp
         encoding="utf-8",
     )
 
-    calls = {"poll": 0, "workspace_urls": None, "workspace_api_contexts": None}
+    calls = {"poll": 0, "workspace_urls": None, "workspace_api_contexts": None, "channel_urls": None}
 
     class FakeBrowser:
         def __init__(self, **kwargs):
@@ -265,6 +265,9 @@ def test_run_once_builds_runtime_stack_and_executes_poll_cycle(tmp_path, monkeyp
 
         def set_workspace_urls(self, workspace_urls):
             calls["workspace_urls"] = dict(workspace_urls)
+
+        def set_channel_urls(self, channel_urls):
+            calls["channel_urls"] = dict(channel_urls)
 
         def set_workspace_api_contexts(self, workspace_api_contexts):
             calls["workspace_api_contexts"] = dict(workspace_api_contexts)
@@ -298,6 +301,7 @@ def test_run_once_builds_runtime_stack_and_executes_poll_cycle(tmp_path, monkeyp
     assert calls["workspace_urls"] == {
         "oracle": "https://app.slack.com/client/T12345678/C12345678"
     }
+    assert calls["channel_urls"] is None
     assert calls["workspace_api_contexts"] == {}
 
 

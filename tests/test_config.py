@@ -204,6 +204,35 @@ def test_channel_override_wins_over_global_default(tmp_path):
     assert config.workspaces[0].allowed_actor_ids == ["U123"]
 
 
+def test_channel_legacy_slack_url_is_ignored_and_not_dumped(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "legacy-channel-url.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+        slack_url = "https://app.slack.com/client/T12345678/C00000001"
+
+        [[workspaces.channels]]
+        name = "yifanche-private"
+        slack_url = "https://app.slack.com/client/T12345678/C12345678"
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+    rendered = dump_config(loaded)
+
+    assert 'slack_url = "https://app.slack.com/client/T12345678/C00000001"' in rendered
+    assert 'slack_url = "https://app.slack.com/client/T12345678/C12345678"' not in rendered
+
+
 def test_missing_workspace_channel_name_raises(tmp_path):
     default_root = tmp_path / "project"
     default_root.mkdir()

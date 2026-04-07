@@ -335,6 +335,68 @@ def test_thread_route_url_uses_workspace_channel_and_exact_thread_ts():
     assert thread_url == "https://app.slack.com/client/T12345678/C12345678/thread/C12345678-1774999116.837699"
 
 
+def test_channel_url_uses_legacy_seeded_route_when_provided():
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_urls({"workspace": "https://app.slack.com/client/T123/C111"})
+    adapter.set_channel_urls({("workspace", "other-channel"): "https://app.slack.com/client/T123/C222"})
+
+    assert adapter._channel_url("workspace", "other-channel") == "https://app.slack.com/client/T123/C222"
+
+
+def test_channel_url_resolves_sidebar_channel_id_without_click_and_caches_it():
+    class FakeWorkspacePage:
+        def __init__(self):
+            self.calls = 0
+
+        def evaluate(self, script, arg):
+            del script
+            self.calls += 1
+            assert arg["selector"] == '[data-qa="channel_sidebar_name_yifanche-bob"]'
+            return "C0AQT4S6QHM"
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    page = FakeWorkspacePage()
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/E655JKQRX/C03J3TXQBSP"})
+    adapter._workspace_page = lambda workspace_name: page  # type: ignore[method-assign]
+
+    first = adapter._channel_url("oracle", "yifanche-bob")
+    second = adapter._channel_url("oracle", "yifanche-bob")
+
+    assert first == "https://app.slack.com/client/E655JKQRX/C0AQT4S6QHM"
+    assert second == "https://app.slack.com/client/E655JKQRX/C0AQT4S6QHM"
+    assert page.calls == 1
+
+
+def test_channel_url_raises_when_sidebar_channel_is_not_rendered():
+    class FakeWorkspacePage:
+        def evaluate(self, script, arg):
+            del script, arg
+            return None
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/E655JKQRX/C03J3TXQBSP"})
+    adapter._workspace_page = lambda workspace_name: FakeWorkspacePage()  # type: ignore[method-assign]
+
+    try:
+        adapter._channel_url("oracle", "missing-channel")
+    except RuntimeError as exc:
+        assert "missing-channel" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected RuntimeError when sidebar channel id cannot be resolved.")
+
+
 def test_extract_api_session_info_reads_token_and_origin_from_request():
     adapter = PlaywrightSlackAdapter(
         browser_mode="shared_browser",

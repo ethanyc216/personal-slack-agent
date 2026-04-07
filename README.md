@@ -111,7 +111,8 @@ post_terminal_threads_here = true
   Only these Slack user IDs may trigger or resume Bob work.
 
 - `slack_url`
-  This should point to the Slack client URL for the workspace/channel you want Bob to use.
+  This should point to any Slack client URL inside the target workspace.
+  Bob resolves per-channel ids from the rendered sidebar DOM at startup, so channels only need names in config.
 
 - `slack_api_origin`
   This is the same-origin Slack web host Bob will use for browser-session-backed `/api/...` calls.
@@ -154,7 +155,7 @@ In that Chrome instance:
 1. open `chrome://inspect/#remote-debugging`
 2. enable remote debugging
 3. log into Slack
-4. open the workspace/channel page you configured
+4. open any page inside the workspace you configured
 
 ## Usage
 

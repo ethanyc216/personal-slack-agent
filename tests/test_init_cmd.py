@@ -23,7 +23,8 @@ def test_init_creates_config_directory_and_starter_toml(tmp_path, monkeypatch):
     assert "cdp_url" in contents
     assert "chrome_executable_path" in contents
     assert "browser_user_data_dir" in contents
-    assert 'slack_url = "https://app.slack.com/client/T12345678/C12345678"' in contents
+    assert '# slack_url = "https://app.slack.com/client/T12345678/C12345678"' in contents
+    assert '# name = "your-private-channel"' in contents
     assert load_config(config_file).defaults.allowed_actor_ids
 
 
