@@ -530,3 +530,69 @@ def test_set_waiting_state_updates_wait_fields_safely(tmp_path):
         assert False, "Expected ValueError for non-waiting status"
     except ValueError:
         pass
+
+
+def test_channel_cursor_round_trip(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    store.upsert_channel_cursor("workspace", "channel", "1775029000.698249")
+
+    assert store.get_channel_cursor("workspace", "channel") == "1775029000.698249"
+
+
+def test_thread_cursor_round_trip(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    store.upsert_thread_cursor(
+        "workspace", "channel", "thread-1", "1775029017.231629"
+    )
+
+    assert (
+        store.get_thread_cursor("workspace", "channel", "thread-1")
+        == "1775029017.231629"
+    )
+
+
+def test_initialize_legacy_db_still_supports_cursor_persistence(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    connection = sqlite3.connect(str(db_path))
+    connection.execute(
+        """
+        CREATE TABLE sessions (
+            workspace_name TEXT NOT NULL,
+            channel_name TEXT NOT NULL,
+            thread_ts TEXT NOT NULL,
+            root_ts TEXT NOT NULL,
+            codex_session_id TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            status TEXT NOT NULL,
+            waiting_message_ts TEXT,
+            reminder_count INTEGER NOT NULL DEFAULT 0,
+            last_summary TEXT,
+            last_error TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (workspace_name, channel_name, thread_ts)
+        )
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    store.upsert_channel_cursor("workspace", "channel", "1775029000.698249")
+    store.upsert_thread_cursor(
+        "workspace", "channel", "thread-1", "1775029017.231629"
+    )
+
+    assert store.get_channel_cursor("workspace", "channel") == "1775029000.698249"
+    assert (
+        store.get_thread_cursor("workspace", "channel", "thread-1")
+        == "1775029017.231629"
+    )

@@ -17,7 +17,8 @@ Working pieces:
 - package install and CLI entrypoints
 - config generation and validation
 - background watcher loop
-- Slack root-message pickup from configured channels
+- websocket-first Slack event detection
+- targeted Slack API hydration for channel roots and thread replies
 - thread/session mapping to local Codex sessions
 - thread reply resume for existing sessions
 - local process control with `bobctl start|stop|restart|status|tail-log|show-config|doctor`
@@ -26,7 +27,7 @@ Current constraints:
 
 - macOS only
 - Chrome/Chromium required
-- Slack integration uses private browser-session-backed `/api/...` calls, not Slack’s official public app API
+- Slack integration uses Slack Web realtime sockets plus private browser-session-backed `/api/...` calls, not Slack’s official public app API
 - Slack message deletion/edit cleanup is not implemented yet
 
 ## Install
@@ -165,6 +166,8 @@ In that Chrome instance:
 .venv/bin/bobctl start --config ~/.config/personal-slack-agent/bob.toml --poll-interval-seconds 10
 ```
 
+`--poll-interval-seconds` is the idle cycle / recovery interval. Bob does not walk every channel on every tick anymore; normal detection is websocket-driven and the interval mainly controls reconnect recovery cadence and stop-file responsiveness.
+
 Check status:
 
 ```bash
@@ -189,7 +192,7 @@ Stop Bob:
 .venv/bin/bobctl stop
 ```
 
-### One-shot poll
+### One-shot cycle
 
 For debugging:
 
@@ -226,7 +229,7 @@ Run the full test suite:
 
 ## Security notes
 
-- This project currently relies on browser-session-backed Slack web requests.
+- This project relies on Slack Web realtime sockets plus browser-session-backed private Slack web requests.
 - The `slack_api_token` is sensitive and should not be committed.
 - Do not publish your personal config file.
 - Do not share your Chrome profile or Slack browser session.
@@ -249,4 +252,4 @@ Run the full test suite:
 - macOS only
 - no official Slack app/OAuth integration
 - no Slack message cleanup/deletion flow yet
-- browser/web request behavior may need adjustment if Slack changes its private web client APIs
+- browser/web request behavior may need adjustment if Slack changes its private web client APIs or websocket protocol

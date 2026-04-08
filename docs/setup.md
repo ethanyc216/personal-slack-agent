@@ -75,6 +75,8 @@ That command:
 bobctl start --config ~/.config/personal-slack-agent/bob.toml --poll-interval-seconds 10
 ```
 
+`--poll-interval-seconds` is Bob's idle cycle / recovery interval. Normal message detection is websocket-driven; this interval mainly controls reconnect recovery cadence and stop-file responsiveness.
+
 Check it:
 
 ```bash
@@ -98,4 +100,5 @@ Bob should create a thread and reply with:
 ## Notes
 
 - `slack_api_token` is sensitive. Do not commit your personal config.
-- Bob currently uses private browser-session-backed Slack web APIs, not a public Slack app install flow.
+- Bob currently uses Slack Web realtime sockets for detection and private browser-session-backed Slack web APIs for hydration and posting, not a public Slack app install flow.
+- Per-channel message scraping through the Slack DOM is not part of the normal read path anymore. The browser is used for auth/bootstrap, channel-id discovery, and realtime websocket attachment.

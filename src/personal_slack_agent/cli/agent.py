@@ -6,136 +6,26 @@ import sys
 import time
 from logging import Logger
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Callable
 
 from ..config import load_config
 from ..codex_runner import SubprocessCodexRunner
 from ..lock import SingleInstanceLockError, acquire_single_instance_lock
 from ..logging_utils import setup_logging
-from ..models import AppConfig, SessionStatus
 from ..orchestrator import BobOrchestrator
 from .ctl import build_runtime_paths
 from ..paths import default_config_file
-from ..slack import SlackBrowserAdapter
 from ..slack.playwright_adapter import PlaywrightSlackAdapter
+from ..slack.watcher import SlackWatcher
 from ..state import BobStateStore
 
 
-class OrchestratorAdapter(Protocol):
-    def handle_new_root_message(
-        self,
-        workspace_name: str,
-        channel_name: str,
-        message_ts: str,
-        author_actor_id: str,
-        text: str,
-    ) -> None:
-        ...
-
-    def handle_thread_reply(
-        self,
-        workspace_name: str,
-        channel_name: str,
-        thread_ts: str,
-        message_ts: str,
-        author_actor_id: str,
-        text: str,
-    ) -> None:
-        ...
-
-
 def run_poll_cycle(
-    browser: SlackBrowserAdapter,
-    orchestrator: OrchestratorAdapter,
-    state_store: BobStateStore,
-    config: AppConfig,
+    watcher: SlackWatcher,
     logger: Logger = None,
 ) -> None:
-    for workspace in config.workspaces:
-        for channel in workspace.channels:
-            root_messages = browser.list_root_messages(
-                workspace_name=workspace.name,
-                channel_name=channel.name,
-            )
-            if logger is not None:
-                logger.info(
-                    "poll roots workspace=%s channel=%s count=%d latest=%s",
-                    workspace.name,
-                    channel.name,
-                    len(root_messages),
-                    root_messages[-1].message_ts if root_messages else "",
-                )
-            for root_message in root_messages:
-                orchestrator.handle_new_root_message(
-                    workspace_name=root_message.workspace_name,
-                    channel_name=root_message.channel_name,
-                    message_ts=root_message.message_ts,
-                    author_actor_id=root_message.author_actor_id,
-                    text=root_message.text,
-                )
-
-            tracked_sessions = state_store.list_sessions(
-                workspace_name=workspace.name,
-                channel_name=channel.name,
-            )
-            if logger is not None:
-                logger.info(
-                    "poll sessions workspace=%s channel=%s count=%d",
-                    workspace.name,
-                    channel.name,
-                    len(tracked_sessions),
-                )
-            for session in tracked_sessions:
-                if session.status is SessionStatus.RUNNING:
-                    continue
-                delivered_timestamps = set(
-                    state_store.list_delivered_outbound_message_timestamps(
-                        workspace_name=workspace.name,
-                        channel_name=channel.name,
-                        thread_ts=session.thread_ts,
-                    )
-                )
-                replies = browser.list_thread_replies(
-                    workspace_name=workspace.name,
-                    channel_name=channel.name,
-                    thread_ts=session.thread_ts,
-                )
-                if logger is not None:
-                    logger.info(
-                        "poll replies workspace=%s channel=%s thread=%s count=%d",
-                        workspace.name,
-                        channel.name,
-                        session.thread_ts,
-                        len(replies),
-                    )
-                for reply in replies:
-                    if not _is_fresh_user_reply(reply.message_ts, session.created_at):
-                        continue
-                    if reply.message_ts in delivered_timestamps:
-                        continue
-                    if _is_bob_generated_reply_text(reply.text):
-                        continue
-                    orchestrator.handle_thread_reply(
-                        workspace_name=reply.workspace_name,
-                        channel_name=reply.channel_name,
-                        thread_ts=reply.thread_ts,
-                        message_ts=reply.message_ts,
-                        author_actor_id=reply.author_actor_id,
-                        text=reply.text,
-                    )
-
-
-def _is_fresh_user_reply(message_ts: str, session_created_at: int) -> bool:
-    try:
-        message_epoch = float(message_ts)
-    except (TypeError, ValueError):
-        return False
-    return message_epoch > float(session_created_at)
-
-
-def _is_bob_generated_reply_text(text: str) -> bool:
-    normalized = text.strip()
-    return normalized.startswith("codex Bob:") or normalized.startswith("Bob ")
+    del logger
+    watcher.run_cycle()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -155,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_float,
         default=_default_poll_interval_seconds(),
         help=(
-            "Polling interval between Slack cycles in seconds "
+            "Idle interval between watcher cycles in seconds "
             "(env: BOB_POLL_INTERVAL_SECONDS, default: 30)."
         ),
     )
@@ -185,10 +75,7 @@ def _remove_pid_file(pid_file: Path) -> None:
 
 
 def run_poll_loop(
-    browser: SlackBrowserAdapter,
-    orchestrator: OrchestratorAdapter,
-    state_store: BobStateStore,
-    config: AppConfig,
+    watcher: SlackWatcher,
     poll_interval_seconds: float,
     lock_file: Path,
     pid_file: Path,
@@ -202,10 +89,7 @@ def run_poll_loop(
             if stop_request_path.exists():
                 return
             run_poll_cycle(
-                browser=browser,
-                orchestrator=orchestrator,
-                state_store=state_store,
-                config=config,
+                watcher=watcher,
                 logger=logger,
             )
             deadline = time.time() + poll_interval_seconds
@@ -273,12 +157,16 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                 codex_runner=codex_runner,
                 config=config,
             )
+            watcher = SlackWatcher(
+                browser=browser,
+                orchestrator=orchestrator,
+                state_store=state_store,
+                config=config,
+                logger=logger,
+            )
             try:
                 _run_agent_cycles(
-                    browser=browser,
-                    orchestrator=orchestrator,
-                    state_store=state_store,
-                    config=config,
+                    watcher=watcher,
                     once=once,
                     poll_interval_seconds=poll_interval_seconds,
                     stop_request_path=paths.stop_request_file,
@@ -296,10 +184,7 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
 
 
 def _run_agent_cycles(
-    browser: SlackBrowserAdapter,
-    orchestrator: OrchestratorAdapter,
-    state_store: BobStateStore,
-    config: AppConfig,
+    watcher: SlackWatcher,
     once: bool,
     poll_interval_seconds: float,
     stop_request_path: Path,
@@ -307,18 +192,12 @@ def _run_agent_cycles(
 ) -> None:
     if once:
         run_poll_cycle(
-            browser=browser,
-            orchestrator=orchestrator,
-            state_store=state_store,
-            config=config,
+            watcher=watcher,
             logger=logger,
         )
         return
     run_poll_loop(
-        browser=browser,
-        orchestrator=orchestrator,
-        state_store=state_store,
-        config=config,
+        watcher=watcher,
         poll_interval_seconds=poll_interval_seconds,
         lock_file=stop_request_path.parent / "bob.lock",
         pid_file=stop_request_path.parent / "bob.pid",

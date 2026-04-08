@@ -66,6 +66,23 @@ class BobStateStore:
                     updated_at INTEGER NOT NULL,
                     PRIMARY KEY (workspace_name, channel_name, thread_ts, intent_key)
                 );
+
+                CREATE TABLE IF NOT EXISTS channel_cursors (
+                    workspace_name TEXT NOT NULL,
+                    channel_name TEXT NOT NULL,
+                    latest_message_ts TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (workspace_name, channel_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS thread_cursors (
+                    workspace_name TEXT NOT NULL,
+                    channel_name TEXT NOT NULL,
+                    thread_ts TEXT NOT NULL,
+                    latest_message_ts TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (workspace_name, channel_name, thread_ts)
+                );
                 """
             )
             self._migrate_sessions_table(connection)
@@ -543,6 +560,105 @@ class BobStateStore:
                 (workspace_name, channel_name, thread_ts),
             ).fetchall()
         return [row["message_ts"] for row in rows]
+
+    def upsert_channel_cursor(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        latest_message_ts: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO channel_cursors (
+                    workspace_name,
+                    channel_name,
+                    latest_message_ts,
+                    updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT (workspace_name, channel_name)
+                DO UPDATE SET
+                    latest_message_ts = excluded.latest_message_ts,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    workspace_name,
+                    channel_name,
+                    latest_message_ts,
+                    int(time.time()),
+                ),
+            )
+
+    def get_channel_cursor(
+        self,
+        workspace_name: str,
+        channel_name: str,
+    ) -> Optional[str]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT latest_message_ts
+                FROM channel_cursors
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                """,
+                (workspace_name, channel_name),
+            ).fetchone()
+        if row is None:
+            return None
+        return row["latest_message_ts"]
+
+    def upsert_thread_cursor(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        latest_message_ts: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO thread_cursors (
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    latest_message_ts,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (workspace_name, channel_name, thread_ts)
+                DO UPDATE SET
+                    latest_message_ts = excluded.latest_message_ts,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    latest_message_ts,
+                    int(time.time()),
+                ),
+            )
+
+    def get_thread_cursor(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> Optional[str]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT latest_message_ts
+                FROM thread_cursors
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                """,
+                (workspace_name, channel_name, thread_ts),
+            ).fetchone()
+        if row is None:
+            return None
+        return row["latest_message_ts"]
 
     def mark_outbound_intent_attempted(
         self,

@@ -1,14 +1,49 @@
 from personal_slack_agent.slack.playwright_adapter import PlaywrightSlackAdapter
 
 
+class FakeWebSocket:
+    def __init__(self, url: str):
+        self.url = url
+        self.handlers = {}
+
+    def on(self, event, handler):
+        self.handlers.setdefault(event, []).append(handler)
+
+    def emit(self, event, payload):
+        for handler in self.handlers.get(event, []):
+            handler(payload)
+
+
 class FakePage:
     def __init__(self, url: str = ""):
         self.url = url
         self.goto_calls = []
+        self.reload_calls = []
+        self.handlers = {}
 
-    def goto(self, url: str) -> None:
+    def goto(self, url: str, **kwargs) -> None:
+        del kwargs
         self.goto_calls.append(url)
         self.url = url
+
+    def reload(self, **kwargs) -> None:
+        self.reload_calls.append(kwargs)
+
+    def on(self, event, handler):
+        self.handlers.setdefault(event, []).append(handler)
+
+    def emit(self, event, payload):
+        for handler in self.handlers.get(event, []):
+            handler(payload)
+
+    def evaluate(self, script, arg):
+        del script
+        selector = arg["selector"]
+        if selector == '[data-qa="channel_sidebar_name_yifanche-bob"]':
+            return "C0AQT4S6QHM"
+        if selector == '[data-qa="channel_sidebar_name_missing-channel"]':
+            return None
+        raise AssertionError("Unexpected selector: {0}".format(selector))
 
 
 class FakeContext:
@@ -71,10 +106,8 @@ class FakePlaywright:
 class FakeSyncPlaywright:
     def __init__(self, playwright_obj: FakePlaywright):
         self.playwright_obj = playwright_obj
-        self.started = False
 
     def start(self):
-        self.started = True
         return self.playwright_obj
 
 
@@ -109,45 +142,6 @@ def test_shared_browser_connects_over_cdp_and_reuses_matching_tab():
     assert shared_context.new_page_calls == 0
 
 
-def test_shared_browser_opens_workspace_url_when_tab_missing():
-    shared_context = FakeContext([])
-    chromium = FakeChromium(
-        browser=FakeBrowser([shared_context]),
-        dedicated_context=FakeContext(),
-    )
-    loader, _ = _loader_for(chromium)
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-        playwright_loader=loader,
-    )
-
-    page = adapter.select_bob_tab("https://example.enterprise.slack.com/")
-
-    assert shared_context.new_page_calls == 1
-    assert page.goto_calls == ["https://example.enterprise.slack.com/"]
-
-
-def test_shared_browser_falls_back_to_global_signin_url_when_workspace_url_missing():
-    shared_context = FakeContext([])
-    chromium = FakeChromium(
-        browser=FakeBrowser([shared_context]),
-        dedicated_context=FakeContext(),
-    )
-    loader, _ = _loader_for(chromium)
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-        playwright_loader=loader,
-    )
-
-    page = adapter.select_bob_tab(None)
-
-    assert page.goto_calls == ["https://slack.com/signin?entry_point=nav_menu#/signin"]
-
-
 def test_dedicated_browser_launches_persistent_context_and_uses_workspace_tab():
     dedicated_context = FakeContext([])
     chromium = FakeChromium(
@@ -174,7 +168,7 @@ def test_dedicated_browser_launches_persistent_context_and_uses_workspace_tab():
     assert page.goto_calls == ["https://example.enterprise.slack.com/"]
 
 
-def test_close_stops_playwright_and_closes_active_browser_or_context():
+def test_close_shared_browser_detaches_without_closing_user_browser():
     shared_context = FakeContext([])
     shared_browser = FakeBrowser([shared_context])
     dedicated_context = FakeContext([])
@@ -190,152 +184,32 @@ def test_close_stops_playwright_and_closes_active_browser_or_context():
 
     adapter.close()
 
-    assert shared_browser.closed is True
+    assert shared_browser.closed is False
+    assert dedicated_context.closed is False
     assert sync_obj.playwright_obj.stopped is True
 
 
-def test_root_messages_from_payload_filters_missing_message_ts():
+def test_close_dedicated_browser_closes_managed_context():
+    shared_browser = FakeBrowser([FakeContext([])])
+    dedicated_context = FakeContext([])
+    chromium = FakeChromium(shared_browser, dedicated_context)
+    loader, sync_obj = _loader_for(chromium)
     adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
+        browser_mode="dedicated_browser",
         cdp_url="http://127.0.0.1:9222",
         slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+        browser_user_data_dir="/tmp/bob-profile",
+        playwright_loader=loader,
     )
+    adapter.connect()
 
-    messages = adapter._root_messages_from_payload(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
-        payload=[
-            {
-                "thread_ts": "1774999116.837699",
-                "message_ts": "1774999116.837699",
-                "author_actor_id": "U123",
-                "text": "Bob, hi",
-            },
-            {
-                "thread_ts": "",
-                "message_ts": "",
-                "author_actor_id": "U123",
-                "text": "ignored",
-            },
-        ],
-    )
+    adapter.close()
 
-    assert len(messages) == 1
-    assert messages[0].message_ts == "1774999116.837699"
-    assert messages[0].thread_ts == "1774999116.837699"
-    assert messages[0].text == "Bob, hi"
+    assert dedicated_context.closed is True
+    assert sync_obj.playwright_obj.stopped is True
 
 
-def test_thread_replies_from_payload_uses_parent_thread_ts():
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-
-    replies = adapter._thread_replies_from_payload(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
-        thread_ts="1774999116.837699",
-        payload=[
-            {
-                "message_ts": "1774999349.509569",
-                "author_actor_id": "U123",
-                "text": "codex Bob: hi",
-            }
-        ],
-    )
-
-    assert len(replies) == 1
-    assert replies[0].thread_ts == "1774999116.837699"
-    assert replies[0].message_ts == "1774999349.509569"
-    assert replies[0].text == "codex Bob: hi"
-
-
-def test_channel_sidebar_key_normalizes_spaces_to_dashes():
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-
-    assert adapter._channel_sidebar_key("My Private Channel") == "my-private-channel"
-
-
-def test_root_messages_from_payload_keeps_sender_on_compact_followup_messages():
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-
-    messages = adapter._root_messages_from_payload(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
-        payload=[
-            {
-                "thread_ts": "1.1",
-                "message_ts": "1.1",
-                "author_actor_id": "U123",
-                "text": "first",
-            },
-            {
-                "thread_ts": "1.2",
-                "message_ts": "1.2",
-                "author_actor_id": "",
-                "text": "second",
-            },
-        ],
-    )
-
-    assert messages[1].author_actor_id == "U123"
-
-
-def test_thread_replies_from_payload_keeps_sender_on_compact_followup_messages():
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-
-    replies = adapter._thread_replies_from_payload(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
-        thread_ts="1774999116.837699",
-        payload=[
-            {
-                "message_ts": "2.1",
-                "author_actor_id": "U123",
-                "text": "reply one",
-            },
-            {
-                "message_ts": "2.2",
-                "author_actor_id": "",
-                "text": "reply two",
-            },
-        ],
-    )
-
-    assert replies[1].author_actor_id == "U123"
-
-
-def test_thread_route_url_uses_workspace_channel_and_exact_thread_ts():
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-
-    thread_url = adapter._thread_route_url(
-        workspace_url="https://app.slack.com/client/T12345678/C12345678",
-        channel_name="yifanche-private",
-        thread_ts="1774999116.837699",
-    )
-
-    assert thread_url == "https://app.slack.com/client/T12345678/C12345678/thread/C12345678-1774999116.837699"
-
-
-def test_channel_url_uses_legacy_seeded_route_when_provided():
+def test_get_channel_id_uses_seeded_route_when_provided():
     adapter = PlaywrightSlackAdapter(
         browser_mode="shared_browser",
         cdp_url="http://127.0.0.1:9222",
@@ -344,143 +218,108 @@ def test_channel_url_uses_legacy_seeded_route_when_provided():
     adapter.set_workspace_urls({"workspace": "https://app.slack.com/client/T123/C111"})
     adapter.set_channel_urls({("workspace", "other-channel"): "https://app.slack.com/client/T123/C222"})
 
-    assert adapter._channel_url("workspace", "other-channel") == "https://app.slack.com/client/T123/C222"
+    assert adapter.get_channel_id("workspace", "other-channel") == "C222"
 
 
-def test_channel_url_resolves_sidebar_channel_id_without_click_and_caches_it():
-    class FakeWorkspacePage:
-        def __init__(self):
-            self.calls = 0
-
-        def evaluate(self, script, arg):
-            del script
-            self.calls += 1
-            assert arg["selector"] == '[data-qa="channel_sidebar_name_yifanche-bob"]'
-            return "C0AQT4S6QHM"
-
+def test_get_channel_id_resolves_sidebar_channel_id_and_caches_it():
     adapter = PlaywrightSlackAdapter(
         browser_mode="shared_browser",
         cdp_url="http://127.0.0.1:9222",
         slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
     )
-    page = FakeWorkspacePage()
+    workspace_page = FakePage()
     adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/E655JKQRX/C03J3TXQBSP"})
+    adapter._workspace_page = lambda workspace_name: workspace_page  # type: ignore[method-assign]
+
+    first = adapter.get_channel_id("oracle", "yifanche-bob")
+    second = adapter.get_channel_id("oracle", "yifanche-bob")
+
+    assert first == "C0AQT4S6QHM"
+    assert second == "C0AQT4S6QHM"
+
+
+def test_subscribe_to_realtime_frames_registers_listener_and_reloads_page():
+    page = FakePage("https://app.slack.com/client/T123/C123")
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
     adapter._workspace_page = lambda workspace_name: page  # type: ignore[method-assign]
+    frames = []
+    disconnects = []
 
-    first = adapter._channel_url("oracle", "yifanche-bob")
-    second = adapter._channel_url("oracle", "yifanche-bob")
-
-    assert first == "https://app.slack.com/client/E655JKQRX/C0AQT4S6QHM"
-    assert second == "https://app.slack.com/client/E655JKQRX/C0AQT4S6QHM"
-    assert page.calls == 1
-
-
-def test_channel_url_raises_when_sidebar_channel_is_not_rendered():
-    class FakeWorkspacePage:
-        def evaluate(self, script, arg):
-            del script, arg
-            return None
-
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/E655JKQRX/C03J3TXQBSP"})
-    adapter._workspace_page = lambda workspace_name: FakeWorkspacePage()  # type: ignore[method-assign]
-
-    try:
-        adapter._channel_url("oracle", "missing-channel")
-    except RuntimeError as exc:
-        assert "missing-channel" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("Expected RuntimeError when sidebar channel id cannot be resolved.")
-
-
-def test_extract_api_session_info_reads_token_and_origin_from_request():
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-
-    token, origin = adapter._extract_api_session_info(
-        "https://example.enterprise.slack.com/api/conversations.history?_x_id=abc",
-        "------WebKitFormBoundary\r\nContent-Disposition: form-data; name=\"token\"\r\n\r\nxoxc-12345\r\n------WebKitFormBoundary--\r\n",
-    )
-
-    assert token == "xoxc-12345"
-    assert origin == "https://example.enterprise.slack.com"
-
-
-def test_root_messages_from_api_payload_maps_thread_and_author_fields():
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-
-    messages = adapter._root_messages_from_api_payload(
+    adapter.subscribe_to_realtime_frames(
         workspace_name="oracle",
-        channel_name="yifanche-private",
-        payload={
-            "messages": [
-                {
-                    "ts": "1.1",
-                    "thread_ts": "1.1",
-                    "user": "U123",
-                    "text": "Bob, hi",
-                },
-                {
-                    "ts": "1.2",
-                    "user": "U123",
-                    "text": "second",
-                },
-            ]
-        },
+        on_frame=frames.append,
+        on_disconnect=lambda: disconnects.append("disconnect"),
     )
 
-    assert [item.thread_ts for item in messages] == ["1.1", "1.2"]
-    assert messages[0].author_actor_id == "U123"
-    assert messages[1].text == "second"
+    websocket = FakeWebSocket("wss://wss-primary.slack.com/?token=xoxc-demo")
+    page.emit("websocket", websocket)
+    websocket.emit("framereceived", '{"type":"message"}')
+    websocket.emit("close", websocket)
+
+    assert page.reload_calls == [{"wait_until": "domcontentloaded", "timeout": 15000}]
+    assert frames == ['{"type":"message"}']
+    assert disconnects == ["disconnect"]
 
 
-def test_thread_replies_from_api_payload_skips_root_message():
+def test_subscribe_to_realtime_frames_accepts_non_primary_slack_socket_hosts():
+    page = FakePage("https://app.slack.com/client/T123/C123")
     adapter = PlaywrightSlackAdapter(
         browser_mode="shared_browser",
         cdp_url="http://127.0.0.1:9222",
         slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
     )
+    adapter._workspace_page = lambda workspace_name: page  # type: ignore[method-assign]
+    frames = []
 
-    replies = adapter._thread_replies_from_api_payload(
+    adapter.subscribe_to_realtime_frames(
         workspace_name="oracle",
-        channel_name="yifanche-private",
-        thread_ts="1.1",
-        payload={
-            "messages": [
-                {"ts": "1.1", "thread_ts": "1.1", "user": "U123", "text": "root"},
-                {"ts": "1.2", "thread_ts": "1.1", "user": "U123", "text": "reply"},
-            ]
-        },
+        on_frame=frames.append,
+        on_disconnect=lambda: None,
     )
 
-    assert len(replies) == 1
-    assert replies[0].message_ts == "1.2"
-    assert replies[0].text == "reply"
+    websocket = FakeWebSocket("wss://wss-backup.slack.com/?token=xoxc-demo")
+    page.emit("websocket", websocket)
+    websocket.emit("framereceived", '{"type":"message"}')
+
+    assert frames == ['{"type":"message"}']
 
 
-def test_thread_replies_from_api_payload_returns_empty_for_thread_not_found():
+def test_list_root_messages_uses_api_client_path_only():
+    calls = []
+
+    class FakeApiClient:
+        def conversations_history(self, channel_id, limit=50, oldest=None, latest=None):
+            calls.append((channel_id, limit, oldest, latest))
+            return {
+                "ok": True,
+                "messages": [
+                    {
+                        "ts": "1774999116.837699",
+                        "thread_ts": "1774999116.837699",
+                        "user": "U123",
+                        "text": "Bob, hi",
+                    }
+                ],
+            }
+
     adapter = PlaywrightSlackAdapter(
         browser_mode="shared_browser",
         cdp_url="http://127.0.0.1:9222",
         slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
     )
-
-    replies = adapter._thread_replies_from_api_payload(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
-        thread_ts="1.1",
-        payload={"ok": False, "error": "thread_not_found"},
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/T123/C111"})
+    adapter.set_channel_urls(
+        {("oracle", "yifanche-private"): "https://app.slack.com/client/T123/C222"}
     )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+    adapter._workspace_page = lambda workspace_name: (_ for _ in ()).throw(AssertionError("DOM page should not be used"))  # type: ignore[method-assign]
 
-    assert replies == []
+    messages = adapter.list_root_messages("oracle", "yifanche-private")
+
+    assert calls == [("C222", 50, None, None)]
+    assert messages[0].message_ts == "1774999116.837699"
+    assert messages[0].text == "Bob, hi"

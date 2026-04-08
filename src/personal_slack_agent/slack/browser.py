@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Protocol
+from typing import List, Optional, Protocol
 
 
 @dataclass
@@ -23,10 +23,28 @@ class SlackThreadReplyMessage:
 
 
 class SlackBrowserAdapter(Protocol):
+    def get_channel_id(
+        self,
+        workspace_name: str,
+        channel_name: str,
+    ) -> str:
+        ...
+
+    def subscribe_to_realtime_frames(
+        self,
+        workspace_name: str,
+        on_frame,
+        on_disconnect,
+    ) -> None:
+        ...
+
     def list_root_messages(
         self,
         workspace_name: str,
         channel_name: str,
+        oldest: Optional[str] = None,
+        latest: Optional[str] = None,
+        limit: int = 50,
     ) -> List[SlackRootMessage]:
         ...
 
@@ -35,6 +53,8 @@ class SlackBrowserAdapter(Protocol):
         workspace_name: str,
         channel_name: str,
         thread_ts: str,
+        oldest: Optional[str] = None,
+        limit: int = 200,
     ) -> List[SlackThreadReplyMessage]:
         ...
 
