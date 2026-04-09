@@ -42,6 +42,9 @@ class SlackWatcher:
         self._process_event_queue()
         self._reconcile_pending_threads()
 
+    def request_workspace_reconcile(self, workspace_name: str) -> None:
+        self._workspaces_pending_reconcile.add(workspace_name)
+
     def _initialize(self) -> None:
         for workspace in self.config.workspaces:
             for channel in workspace.channels:

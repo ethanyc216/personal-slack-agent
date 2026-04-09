@@ -98,6 +98,98 @@ def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
     assert "oracle:yifanche-bob" in captured.out
 
 
+def test_smoke_test_reports_success(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("[defaults]\nallowed_actor_ids=[\"U123\"]\n", encoding="utf-8")
+
+    calls = {}
+
+    def fake_run_smoke_test(*, paths, workspace_name, channel_name, text, timeout_seconds, poll_interval_seconds):
+        calls["workspace_name"] = workspace_name
+        calls["channel_name"] = channel_name
+        calls["text"] = text
+        calls["timeout_seconds"] = timeout_seconds
+        calls["poll_interval_seconds"] = poll_interval_seconds
+        return {
+            "thread_ts": "1775717794.417429",
+            "session_id": "session-123",
+            "final_message": "_*codex Bob :white_check_mark::*_ smoke ok",
+        }
+
+    monkeypatch.setattr(ctl_module, "_run_smoke_test", fake_run_smoke_test)
+
+    exit_code = ctl_main(
+        [
+            "smoke-test",
+            "--workspace",
+            "oracle",
+            "--channel",
+            "yifanche-bob",
+            "--text",
+            "Bob, smoke ok",
+            "--timeout-seconds",
+            "20",
+            "--poll-interval-seconds",
+            "2",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert calls == {
+        "workspace_name": "oracle",
+        "channel_name": "yifanche-bob",
+        "text": "Bob, smoke ok",
+        "timeout_seconds": 20.0,
+        "poll_interval_seconds": 2.0,
+    }
+    assert "smoke test passed" in captured.out.lower()
+    assert "1775717794.417429" in captured.out
+    assert "session-123" in captured.out
+
+
+def test_wait_for_smoke_result_returns_session_and_final_message(tmp_path):
+    paths = build_runtime_paths(state_dir=tmp_path / "state", config_file=tmp_path / "bob.toml")
+    store = ctl_module.BobStateStore(paths.state_dir / "bob.sqlite3")
+    store.initialize()
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-bob",
+        thread_ts="1775717794.417429",
+        root_ts="1775717794.417429",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=ctl_module.SessionStatus.CLOSED_IDLE,
+    )
+    store.upsert_outbound_intent(
+        workspace_name="oracle",
+        channel_name="yifanche-bob",
+        thread_ts="1775717794.417429",
+        intent_key="final-session-123",
+        action="post_thread_reply",
+        text="_*codex Bob :white_check_mark::*_ smoke ok",
+        delivered=True,
+        message_ts="1775717816.033009",
+    )
+
+    result = ctl_module._wait_for_smoke_result(
+        paths=paths,
+        workspace_name="oracle",
+        channel_name="yifanche-bob",
+        thread_ts="1775717794.417429",
+        timeout_seconds=1.0,
+        poll_interval_seconds=0.01,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert result["thread_ts"] == "1775717794.417429"
+    assert result["session_id"] == "session-123"
+    assert result["final_message"] == "_*codex Bob :white_check_mark::*_ smoke ok"
+
+
 def test_tail_log_prints_useful_message_when_log_is_missing(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
 

@@ -325,6 +325,35 @@ def test_list_root_messages_uses_api_client_path_only():
     assert messages[0].text == "Bob, hi"
 
 
+def test_post_root_message_uses_api_client_path_only():
+    calls = []
+
+    class FakeApiClient:
+        def chat_post_message(self, channel_id, text, thread_ts=None, reply_broadcast=False):
+            calls.append((channel_id, text, thread_ts, reply_broadcast))
+            return {
+                "ok": True,
+                "ts": "1775717794.417429",
+                "message": {"ts": "1775717794.417429"},
+            }
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/T123/C111"})
+    adapter.set_channel_urls(
+        {("oracle", "yifanche-bob"): "https://app.slack.com/client/T123/C222"}
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+
+    message_ts = adapter.post_root_message("oracle", "yifanche-bob", "Bob, smoke ok")
+
+    assert message_ts == "1775717794.417429"
+    assert calls == [("C222", "Bob, smoke ok", None, False)]
+
+
 def test_call_slack_api_rediscovers_when_seeded_workspace_auth_is_invalid():
     class FakeRequest:
         def __init__(self, url: str, post_data: str):

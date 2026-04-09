@@ -23,9 +23,11 @@ from ..state import BobStateStore
 def run_poll_cycle(
     watcher: SlackWatcher,
     orchestrator: BobOrchestrator,
+    reconcile_request_path: Path | None = None,
     logger: Logger = None,
 ) -> None:
     del logger
+    _drain_reconcile_requests(watcher, reconcile_request_path)
     watcher.run_cycle()
     orchestrator.process_scheduled_actions()
 
@@ -83,6 +85,7 @@ def run_poll_loop(
     lock_file: Path,
     pid_file: Path,
     stop_request_path: Path,
+    reconcile_request_path: Path | None = None,
     logger: Logger = None,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> None:
@@ -94,6 +97,7 @@ def run_poll_loop(
             run_poll_cycle(
                 watcher=watcher,
                 orchestrator=orchestrator,
+                reconcile_request_path=reconcile_request_path,
                 logger=logger,
             )
             deadline = time.time() + poll_interval_seconds
@@ -175,6 +179,7 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                     once=once,
                     poll_interval_seconds=poll_interval_seconds,
                     stop_request_path=paths.stop_request_file,
+                    reconcile_request_path=paths.state_dir / "bob.reconcile",
                     logger=logger,
                 )
             finally:
@@ -194,12 +199,14 @@ def _run_agent_cycles(
     once: bool,
     poll_interval_seconds: float,
     stop_request_path: Path,
+    reconcile_request_path: Path | None,
     logger: Logger,
 ) -> None:
     if once:
         run_poll_cycle(
             watcher=watcher,
             orchestrator=orchestrator,
+            reconcile_request_path=reconcile_request_path,
             logger=logger,
         )
         return
@@ -210,9 +217,28 @@ def _run_agent_cycles(
         lock_file=stop_request_path.parent / "bob.lock",
         pid_file=stop_request_path.parent / "bob.pid",
         stop_request_path=stop_request_path,
+        reconcile_request_path=reconcile_request_path,
         logger=logger,
     )
     logger.info("bob-agent interrupted, shutting down.")
+
+
+def _drain_reconcile_requests(watcher: SlackWatcher, reconcile_request_path: Path | None) -> None:
+    if reconcile_request_path is None or not reconcile_request_path.exists():
+        return
+    try:
+        raw = reconcile_request_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    try:
+        reconcile_request_path.unlink()
+    except FileNotFoundError:
+        pass
+    for line in raw.splitlines():
+        workspace_name = line.strip()
+        if not workspace_name:
+            continue
+        watcher.request_workspace_reconcile(workspace_name)
 
 
 def _positive_float(value: str) -> float:

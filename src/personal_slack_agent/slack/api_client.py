@@ -48,16 +48,15 @@ class SlackApiClient:
     def chat_post_message(
         self,
         channel_id: str,
-        thread_ts: str,
         text: str,
+        thread_ts: str | None = None,
         reply_broadcast: bool = False,
     ) -> Dict[str, Any]:
-        return self._call_api(
-            "chat.postMessage",
-            {
-                "channel": channel_id,
-                "thread_ts": thread_ts,
-                "text": text,
-                "reply_broadcast": str(reply_broadcast).lower(),
-            },
-        )
+        params: Dict[str, Any] = {
+            "channel": channel_id,
+            "text": text,
+            "reply_broadcast": str(reply_broadcast).lower(),
+        }
+        if thread_ts is not None:
+            params["thread_ts"] = thread_ts
+        return self._call_api("chat.postMessage", params)

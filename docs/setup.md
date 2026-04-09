@@ -82,6 +82,7 @@ Check it:
 ```bash
 bobctl status
 bobctl doctor
+bobctl smoke-test --workspace my-workspace --channel my-private-channel
 bobctl tail-log --lines 50
 ```
 
@@ -104,7 +105,7 @@ Recommended validation sequence:
 2. confirm `config_loaded: True`
 3. confirm `cdp_reachable: True`
 4. confirm the expected `workspace:channel` entries are listed
-5. send `Bob, please reply with exactly smoke ok and nothing else.`
+5. run `bobctl smoke-test --workspace my-workspace --channel my-private-channel`
 6. if the test fails, inspect `bobctl tail-log --lines 100`
 
 ## Notes

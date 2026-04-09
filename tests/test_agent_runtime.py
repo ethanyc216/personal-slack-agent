@@ -182,6 +182,32 @@ def test_run_poll_cycle_processes_scheduled_actions_after_watcher():
     assert calls == ["watcher", "scheduled"]
 
 
+def test_run_poll_cycle_consumes_reconcile_requests(tmp_path):
+    calls = []
+    reconcile_file = tmp_path / "bob.reconcile"
+    reconcile_file.write_text("oracle\n", encoding="utf-8")
+
+    class FakeWatcher:
+        def request_workspace_reconcile(self, workspace_name):
+            calls.append(("reconcile", workspace_name))
+
+        def run_cycle(self):
+            calls.append(("watcher", None))
+
+    class FakeOrchestrator:
+        def process_scheduled_actions(self):
+            calls.append(("scheduled", None))
+
+    agent_module.run_poll_cycle(
+        watcher=FakeWatcher(),
+        orchestrator=FakeOrchestrator(),
+        reconcile_request_path=reconcile_file,
+    )
+
+    assert calls == [("reconcile", "oracle"), ("watcher", None), ("scheduled", None)]
+    assert not reconcile_file.exists()
+
+
 def test_run_poll_loop_stops_when_stop_request_file_exists(tmp_path):
     calls = {"cycle": 0, "sleep": []}
     stop_request_path = tmp_path / "bob.stop"

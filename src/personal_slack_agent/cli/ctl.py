@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import load_config
+from ..models import AppConfig, SessionStatus, WorkspaceConfig, ChannelConfig
 from ..paths import default_config_file, default_log_file, default_state_dir
+from ..slack.playwright_adapter import PlaywrightSlackAdapter
+from ..state import BobStateStore
 
 
 @dataclass
@@ -159,6 +162,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("show-config", help="Show resolved config path and contents.")
     subparsers.add_parser("doctor", help="Run Bob diagnostics.")
+    smoke_parser = subparsers.add_parser("smoke-test", help="Run a live Bob smoke test.")
+    smoke_parser.add_argument("--workspace", help="Workspace name from bob.toml.")
+    smoke_parser.add_argument("--channel", help="Channel name from bob.toml.")
+    smoke_parser.add_argument(
+        "--text",
+        default="Bob, please reply with exactly smoke ok and nothing else.",
+        help="Root Bob message to post for the smoke test.",
+    )
+    smoke_parser.add_argument(
+        "--timeout-seconds",
+        type=_positive_float,
+        default=45.0,
+        help="How long to wait for Bob to complete the smoke test (default: 45).",
+    )
+    smoke_parser.add_argument(
+        "--poll-interval-seconds",
+        type=_positive_float,
+        default=1.0,
+        help="How frequently to poll Bob state during the smoke test (default: 1).",
+    )
 
     return parser
 
@@ -302,6 +325,21 @@ def main(argv: list[str] | None = None) -> int:
             print("channel: {0}".format(item))
         return 0
 
+    if args.command == "smoke-test":
+        result = _run_smoke_test(
+            paths=paths,
+            workspace_name=args.workspace,
+            channel_name=args.channel,
+            text=args.text,
+            timeout_seconds=float(args.timeout_seconds),
+            poll_interval_seconds=float(args.poll_interval_seconds),
+        )
+        print("Smoke test passed.")
+        print("thread_ts: {0}".format(result["thread_ts"]))
+        print("session_id: {0}".format(result["session_id"]))
+        print("final_message: {0}".format(result["final_message"]))
+        return 0
+
     if args.command == "tail-log":
         if args.lines <= 0:
             print("--lines must be a positive integer.", file=sys.stderr)
@@ -337,6 +375,133 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"bobctl {args.command} is not implemented yet.", file=sys.stderr)
     return 2
+
+
+def _run_smoke_test(
+    *,
+    paths: RuntimePaths,
+    workspace_name: Optional[str],
+    channel_name: Optional[str],
+    text: str,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+) -> dict:
+    config = load_config(paths.config_file)
+    workspace, channel = _resolve_smoke_target(config, workspace_name, channel_name)
+    browser = _build_browser(config)
+    try:
+        thread_ts = browser.post_root_message(workspace.name, channel.name, text)
+    finally:
+        browser.close()
+    _request_workspace_reconcile(paths.state_dir / "bob.reconcile", workspace.name)
+    return _wait_for_smoke_result(
+        paths=paths,
+        workspace_name=workspace.name,
+        channel_name=channel.name,
+        thread_ts=thread_ts,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+
+
+def _resolve_smoke_target(
+    config: AppConfig,
+    workspace_name: Optional[str],
+    channel_name: Optional[str],
+) -> tuple[WorkspaceConfig, ChannelConfig]:
+    if not config.workspaces:
+        raise RuntimeError("No workspaces are configured.")
+
+    workspace = None
+    if workspace_name is None:
+        workspace = config.workspaces[0]
+    else:
+        for item in config.workspaces:
+            if item.name == workspace_name:
+                workspace = item
+                break
+    if workspace is None:
+        raise RuntimeError("Configured workspace not found: {0}".format(workspace_name))
+    if not workspace.channels:
+        raise RuntimeError("Workspace has no configured channels: {0}".format(workspace.name))
+
+    channel = None
+    if channel_name is None:
+        channel = workspace.channels[0]
+    else:
+        for item in workspace.channels:
+            if item.name == channel_name:
+                channel = item
+                break
+    if channel is None:
+        raise RuntimeError(
+            "Configured channel not found: {0}:{1}".format(workspace.name, channel_name)
+        )
+    return workspace, channel
+
+
+def _build_browser(config: AppConfig) -> PlaywrightSlackAdapter:
+    browser = PlaywrightSlackAdapter(
+        browser_mode=config.defaults.browser_mode,
+        cdp_url=config.defaults.cdp_url,
+        slack_signin_url=config.defaults.slack_signin_url,
+        chrome_executable_path=config.defaults.chrome_executable_path,
+        browser_user_data_dir=config.defaults.browser_user_data_dir,
+    )
+    browser.set_workspace_urls(
+        {workspace.name: workspace.slack_url for workspace in config.workspaces if workspace.slack_url}
+    )
+    browser.set_workspace_api_contexts(
+        {
+            workspace.name: (workspace.slack_api_token, workspace.slack_api_origin)
+            for workspace in config.workspaces
+            if workspace.slack_api_token and workspace.slack_api_origin
+        }
+    )
+    return browser
+
+
+def _wait_for_smoke_result(
+    *,
+    paths: RuntimePaths,
+    workspace_name: str,
+    channel_name: str,
+    thread_ts: str,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+    sleep_fn=time.sleep,
+) -> dict:
+    deadline = time.time() + timeout_seconds
+    store = BobStateStore(paths.state_dir / "bob.sqlite3")
+    store.initialize()
+    last_status = None
+    while time.time() < deadline:
+        record = store.get_by_thread(workspace_name, channel_name, thread_ts)
+        if record is not None:
+            last_status = record.status
+            intents = store.list_outbound_intents_for_thread(workspace_name, channel_name, thread_ts)
+            final_messages = [
+                intent.text
+                for intent in intents
+                if intent.delivery_state == "delivered" and intent.intent_key.startswith("final-")
+            ]
+            if final_messages:
+                return {
+                    "thread_ts": thread_ts,
+                    "session_id": record.codex_session_id,
+                    "final_message": final_messages[-1],
+                }
+            if record.status is SessionStatus.FAILED:
+                raise RuntimeError("Smoke test failed in Bob session: {0}".format(record.codex_session_id))
+        sleep_fn(poll_interval_seconds)
+    raise RuntimeError(
+        "Smoke test timed out waiting for Bob. Last status: {0}".format(last_status or "missing")
+    )
+
+
+def _request_workspace_reconcile(reconcile_request_path: Path, workspace_name: str) -> None:
+    reconcile_request_path.parent.mkdir(parents=True, exist_ok=True)
+    reconcile_request_path.write_text("{0}\n".format(workspace_name), encoding="utf-8")
 
 
 def _positive_float(value: str) -> float:

@@ -179,6 +179,7 @@ Check status:
 ```bash
 .venv/bin/bobctl status
 .venv/bin/bobctl doctor
+.venv/bin/bobctl smoke-test --workspace my-workspace --channel my-private-channel
 ```
 
 Restart Bob:
@@ -241,10 +242,8 @@ Before relying on Bob for real work:
 2. confirm `config_loaded: True`
 3. confirm the configured `cdp_url` is reachable
 4. confirm your target workspace/channel appears in the doctor output
-5. send `Bob, please reply with exactly smoke ok and nothing else.`
-6. verify Bob posts both:
-   - `_*Bob is working on it :arrows_counterclockwise::*_ ...`
-   - `_*codex Bob :white_check_mark::*_ smoke ok`
+5. run `bobctl smoke-test --workspace my-workspace --channel my-private-channel`
+6. verify it prints `Smoke test passed.` with a `thread_ts`, `session_id`, and final Bob reply
 
 If that fails, check `bobctl tail-log --lines 100` before changing config or code.
 

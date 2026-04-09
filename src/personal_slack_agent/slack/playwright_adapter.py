@@ -164,6 +164,25 @@ class PlaywrightSlackAdapter:
             raise RuntimeError("Slack API post succeeded but no reply timestamp was returned.")
         return latest_ts
 
+    def post_root_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        text: str,
+    ) -> str:
+        payload = self._api_client(workspace_name).chat_post_message(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            text=text,
+            thread_ts=None,
+            reply_broadcast=False,
+        )
+        if not payload.get("ok"):
+            raise RuntimeError("Slack API chat.postMessage failed: {0}".format(payload.get("error")))
+        latest_ts = str(payload.get("ts") or payload.get("message", {}).get("ts") or "")
+        if not latest_ts:
+            raise RuntimeError("Slack API post succeeded but no message timestamp was returned.")
+        return latest_ts
+
     def list_root_messages(
         self,
         workspace_name: str,

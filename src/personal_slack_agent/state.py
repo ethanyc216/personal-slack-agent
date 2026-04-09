@@ -561,6 +561,26 @@ class BobStateStore:
             ).fetchall()
         return [row["message_ts"] for row in rows]
 
+    def list_outbound_intents_for_thread(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> List[OutboundIntentRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM outbound_intents
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                ORDER BY created_at ASC
+                """,
+                (workspace_name, channel_name, thread_ts),
+            ).fetchall()
+        return [self._outbound_intent_record_from_row(row) for row in rows]
+
     def upsert_channel_cursor(
         self,
         workspace_name: str,
