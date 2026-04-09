@@ -80,6 +80,7 @@ bobctl start --config ~/.config/personal-slack-agent/bob.toml --poll-interval-se
 Check it:
 
 ```bash
+bob --workspace my-workspace --channel my-private-channel "summarize this repo"
 bobctl status
 bobctl doctor
 bobctl smoke-test --workspace my-workspace --channel my-private-channel
@@ -98,6 +99,18 @@ Bob should create a thread and reply with:
 
 - working: `_*Bob is working on it :arrows_counterclockwise::*_ ...`
 - done: `_*codex Bob :white_check_mark::*_ ...`
+
+If you want terminal-originated Bob requests without specifying the channel each time, mark exactly one channel with:
+
+```toml
+post_terminal_threads_here = true
+```
+
+Then you can run:
+
+```bash
+bob "summarize this repo"
+```
 
 Recommended validation sequence:
 

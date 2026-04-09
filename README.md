@@ -125,8 +125,8 @@ accept_root_bob_requests = true
   Treat it as sensitive.
 
 - `post_terminal_threads_here`
-  This is reserved for future terminal-originated Slack thread posting.
-  It is not wired in the current v1 runtime yet.
+  Channels with this flag can be targeted by the `bob` terminal wrapper for terminal-originated Bob requests.
+  If exactly one channel across your config has this flag, `bob "<prompt>"` can use it by default.
 
 ### Automatic Slack auth bootstrap
 
@@ -177,6 +177,7 @@ In that Chrome instance:
 Check status:
 
 ```bash
+.venv/bin/bob "summarize this repo" --workspace my-workspace --channel my-private-channel
 .venv/bin/bobctl status
 .venv/bin/bobctl doctor
 .venv/bin/bobctl smoke-test --workspace my-workspace --channel my-private-channel
@@ -233,6 +234,22 @@ If Bob is waiting for input or approval:
 - auto-close applies only to those waiting states
 - reply with `bob close` to close the thread without losing the underlying Codex session
 - reply again later in the same thread to resume
+
+### Terminal Requests
+
+You can start a Bob request from the terminal with the `bob` wrapper:
+
+```bash
+.venv/bin/bob --workspace my-workspace --channel my-private-channel "summarize this repo"
+```
+
+If exactly one configured channel has `post_terminal_threads_here = true`, you can omit the target and run:
+
+```bash
+.venv/bin/bob "summarize this repo"
+```
+
+The wrapper posts a real root Bob message into Slack, waits for the Bob session to finish, and prints the Slack thread id, Codex session id, and final Bob reply.
 
 ### Live smoke test
 

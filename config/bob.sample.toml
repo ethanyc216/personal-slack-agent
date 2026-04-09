@@ -23,6 +23,5 @@ slack_api_token = "xoxc-..."
 name = "my-private-channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
-# Reserved for future terminal-originated Slack thread posting.
-# Currently not wired in the v1 runtime.
+# Optional: mark one channel for the `bob` terminal wrapper to use by default.
 post_terminal_threads_here = true

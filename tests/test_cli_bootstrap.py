@@ -32,7 +32,7 @@ def test_bobctl_start_returns_success(capsys, monkeypatch):
     assert "started" in captured.out.lower()
 
 
-def test_other_bootstrap_clis_fail_loudly_until_implemented(capsys, monkeypatch, tmp_path):
+def test_agent_bootstrap_still_runs(capsys, monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     project_dir = tmp_path / "project"
     project_dir.mkdir()
@@ -54,10 +54,111 @@ def test_other_bootstrap_clis_fail_loudly_until_implemented(capsys, monkeypatch,
 
     monkeypatch.setattr("personal_slack_agent.cli.agent._run_runtime", fake_run_runtime)
     assert agent_main([]) == 0
-    assert wrapper_main(["--once"]) == 2
 
+
+def test_wrapper_runs_terminal_request_with_explicit_target(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(project_dir),
+                'allowed_actor_ids = ["U123"]',
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'allowed_actor_ids = ["U123"]',
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-bob"',
+                "post_terminal_threads_here = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {}
+
+    def fake_run_smoke_test(*, paths, workspace_name, channel_name, text, timeout_seconds, poll_interval_seconds):
+        calls["workspace_name"] = workspace_name
+        calls["channel_name"] = channel_name
+        calls["text"] = text
+        calls["timeout_seconds"] = timeout_seconds
+        calls["poll_interval_seconds"] = poll_interval_seconds
+        return {
+            "thread_ts": "1775718000.000001",
+            "session_id": "session-123",
+            "final_message": "_*codex Bob :white_check_mark::*_ wrapper ok",
+        }
+
+    monkeypatch.setattr("personal_slack_agent.cli.wrapper._run_smoke_test", fake_run_smoke_test)
+
+    exit_code = wrapper_main(
+        [
+            "--workspace",
+            "oracle",
+            "--channel",
+            "yifanche-bob",
+            "--timeout-seconds",
+            "20",
+            "--poll-interval-seconds",
+            "2",
+            "please",
+            "help",
+        ]
+    )
     captured = capsys.readouterr()
-    assert captured.err.lower().count("not implemented") >= 1
+
+    assert exit_code == 0
+    assert calls == {
+        "workspace_name": "oracle",
+        "channel_name": "yifanche-bob",
+        "text": "Bob, please help",
+        "timeout_seconds": 20.0,
+        "poll_interval_seconds": 2.0,
+    }
+    assert "wrapper ok" in captured.out
+
+
+def test_wrapper_uses_unique_terminal_channel_when_not_explicit(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(project_dir),
+                'allowed_actor_ids = ["U123"]',
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'allowed_actor_ids = ["U123"]',
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-bob"',
+                "post_terminal_threads_here = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "personal_slack_agent.cli.wrapper._run_smoke_test",
+        lambda **kwargs: {
+            "thread_ts": "1775718000.000001",
+            "session_id": "session-123",
+            "final_message": "done",
+        },
+    )
+
+    assert wrapper_main(["hello"]) == 0
 
 
 def test_agent_default_config_path_is_expanded(tmp_path, monkeypatch):

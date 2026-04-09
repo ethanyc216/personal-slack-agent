@@ -18,6 +18,7 @@ dev = ["pytest>=8.0.0"]
 
 [project.scripts]
 bob-agent = "personal_slack_agent.cli:agent_main"
+bob = "personal_slack_agent.cli:wrapper_main"
 bobctl = "personal_slack_agent.cli:ctl_main"
 bob-init = "personal_slack_agent.cli:init_main"
 
