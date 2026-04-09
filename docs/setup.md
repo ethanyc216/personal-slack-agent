@@ -81,6 +81,7 @@ Check it:
 
 ```bash
 bobctl status
+bobctl doctor
 bobctl tail-log --lines 50
 ```
 
@@ -96,6 +97,15 @@ Bob should create a thread and reply with:
 
 - working: `_*Bob is working on it :arrows_counterclockwise::*_ ...`
 - done: `_*codex Bob :white_check_mark::*_ ...`
+
+Recommended validation sequence:
+
+1. run `bobctl doctor`
+2. confirm `config_loaded: True`
+3. confirm `cdp_reachable: True`
+4. confirm the expected `workspace:channel` entries are listed
+5. send `Bob, please reply with exactly smoke ok and nothing else.`
+6. if the test fails, inspect `bobctl tail-log --lines 100`
 
 ## Notes
 

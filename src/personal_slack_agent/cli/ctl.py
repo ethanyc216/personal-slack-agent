@@ -5,10 +5,13 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..config import load_config
 from ..paths import default_config_file, default_log_file, default_state_dir
 
 
@@ -104,6 +107,14 @@ def _running_pids(paths: RuntimePaths) -> list[int]:
         if _is_pid_running(pid):
             result.append(pid)
     return result
+
+
+def _is_cdp_reachable(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/json/version", timeout=2.0) as response:
+            return 200 <= int(getattr(response, "status", 0)) < 300
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -271,6 +282,24 @@ def main(argv: list[str] | None = None) -> int:
         print("stop_request_file_exists: {0}".format(paths.stop_request_file.exists()))
         print("config_file: {0}".format(paths.config_file))
         print("config_file_exists: {0}".format(paths.config_file.exists()))
+        try:
+            config = load_config(paths.config_file)
+        except Exception as exc:
+            print("config_loaded: False")
+            print("config_error: {0}".format(exc))
+            return 0
+        print("config_loaded: True")
+        print("cdp_url: {0}".format(config.defaults.cdp_url))
+        print("cdp_reachable: {0}".format(_is_cdp_reachable(config.defaults.cdp_url)))
+        print("workspace_count: {0}".format(len(config.workspaces)))
+        channel_names = [
+            "{0}:{1}".format(workspace.name, channel.name)
+            for workspace in config.workspaces
+            for channel in workspace.channels
+        ]
+        print("channel_count: {0}".format(len(channel_names)))
+        for item in channel_names:
+            print("channel: {0}".format(item))
         return 0
 
     if args.command == "tail-log":

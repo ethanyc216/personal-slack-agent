@@ -59,6 +59,45 @@ def test_doctor_prints_runtime_paths(tmp_path, monkeypatch, capsys):
     assert str(tmp_path / ".local" / "share" / "personal-slack-agent") in captured.out
 
 
+def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    workspace_root = tmp_path / "work"
+    workspace_root.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(workspace_root),
+                'allowed_actor_ids = ["U123"]',
+                'cdp_url = "http://127.0.0.1:9222"',
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'allowed_actor_ids = ["U123"]',
+                'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-bob"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ctl_module, "_is_cdp_reachable", lambda url: url == "http://127.0.0.1:9222")
+
+    exit_code = ctl_main(["doctor"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "config_loaded: True" in captured.out
+    assert "cdp_url: http://127.0.0.1:9222" in captured.out
+    assert "cdp_reachable: True" in captured.out
+    assert "workspace_count: 1" in captured.out
+    assert "channel_count: 1" in captured.out
+    assert "oracle:yifanche-bob" in captured.out
+
+
 def test_tail_log_prints_useful_message_when_log_is_missing(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
 

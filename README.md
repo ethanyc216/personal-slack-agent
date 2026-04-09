@@ -178,6 +178,7 @@ Check status:
 
 ```bash
 .venv/bin/bobctl status
+.venv/bin/bobctl doctor
 ```
 
 Restart Bob:
@@ -231,6 +232,21 @@ If Bob is waiting for input or approval:
 - auto-close applies only to those waiting states
 - reply with `bob close` to close the thread without losing the underlying Codex session
 - reply again later in the same thread to resume
+
+### Live smoke test
+
+Before relying on Bob for real work:
+
+1. run `bobctl doctor`
+2. confirm `config_loaded: True`
+3. confirm the configured `cdp_url` is reachable
+4. confirm your target workspace/channel appears in the doctor output
+5. send `Bob, please reply with exactly smoke ok and nothing else.`
+6. verify Bob posts both:
+   - `_*Bob is working on it :arrows_counterclockwise::*_ ...`
+   - `_*codex Bob :white_check_mark::*_ smoke ok`
+
+If that fails, check `bobctl tail-log --lines 100` before changing config or code.
 
 ## Testing
 
