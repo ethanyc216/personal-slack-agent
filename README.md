@@ -21,6 +21,9 @@ Working pieces:
 - targeted Slack API hydration for channel roots and thread replies
 - thread/session mapping to local Codex sessions
 - thread reply resume for existing sessions
+- waiting-state reminders and auto-close handling
+- manual `bob close` thread closure with later resume support
+- cleanup of obsolete waiting prompts after resolution
 - local process control with `bobctl start|stop|restart|status|tail-log|show-config|doctor`
 
 Current constraints:
@@ -28,7 +31,7 @@ Current constraints:
 - macOS only
 - Chrome/Chromium required
 - Slack integration uses Slack Web realtime sockets plus private browser-session-backed `/api/...` calls, not Slack’s official public app API
-- Slack message deletion/edit cleanup is not implemented yet
+- only targeted waiting-prompt cleanup is implemented; broader Slack message edit/delete flows are still limited
 
 ## Install
 
@@ -219,6 +222,13 @@ Bob will:
 
 If you reply in the thread later, Bob resumes the same local Codex session.
 
+If Bob is waiting for input or approval:
+
+- configured reminders apply only to those waiting states
+- auto-close applies only to those waiting states
+- reply with `bob close` to close the thread without losing the underlying Codex session
+- reply again later in the same thread to resume
+
 ## Testing
 
 Run the full test suite:
@@ -251,5 +261,5 @@ Run the full test suite:
 
 - macOS only
 - no official Slack app/OAuth integration
-- no Slack message cleanup/deletion flow yet
+- no broad Slack message edit/delete flow beyond targeted waiting-prompt cleanup
 - browser/web request behavior may need adjustment if Slack changes its private web client APIs or websocket protocol

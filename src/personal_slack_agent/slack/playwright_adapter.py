@@ -426,6 +426,7 @@ async ({origin, methodName, token, params}) => {
             and body.get("error") in {"not_authed", "invalid_auth"}
         ):
             self._api_sessions.pop(workspace_name, None)
+            self._workspace_api_contexts.pop(workspace_name, None)
             return self._call_slack_api(
                 workspace_name=workspace_name,
                 method_name=method_name,

@@ -323,3 +323,63 @@ def test_list_root_messages_uses_api_client_path_only():
     assert calls == [("C222", 50, None, None)]
     assert messages[0].message_ts == "1774999116.837699"
     assert messages[0].text == "Bob, hi"
+
+
+def test_call_slack_api_rediscovers_when_seeded_workspace_auth_is_invalid():
+    class FakeRequest:
+        def __init__(self, url: str, post_data: str):
+            self.url = url
+            self.post_data = post_data
+
+    class DiscoveryPage:
+        def __init__(self):
+            self.handlers = {}
+
+        def on(self, event, handler):
+            self.handlers.setdefault(event, []).append(handler)
+
+        def reload(self, **kwargs):
+            del kwargs
+            for handler in self.handlers.get("request", []):
+                    handler(
+                        FakeRequest(
+                            "https://oracle.enterprise.slack.com/api/conversations.history",
+                            '------form\r\nContent-Disposition: form-data; name="token"\r\n\r\nfresh-token\r\n------form--',
+                        )
+                    )
+
+        def wait_for_timeout(self, timeout_ms):
+            del timeout_ms
+
+        def remove_listener(self, event, handler):
+            handlers = self.handlers.get(event, [])
+            self.handlers[event] = [item for item in handlers if item is not handler]
+
+    class ApiPage:
+        def __init__(self):
+            self.tokens = []
+
+        def evaluate(self, script, payload):
+            del script
+            self.tokens.append(payload["token"])
+            if payload["token"] == "stale-token":
+                return {"status": 200, "body": {"ok": False, "error": "invalid_auth"}}
+            return {"status": 200, "body": {"ok": True, "messages": []}}
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_api_contexts(
+        {"oracle": ("stale-token", "https://oracle.enterprise.slack.com")}
+    )
+    discovery_page = DiscoveryPage()
+    api_page = ApiPage()
+    adapter._workspace_page = lambda workspace_name: discovery_page  # type: ignore[method-assign]
+    adapter._api_page = lambda origin: api_page  # type: ignore[method-assign]
+
+    payload = adapter._call_slack_api("oracle", "conversations.history", {})
+
+    assert payload["ok"] is True
+    assert api_page.tokens == ["stale-token", "fresh-token"]

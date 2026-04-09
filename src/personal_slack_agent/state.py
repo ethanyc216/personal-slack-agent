@@ -807,6 +807,36 @@ class BobStateStore:
                     claimed_rows.append(row)
         return [self._session_record_from_row(row) for row in claimed_rows]
 
+    def record_waiting_reminder(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        reminder_count: int,
+        reminder_due_at: Optional[int],
+    ) -> None:
+        now = int(time.time())
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE sessions
+                SET reminder_count = ?,
+                    reminder_due_at = ?,
+                    updated_at = ?
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                """,
+                (
+                    reminder_count,
+                    reminder_due_at,
+                    now,
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                ),
+            )
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.db_path))
         connection.row_factory = sqlite3.Row

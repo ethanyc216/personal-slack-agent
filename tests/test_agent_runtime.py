@@ -93,6 +93,9 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
+        def process_scheduled_actions(self):
+            return None
+
     class FakeWatcher:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
@@ -141,8 +144,13 @@ def test_run_poll_loop_repeats_until_interrupted(tmp_path):
             if calls["cycle"] == 3:
                 raise KeyboardInterrupt()
 
+    class FakeOrchestrator:
+        def process_scheduled_actions(self):
+            return None
+
     agent_module.run_poll_loop(
         watcher=FakeWatcher(),
+        orchestrator=FakeOrchestrator(),
         poll_interval_seconds=7.5,
         lock_file=lock_file,
         pid_file=pid_file,
@@ -153,6 +161,25 @@ def test_run_poll_loop_repeats_until_interrupted(tmp_path):
     assert calls["cycle"] == 3
     assert calls["sleep"]
     assert all(duration <= 1.0 for duration in calls["sleep"])
+
+
+def test_run_poll_cycle_processes_scheduled_actions_after_watcher():
+    calls = []
+
+    class FakeWatcher:
+        def run_cycle(self):
+            calls.append("watcher")
+
+    class FakeOrchestrator:
+        def process_scheduled_actions(self):
+            calls.append("scheduled")
+
+    agent_module.run_poll_cycle(
+        watcher=FakeWatcher(),
+        orchestrator=FakeOrchestrator(),
+    )
+
+    assert calls == ["watcher", "scheduled"]
 
 
 def test_run_poll_loop_stops_when_stop_request_file_exists(tmp_path):
@@ -166,8 +193,13 @@ def test_run_poll_loop_stops_when_stop_request_file_exists(tmp_path):
             calls["cycle"] += 1
             stop_request_path.write_text("stop\n", encoding="utf-8")
 
+    class FakeOrchestrator:
+        def process_scheduled_actions(self):
+            return None
+
     agent_module.run_poll_loop(
         watcher=FakeWatcher(),
+        orchestrator=FakeOrchestrator(),
         poll_interval_seconds=7.5,
         lock_file=lock_file,
         pid_file=pid_file,

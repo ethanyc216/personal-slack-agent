@@ -1,3 +1,4 @@
+import time
 from typing import List, Optional, Protocol, Tuple
 
 from .codex_runner import CodexRunResult
@@ -133,6 +134,46 @@ class BobOrchestrator:
             )
             raise
 
+    def process_scheduled_actions(self, now_epoch: Optional[int] = None) -> None:
+        current_epoch = int(time.time()) if now_epoch is None else int(now_epoch)
+
+        for record in self.state_store.claim_due_reminders(current_epoch):
+            self._deliver_thread_message(
+                workspace_name=record.workspace_name,
+                channel_name=record.channel_name,
+                thread_ts=record.thread_ts,
+                intent_key="reminder-{0}-{1}".format(record.thread_ts, record.reminder_count),
+                text=self._reminder_text(record),
+            )
+            next_due = self._next_reminder_due_at(record.reminder_count, current_epoch)
+            self.state_store.record_waiting_reminder(
+                workspace_name=record.workspace_name,
+                channel_name=record.channel_name,
+                thread_ts=record.thread_ts,
+                reminder_count=record.reminder_count + 1,
+                reminder_due_at=next_due,
+            )
+
+        for record in self.state_store.claim_due_auto_closes(current_epoch):
+            self._clear_waiting_message(record)
+            self._deliver_thread_message(
+                workspace_name=record.workspace_name,
+                channel_name=record.channel_name,
+                thread_ts=record.thread_ts,
+                intent_key="auto-close-{0}".format(record.thread_ts),
+                text=(
+                    "{0} Session timed out while waiting. Reply again in this thread to resume.".format(
+                        self._LABEL_DONE
+                    )
+                ),
+            )
+            self.state_store.update_status(
+                workspace_name=record.workspace_name,
+                channel_name=record.channel_name,
+                thread_ts=record.thread_ts,
+                status=SessionStatus.CLOSED_TIMEOUT,
+            )
+
     def handle_thread_reply(
         self,
         workspace_name: str,
@@ -159,6 +200,25 @@ class BobOrchestrator:
         if not claimed:
             return
 
+        if self._is_manual_close_request(text):
+            self._clear_waiting_message(record)
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.CLOSED_MANUAL,
+            )
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="manual-close-{0}".format(message_ts),
+                text="{0} Session closed. Reply again in this thread to resume.".format(
+                    self._LABEL_DONE
+                ),
+            )
+            return
+
         if record.status is SessionStatus.WAITING_FOR_APPROVAL:
             self._handle_approval_reply(
                 record=record,
@@ -173,6 +233,7 @@ class BobOrchestrator:
         if record.status is SessionStatus.WAITING_FOR_INPUT:
             if author_actor_id != record.owner_actor_id:
                 return
+            self._clear_waiting_message(record)
             self._resume_record(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -229,6 +290,7 @@ class BobOrchestrator:
             return
 
         if action in ("deny", "cancel"):
+            self._clear_waiting_message(record)
             action_text = "denied" if action == "deny" else "canceled"
             self._deliver_thread_message(
                 workspace_name=workspace_name,
@@ -256,6 +318,7 @@ class BobOrchestrator:
                 purpose=self._PURPOSE_THREAD_REPLY,
             )
             raise
+        self._clear_waiting_message(record)
         self.state_store.update_status(
             workspace_name=workspace_name,
             channel_name=channel_name,
@@ -291,6 +354,7 @@ class BobOrchestrator:
     ) -> None:
         if run_result.wait_kind == "input":
             wait_message = run_result.wait_message or "Please reply in this thread."
+            reminder_due_at, auto_close_due_at = self._waiting_deadlines()
             waiting_message_ts = self._deliver_thread_message(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -306,8 +370,8 @@ class BobOrchestrator:
                 waiting_message_ts=waiting_message_ts,
                 approval_request_id=None,
                 approval_command_summary=None,
-                reminder_due_at=None,
-                auto_close_due_at=None,
+                reminder_due_at=reminder_due_at,
+                auto_close_due_at=auto_close_due_at,
             )
             return
 
@@ -316,6 +380,7 @@ class BobOrchestrator:
             if approval_request_id is None:
                 approval_request_id = "APR-{0}".format(thread_ts.replace(".", "")[-6:])
             approval_summary = run_result.wait_message or "Command requires approval"
+            reminder_due_at, auto_close_due_at = self._waiting_deadlines()
             waiting_message_ts = self._deliver_thread_message(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -337,8 +402,8 @@ class BobOrchestrator:
                 waiting_message_ts=waiting_message_ts,
                 approval_request_id=approval_request_id,
                 approval_command_summary=approval_summary,
-                reminder_due_at=None,
-                auto_close_due_at=None,
+                reminder_due_at=reminder_due_at,
+                auto_close_due_at=auto_close_due_at,
             )
             return
 
@@ -545,6 +610,10 @@ class BobOrchestrator:
         normalized = text.strip().lower()
         return normalized.startswith("bob")
 
+    def _is_manual_close_request(self, text: str) -> bool:
+        normalized = text.strip().lower()
+        return normalized in {"bob close", "close bob"}
+
     def _extract_approval_request_id(self, wait_message: Optional[str]) -> Optional[str]:
         if not wait_message:
             return None
@@ -563,3 +632,42 @@ class BobOrchestrator:
                 approval_id,
             )
         )
+
+    def _reminder_text(self, record: SessionRecord) -> str:
+        if record.status is SessionStatus.WAITING_FOR_APPROVAL:
+            return "{0} Reminder: approval is still pending in this thread.".format(
+                self._LABEL_APPROVAL
+            )
+        return "{0} Reminder: I am still waiting for your reply in this thread.".format(
+            self._LABEL_INPUT
+        )
+
+    def _next_reminder_due_at(self, reminder_count: int, now_epoch: int) -> Optional[int]:
+        next_index = reminder_count + 1
+        if next_index >= len(self.config.defaults.reminder_minutes):
+            return None
+        return now_epoch + int(self.config.defaults.reminder_minutes[next_index]) * 60
+
+    def _clear_waiting_message(self, record: SessionRecord) -> None:
+        if not record.waiting_message_ts:
+            return
+        try:
+            self.browser.delete_message(
+                workspace_name=record.workspace_name,
+                channel_name=record.channel_name,
+                message_ts=record.waiting_message_ts,
+            )
+        except Exception:
+            return
+
+    def _waiting_deadlines(self) -> Tuple[Optional[int], Optional[int]]:
+        now = int(time.time())
+        reminder_due_at = None
+        if self.config.defaults.reminder_minutes:
+            reminder_due_at = now + int(self.config.defaults.reminder_minutes[0]) * 60
+
+        auto_close_due_at = None
+        if self.config.defaults.auto_close_minutes is not None:
+            auto_close_due_at = now + int(self.config.defaults.auto_close_minutes) * 60
+
+        return reminder_due_at, auto_close_due_at

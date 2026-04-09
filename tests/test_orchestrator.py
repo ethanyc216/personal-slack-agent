@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import time
 from typing import Dict, List
 
 import pytest
@@ -163,6 +164,34 @@ def test_waiting_for_input_posts_wait_message_and_saves_wait_state(fake_environm
     assert record.status is SessionStatus.WAITING_FOR_INPUT
 
 
+def test_waiting_for_input_schedules_reminder_and_auto_close(fake_environment):
+    orchestrator, _browser, store, runner = fake_environment
+    orchestrator.config.defaults.reminder_minutes = [30]
+    orchestrator.config.defaults.auto_close_minutes = 120
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        wait_kind="input",
+        wait_message="Which option do you want?",
+    )
+    before = int(time.time())
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, choose an option",
+    )
+
+    after = int(time.time())
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.reminder_due_at is not None
+    assert record.auto_close_due_at is not None
+    assert before + 30 * 60 <= record.reminder_due_at <= after + 30 * 60
+    assert before + 120 * 60 <= record.auto_close_due_at <= after + 120 * 60
+
+
 def test_unauthorized_actor_is_ignored(fake_environment):
     orchestrator, browser, store, runner = fake_environment
 
@@ -311,6 +340,36 @@ def test_waiting_reply_resume_failure_keeps_waiting_state_and_releases_claim(fak
     )
 
 
+def test_bob_close_marks_session_closed_without_resuming(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_INPUT,
+        waiting_message_ts="1743461001.000001",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461010.000001",
+        author_actor_id="U123",
+        text="bob close",
+    )
+
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_MANUAL
+    assert runner.resume_calls == []
+    assert "closed" in browser.thread_posts["1743461000.000001"][-1].lower()
+
+
 def test_post_failure_marks_session_failed_instead_of_leaving_it_running(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     browser.post_error = RuntimeError("slack unavailable")
@@ -358,6 +417,88 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
     assert len(runner.resume_calls) == 1
     assert runner.resume_calls[0]["cwd"] == "/tmp/project"
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Follow-up answer"
+
+
+def test_waiting_reply_deletes_previous_wait_prompt_before_resuming(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_INPUT,
+        waiting_message_ts="1743461001.000001",
+    )
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Thanks for the answer",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461020.000001",
+        author_actor_id="U123",
+        text="Option A",
+    )
+
+    assert browser.deleted_messages == ["1743461001.000001"]
+    assert runner.resume_calls[0]["prompt"] == "Option A"
+
+
+def test_process_due_reminders_posts_reminder_and_schedules_next_one(fake_environment):
+    orchestrator, browser, store, _runner = fake_environment
+    orchestrator.config.defaults.reminder_minutes = [30, 60]
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_INPUT,
+        waiting_message_ts="1743461001.000001",
+        reminder_due_at=1,
+        auto_close_due_at=999999,
+    )
+
+    orchestrator.process_scheduled_actions(now_epoch=5)
+
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.WAITING_FOR_INPUT
+    assert record.reminder_count == 1
+    assert record.reminder_due_at == 5 + 60 * 60
+    assert "reminder" in browser.thread_posts["1743461000.000001"][-1].lower()
+
+
+def test_process_due_auto_closes_closes_waiting_session_and_deletes_prompt(fake_environment):
+    orchestrator, browser, store, _runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_INPUT,
+        waiting_message_ts="1743461001.000001",
+        auto_close_due_at=1,
+    )
+
+    orchestrator.process_scheduled_actions(now_epoch=5)
+
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_TIMEOUT
+    assert browser.deleted_messages == ["1743461001.000001"]
+    assert "timed out" in browser.thread_posts["1743461000.000001"][-1].lower()
 
 
 def test_failed_reply_resumes_same_session(fake_environment):

@@ -22,10 +22,12 @@ from ..state import BobStateStore
 
 def run_poll_cycle(
     watcher: SlackWatcher,
+    orchestrator: BobOrchestrator,
     logger: Logger = None,
 ) -> None:
     del logger
     watcher.run_cycle()
+    orchestrator.process_scheduled_actions()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -76,6 +78,7 @@ def _remove_pid_file(pid_file: Path) -> None:
 
 def run_poll_loop(
     watcher: SlackWatcher,
+    orchestrator: BobOrchestrator,
     poll_interval_seconds: float,
     lock_file: Path,
     pid_file: Path,
@@ -90,6 +93,7 @@ def run_poll_loop(
                 return
             run_poll_cycle(
                 watcher=watcher,
+                orchestrator=orchestrator,
                 logger=logger,
             )
             deadline = time.time() + poll_interval_seconds
@@ -167,6 +171,7 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
             try:
                 _run_agent_cycles(
                     watcher=watcher,
+                    orchestrator=orchestrator,
                     once=once,
                     poll_interval_seconds=poll_interval_seconds,
                     stop_request_path=paths.stop_request_file,
@@ -185,6 +190,7 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
 
 def _run_agent_cycles(
     watcher: SlackWatcher,
+    orchestrator: BobOrchestrator,
     once: bool,
     poll_interval_seconds: float,
     stop_request_path: Path,
@@ -193,11 +199,13 @@ def _run_agent_cycles(
     if once:
         run_poll_cycle(
             watcher=watcher,
+            orchestrator=orchestrator,
             logger=logger,
         )
         return
     run_poll_loop(
         watcher=watcher,
+        orchestrator=orchestrator,
         poll_interval_seconds=poll_interval_seconds,
         lock_file=stop_request_path.parent / "bob.lock",
         pid_file=stop_request_path.parent / "bob.pid",
