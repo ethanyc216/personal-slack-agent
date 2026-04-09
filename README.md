@@ -106,7 +106,6 @@ slack_api_token = "xoxc-..."
 name = "my-private-channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
-post_terminal_threads_here = true
 ```
 
 ### Important config notes
@@ -124,6 +123,10 @@ post_terminal_threads_here = true
 - `slack_api_token`
   This is currently the browser-session token used for the private Slack web API path.
   Treat it as sensitive.
+
+- `post_terminal_threads_here`
+  This is reserved for future terminal-originated Slack thread posting.
+  It is not wired in the current v1 runtime yet.
 
 ### Automatic Slack auth bootstrap
 

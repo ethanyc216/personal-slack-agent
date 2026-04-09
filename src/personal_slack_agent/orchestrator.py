@@ -380,6 +380,21 @@ class BobOrchestrator:
             if approval_request_id is None:
                 approval_request_id = "APR-{0}".format(thread_ts.replace(".", "")[-6:])
             approval_summary = run_result.wait_message or "Command requires approval"
+            if self._should_auto_approve(approval_summary, approval_request_id):
+                auto_result = self.codex_runner.resume_session(
+                    session_id,
+                    "approve {0}".format(approval_request_id),
+                    self._cwd_for_thread(workspace_name, channel_name, thread_ts),
+                )
+                self._process_run_result(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    session_id=session_id,
+                    run_result=auto_result,
+                    result_key_suffix="auto-{0}".format(result_key_suffix),
+                )
+                return
             reminder_due_at, auto_close_due_at = self._waiting_deadlines()
             waiting_message_ts = self._deliver_thread_message(
                 workspace_name=workspace_name,
@@ -579,6 +594,12 @@ class BobOrchestrator:
             return channel.effective_default_cwd
         return self.config.defaults.default_cwd
 
+    def _cwd_for_thread(self, workspace_name: str, channel_name: str, thread_ts: str) -> str:
+        record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
+        if record is not None:
+            return record.cwd
+        return self._resolve_default_cwd(workspace_name, channel_name)
+
     def _is_actor_allowed(self, workspace_name: str, actor_id: str) -> bool:
         workspace = self._find_workspace(workspace_name)
         if workspace is None:
@@ -621,6 +642,54 @@ class BobOrchestrator:
             if token.startswith("APR-"):
                 return token
         return None
+
+    def _should_auto_approve(self, approval_summary: str, approval_request_id: str) -> bool:
+        if not approval_request_id:
+            return False
+        normalized = approval_summary.lower().replace(approval_request_id.lower(), "").strip()
+        if any(token in normalized for token in ("&&", "||", ";", "|", ">", "<", "$(", "`")):
+            return False
+        risky_prefixes = (
+            "rm ",
+            "mv ",
+            "cp ",
+            "mkdir ",
+            "rmdir ",
+            "chmod ",
+            "chown ",
+            "touch ",
+            "curl ",
+            "wget ",
+            "git commit",
+            "git push",
+            "git pull",
+            "python ",
+            "python3 ",
+            "pip ",
+            "pip3 ",
+            "brew ",
+            "npm ",
+            "yarn ",
+            "pnpm ",
+            "docker ",
+            "kubectl ",
+        )
+        if normalized.startswith(risky_prefixes):
+            return False
+        safe_prefixes = (
+            "pwd",
+            "ls",
+            "cat ",
+            "sed ",
+            "rg ",
+            "find ",
+            "git status",
+            "git diff",
+            "head ",
+            "tail ",
+            "wc ",
+        )
+        return normalized.startswith(safe_prefixes)
 
     def _approval_needed_text(self, record: SessionRecord) -> str:
         approval_id = record.approval_request_id or "APR-unknown"

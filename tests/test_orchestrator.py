@@ -70,6 +70,7 @@ class FakeCodexRunner:
         self.resume_calls: List[dict] = []
         self.new_session_error: Exception = None
         self.resume_error: Exception = None
+        self.next_resume_result: CodexRunResult | None = None
 
     def run_new_session(self, prompt: str, cwd: str, additional_roots: List[str]) -> CodexRunResult:
         if self.new_session_error is not None:
@@ -83,6 +84,8 @@ class FakeCodexRunner:
         if self.resume_error is not None:
             raise self.resume_error
         self.resume_calls.append({"session_id": session_id, "prompt": prompt, "cwd": cwd})
+        if self.next_resume_result is not None:
+            return self.next_resume_result
         return self.next_result
 
 
@@ -592,6 +595,63 @@ def test_generated_approval_id_is_included_in_prompt(fake_environment):
     assert "_*Bob needs approval :exclamation::*_" in last_post
     assert record.approval_request_id in last_post
     assert "approve {0}".format(record.approval_request_id) in last_post
+
+
+def test_low_risk_approval_is_auto_approved_without_slack_prompt(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        wait_kind="approval",
+        wait_message="git status -sb APR-001",
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Auto-approved answer",
+    )
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob run safe command",
+    )
+
+    assert runner.resume_calls == [
+        {
+            "session_id": "session-123",
+            "prompt": "approve APR-001",
+            "cwd": str(store.get_by_thread("oracle", "yifanche-private", "1743461000.000001").cwd),
+        }
+    ]
+    posts = browser.thread_posts["1743461000.000001"]
+    assert all("_*Bob needs approval :exclamation::*_" not in post for post in posts)
+    assert posts[-1] == "_*codex Bob :white_check_mark::*_ Auto-approved answer"
+
+
+def test_high_risk_approval_still_requires_slack_prompt(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        wait_kind="approval",
+        wait_message="rm -rf /tmp/demo APR-001",
+    )
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob run risky command",
+    )
+
+    assert runner.resume_calls == []
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.WAITING_FOR_APPROVAL
+    assert browser.thread_posts["1743461000.000001"][-1].startswith(
+        "_*Bob needs approval :exclamation::*_"
+    )
 
 
 def test_approval_accept_resumes_same_session_with_cwd(fake_environment):
