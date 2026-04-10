@@ -82,34 +82,24 @@ class BobOrchestrator:
             )
             return
 
-        cwd = self._resolve_default_cwd(workspace_name, channel_name)
         try:
+            cwd = self._resolve_default_cwd(workspace_name, channel_name)
             run_result = self.codex_runner.run_new_session(
                 prompt=text,
                 cwd=cwd,
                 additional_roots=list(self.config.defaults.additional_roots),
             )
-        except Exception:
-            self.state_store.release_processed_message(
+            session_id = run_result.session_id or "unknown-session"
+            self.state_store.upsert_session(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
                 thread_ts=message_ts,
-                message_ts=message_ts,
-                purpose=self._PURPOSE_ROOT_REQUEST,
+                root_ts=message_ts,
+                codex_session_id=session_id,
+                cwd=cwd,
+                owner_actor_id=author_actor_id,
+                status=SessionStatus.RUNNING,
             )
-            raise
-        session_id = run_result.session_id or "unknown-session"
-        self.state_store.upsert_session(
-            workspace_name=workspace_name,
-            channel_name=channel_name,
-            thread_ts=message_ts,
-            root_ts=message_ts,
-            codex_session_id=session_id,
-            cwd=cwd,
-            owner_actor_id=author_actor_id,
-            status=SessionStatus.RUNNING,
-        )
-        try:
             self._deliver_thread_message(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -126,12 +116,22 @@ class BobOrchestrator:
                 result_key_suffix=message_ts,
             )
         except Exception:
-            self.state_store.update_status(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=message_ts,
-                status=SessionStatus.FAILED,
-            )
+            record = self.state_store.get_by_thread(workspace_name, channel_name, message_ts)
+            if record is None:
+                self.state_store.release_processed_message(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=message_ts,
+                    message_ts=message_ts,
+                    purpose=self._PURPOSE_ROOT_REQUEST,
+                )
+            else:
+                self.state_store.update_status(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=message_ts,
+                    status=SessionStatus.FAILED,
+                )
             raise
 
     def process_scheduled_actions(self, now_epoch: Optional[int] = None) -> None:

@@ -303,6 +303,37 @@ def test_new_root_message_failure_releases_processed_claim(fake_environment):
     assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
 
 
+def test_root_message_claim_is_released_if_session_persistence_fails(fake_environment, monkeypatch):
+    orchestrator, _browser, store, _runner = fake_environment
+
+    def fail_upsert_session(**kwargs):
+        del kwargs
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(store, "upsert_session", fail_upsert_session)
+
+    with pytest.raises(RuntimeError):
+        orchestrator.handle_new_root_message(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            message_ts="1743461000.000001",
+            author_actor_id="U123",
+            text="Bob, hi there",
+        )
+
+    assert (
+        store.has_processed_message(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1743461000.000001",
+            message_ts="1743461000.000001",
+            purpose="root_request",
+        )
+        is False
+    )
+    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+
+
 def test_waiting_reply_resume_failure_keeps_waiting_state_and_releases_claim(fake_environment):
     orchestrator, _browser, store, runner = fake_environment
     store.upsert_session(

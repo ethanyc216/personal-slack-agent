@@ -484,3 +484,41 @@ def test_call_slack_api_retries_once_when_api_page_closes_mid_call():
 
     assert payload["ok"] is True
     assert len(pages) == 0
+
+
+def test_call_slack_api_retries_once_when_api_request_times_out():
+    class TimeoutPage:
+        def evaluate(self, script, payload):
+            del script
+            del payload
+            return {"status": 200, "body": {"ok": False, "error": "request_timeout"}}
+
+    class HealthyPage:
+        def __init__(self):
+            self.calls = []
+
+        def evaluate(self, script, payload):
+            del script
+            self.calls.append(payload["token"])
+            return {"status": 200, "body": {"ok": True, "messages": []}}
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_api_contexts(
+        {"oracle": ("fresh-token", "https://oracle.enterprise.slack.com")}
+    )
+    healthy_page = HealthyPage()
+    pages = [TimeoutPage(), healthy_page]
+    close_calls = []
+
+    adapter._api_page = lambda origin: pages.pop(0)  # type: ignore[method-assign]
+    adapter.close = lambda: close_calls.append("closed")  # type: ignore[method-assign]
+
+    payload = adapter._call_slack_api("oracle", "conversations.history", {})
+
+    assert payload["ok"] is True
+    assert close_calls == ["closed"]
+    assert healthy_page.calls == ["fresh-token"]

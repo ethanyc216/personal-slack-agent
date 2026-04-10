@@ -22,6 +22,8 @@ def _load_sync_playwright():
 
 
 class PlaywrightSlackAdapter:
+    _SLACK_API_TIMEOUT_MS = 15000
+
     def __init__(
         self,
         cdp_url: str,
@@ -413,19 +415,33 @@ class PlaywrightSlackAdapter:
         try:
             payload = page.evaluate(
                 """
-async ({origin, methodName, token, params}) => {
+async ({origin, methodName, token, params, timeoutMs}) => {
   const form = new FormData();
   form.append('token', token);
   for (const [key, value] of Object.entries(params)) {
     if (value === null || value === undefined) continue;
     form.append(key, String(value));
   }
-  const resp = await fetch(origin + '/api/' + methodName, {
-    method: 'POST',
-    body: form,
-    credentials: 'include'
-  });
-  const text = await resp.text();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let resp;
+  let text;
+  try {
+    resp = await fetch(origin + '/api/' + methodName, {
+      method: 'POST',
+      body: form,
+      credentials: 'include',
+      signal: controller.signal,
+    });
+    text = await resp.text();
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      return { status: 408, body: { ok: false, error: 'request_timeout' } };
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   let json;
   try {
     json = JSON.parse(text);
@@ -440,6 +456,7 @@ async ({origin, methodName, token, params}) => {
                     "methodName": method_name,
                     "token": token,
                     "params": params,
+                    "timeoutMs": self._SLACK_API_TIMEOUT_MS,
                 },
             )
         except PlaywrightError as exc:
@@ -454,6 +471,19 @@ async ({origin, methodName, token, params}) => {
                 )
             raise
         body = payload.get("body") if isinstance(payload, dict) else None
+        if (
+            retry_on_closed_page_error
+            and isinstance(body, dict)
+            and body.get("error") == "request_timeout"
+        ):
+            self.close()
+            return self._call_slack_api(
+                workspace_name=workspace_name,
+                method_name=method_name,
+                params=params,
+                retry_on_auth_error=retry_on_auth_error,
+                retry_on_closed_page_error=False,
+            )
         if (
             retry_on_auth_error
             and isinstance(body, dict)
