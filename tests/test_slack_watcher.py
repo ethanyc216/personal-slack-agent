@@ -269,6 +269,58 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
     assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") == "9999999999.0"
 
 
+def test_watcher_periodically_reconciles_follow_up_replies_without_websocket_event(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="10.0",
+            message_ts="9999999999.0",
+            author_actor_id="U123",
+            text="follow-up without event",
+        )
+    ]
+
+    watcher.run_cycle()
+
+    assert orchestrator.reply_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "thread_ts": "10.0",
+            "message_ts": "9999999999.0",
+            "author_actor_id": "U123",
+            "text": "follow-up without event",
+        }
+    ]
+    assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") == "9999999999.0"
+
+
 def test_watcher_reconciles_root_messages_across_multiple_history_pages(tmp_path):
     from personal_slack_agent.slack.watcher import SlackWatcher
 

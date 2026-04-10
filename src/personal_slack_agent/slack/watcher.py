@@ -40,6 +40,7 @@ class SlackWatcher:
             self._initialize()
         self._reconcile_pending_workspaces()
         self._process_event_queue()
+        self._reconcile_all_workspaces()
         self._reconcile_pending_threads()
 
     def request_workspace_reconcile(self, workspace_name: str) -> None:
@@ -138,6 +139,19 @@ class SlackWatcher:
                 thread_ts=key[2],
             )
             self._threads_pending_reconcile.discard(key)
+
+    def _reconcile_all_workspaces(self) -> None:
+        for workspace in self.config.workspaces:
+            for channel in workspace.channels:
+                self.reconcile_channel_since_cursor(workspace.name, channel.name)
+                for session in self.state_store.list_sessions(workspace.name, channel.name):
+                    if session.status is SessionStatus.RUNNING:
+                        continue
+                    self.reconcile_thread_since_cursor(
+                        workspace_name=workspace.name,
+                        channel_name=channel.name,
+                        thread_ts=session.thread_ts,
+                    )
 
     def handle_event(self, workspace_name: str, event: SlackRealtimeEvent) -> None:
         channel_name = self._channel_name_by_id.get((workspace_name, event.channel_id))
