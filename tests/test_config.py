@@ -257,7 +257,7 @@ def test_missing_workspace_channel_name_raises(tmp_path):
         load_config(config_path)
 
 
-def test_workspace_must_have_allowed_actor_ids(tmp_path):
+def test_workspace_without_allowed_actor_ids_defaults_to_unrestricted_access(tmp_path):
     default_root = tmp_path / "project"
     default_root.mkdir()
 
@@ -273,8 +273,34 @@ def test_workspace_must_have_allowed_actor_ids(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="allowed_actor_ids"):
-        load_config(config_path)
+    config = load_config(config_path)
+
+    assert config.defaults.allowed_actor_ids == []
+    assert config.workspaces[0].allowed_actor_ids == []
+
+
+def test_workspace_with_empty_allowed_actor_ids_allows_unrestricted_access(tmp_path):
+    default_root = tmp_path / "project"
+    default_root.mkdir()
+
+    config_path = tmp_path / "unrestricted.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{default_root}"
+        allowed_actor_ids = []
+
+        [[workspaces]]
+        name = "oracle"
+        allowed_actor_ids = []
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.allowed_actor_ids == []
+    assert config.workspaces[0].allowed_actor_ids == []
 
 
 def test_duplicate_workspace_and_channel_names_raise(tmp_path):

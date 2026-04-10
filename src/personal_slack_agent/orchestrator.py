@@ -605,6 +605,8 @@ class BobOrchestrator:
         if workspace is None:
             return False
         allowed = workspace.allowed_actor_ids
+        if not allowed:
+            return True
         return actor_id in allowed
 
     def _find_workspace(self, workspace_name: str):

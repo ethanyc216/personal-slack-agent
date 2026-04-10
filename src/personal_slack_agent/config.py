@@ -193,10 +193,6 @@ def _parse_workspaces(raw_workspaces: Any, defaults: DefaultSettings, base_dir: 
                 raw_allowed_actor_ids,
                 "workspaces.allowed_actor_ids",
             )
-        if not allowed_actor_ids:
-            raise ConfigError(
-                "workspace.allowed_actor_ids must be configured directly or inherited from defaults.allowed_actor_ids."
-            )
         result.append(
             WorkspaceConfig(
                 name=name,

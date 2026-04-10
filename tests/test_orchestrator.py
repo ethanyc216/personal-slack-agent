@@ -211,6 +211,24 @@ def test_unauthorized_actor_is_ignored(fake_environment):
     assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
 
 
+def test_empty_allowed_actor_ids_allows_any_actor(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.allowed_actor_ids = []
+    orchestrator.config.workspaces[0].allowed_actor_ids = []
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U999",
+        text="Bob, hi there",
+    )
+
+    assert len(runner.new_session_calls) == 1
+    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
+    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is not None
+
+
 def test_duplicate_root_message_is_not_processed_twice(fake_environment):
     orchestrator, browser, store, runner = fake_environment
 
