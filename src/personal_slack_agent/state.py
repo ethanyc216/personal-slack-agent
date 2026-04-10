@@ -1,7 +1,8 @@
+from contextlib import contextmanager
 import sqlite3
 import time
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Iterator, List, Optional, Union
 
 from .models import OutboundIntentRecord, SessionRecord, SessionStatus
 
@@ -857,10 +858,15 @@ class BobStateStore:
                 ),
             )
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(str(self.db_path))
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _migrate_sessions_table(self, connection: sqlite3.Connection) -> None:
         columns = {

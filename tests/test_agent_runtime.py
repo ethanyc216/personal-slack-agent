@@ -236,3 +236,50 @@ def test_run_poll_loop_stops_when_stop_request_file_exists(tmp_path):
     assert calls["cycle"] == 1
     assert lock_file.exists()
     assert pid_file.exists()
+
+
+def test_run_poll_loop_continues_after_non_interrupt_cycle_error(tmp_path):
+    calls = {"cycle": 0, "sleep": []}
+    stop_request_path = tmp_path / "bob.stop"
+    lock_file = tmp_path / "bob.lock"
+    pid_file = tmp_path / "bob.pid"
+
+    class FakeLogger:
+        def __init__(self):
+            self.exception_messages = []
+
+        def exception(self, message, *args):
+            if args:
+                self.exception_messages.append(message % args)
+                return
+            self.exception_messages.append(message)
+
+    logger = FakeLogger()
+
+    class FakeWatcher:
+        def run_cycle(self):
+            calls["cycle"] += 1
+            if calls["cycle"] == 1:
+                raise RuntimeError("transient failure")
+            if calls["cycle"] == 3:
+                raise KeyboardInterrupt()
+
+    class FakeOrchestrator:
+        def process_scheduled_actions(self):
+            return None
+
+    agent_module.run_poll_loop(
+        watcher=FakeWatcher(),
+        orchestrator=FakeOrchestrator(),
+        poll_interval_seconds=7.5,
+        lock_file=lock_file,
+        pid_file=pid_file,
+        stop_request_path=stop_request_path,
+        sleep_fn=calls["sleep"].append,
+        logger=logger,
+    )
+
+    assert calls["cycle"] == 3
+    assert logger.exception_messages == [
+        "bob-agent poll cycle failed; continuing after 7.500s"
+    ]

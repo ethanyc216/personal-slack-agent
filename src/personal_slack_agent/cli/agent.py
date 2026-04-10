@@ -94,12 +94,21 @@ def run_poll_loop(
             _refresh_runtime_markers(lock_file, pid_file)
             if stop_request_path.exists():
                 return
-            run_poll_cycle(
-                watcher=watcher,
-                orchestrator=orchestrator,
-                reconcile_request_path=reconcile_request_path,
-                logger=logger,
-            )
+            try:
+                run_poll_cycle(
+                    watcher=watcher,
+                    orchestrator=orchestrator,
+                    reconcile_request_path=reconcile_request_path,
+                    logger=logger,
+                )
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                if logger is not None:
+                    logger.exception(
+                        "bob-agent poll cycle failed; continuing after %.3fs",
+                        poll_interval_seconds,
+                    )
             deadline = time.time() + poll_interval_seconds
             while time.time() < deadline:
                 if stop_request_path.exists():

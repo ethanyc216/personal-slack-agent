@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from playwright.sync_api import Error as PlaywrightError
+
 from ..models import (
     DEDICATED_BROWSER_MODE,
     DEFAULT_SLACK_SIGNIN_URL,
@@ -404,11 +406,13 @@ class PlaywrightSlackAdapter:
         method_name: str,
         params: Dict[str, Any],
         retry_on_auth_error: bool = True,
+        retry_on_closed_page_error: bool = True,
     ) -> Dict[str, Any]:
         token, origin = self._discover_api_session(workspace_name)
         page = self._api_page(origin)
-        payload = page.evaluate(
-            """
+        try:
+            payload = page.evaluate(
+                """
 async ({origin, methodName, token, params}) => {
   const form = new FormData();
   form.append('token', token);
@@ -430,14 +434,25 @@ async ({origin, methodName, token, params}) => {
   }
   return { status: resp.status, body: json };
 }
-            """,
-            {
-                "origin": origin,
-                "methodName": method_name,
-                "token": token,
-                "params": params,
-            },
-        )
+                """,
+                {
+                    "origin": origin,
+                    "methodName": method_name,
+                    "token": token,
+                    "params": params,
+                },
+            )
+        except PlaywrightError as exc:
+            if retry_on_closed_page_error and _is_closed_page_error(exc):
+                self.close()
+                return self._call_slack_api(
+                    workspace_name=workspace_name,
+                    method_name=method_name,
+                    params=params,
+                    retry_on_auth_error=retry_on_auth_error,
+                    retry_on_closed_page_error=False,
+                )
+            raise
         body = payload.get("body") if isinstance(payload, dict) else None
         if (
             retry_on_auth_error
@@ -451,6 +466,7 @@ async ({origin, methodName, token, params}) => {
                 method_name=method_name,
                 params=params,
                 retry_on_auth_error=False,
+                retry_on_closed_page_error=retry_on_closed_page_error,
             )
         if not isinstance(body, dict):
             raise RuntimeError("Slack API call returned an unexpected payload shape.")
@@ -518,3 +534,7 @@ async ({origin, methodName, token, params}) => {
             )
         replies.sort(key=lambda item: float(item.message_ts))
         return replies
+
+
+def _is_closed_page_error(error: Exception) -> bool:
+    return "target page, context or browser has been closed" in str(error).lower()

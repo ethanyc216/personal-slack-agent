@@ -2,6 +2,7 @@ import sqlite3
 
 from personal_slack_agent.models import SessionStatus
 from personal_slack_agent.state import BobStateStore
+from personal_slack_agent import state as state_module
 
 
 def test_state_store_persists_thread_mapping_and_session_fields(tmp_path):
@@ -596,3 +597,31 @@ def test_initialize_legacy_db_still_supports_cursor_persistence(tmp_path):
         store.get_thread_cursor("workspace", "channel", "thread-1")
         == "1775029017.231629"
     )
+
+
+def test_state_store_closes_sqlite_connections_after_each_operation(tmp_path, monkeypatch):
+    db_path = tmp_path / "bob.sqlite3"
+    opened_connections = []
+    closed_connections = []
+    original_connect = sqlite3.connect
+
+    class TrackingConnection(sqlite3.Connection):
+        def close(self):
+            closed_connections.append(self)
+            return super().close()
+
+    def tracking_connect(*args, **kwargs):
+        kwargs.setdefault("factory", TrackingConnection)
+        connection = original_connect(*args, **kwargs)
+        opened_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(state_module.sqlite3, "connect", tracking_connect)
+
+    store = BobStateStore(db_path)
+    store.initialize()
+    store.upsert_channel_cursor("workspace", "channel", "1775029000.698249")
+    assert store.get_channel_cursor("workspace", "channel") == "1775029000.698249"
+
+    assert opened_connections
+    assert closed_connections == opened_connections

@@ -1,3 +1,7 @@
+from playwright._impl._errors import TargetClosedError
+
+from playwright.sync_api import Error as PlaywrightError
+
 from personal_slack_agent.slack.playwright_adapter import PlaywrightSlackAdapter
 
 
@@ -412,3 +416,71 @@ def test_call_slack_api_rediscovers_when_seeded_workspace_auth_is_invalid():
 
     assert payload["ok"] is True
     assert api_page.tokens == ["stale-token", "fresh-token"]
+
+
+def test_call_slack_api_retries_once_when_api_page_is_closed():
+    class ClosedPage:
+        def evaluate(self, script, payload):
+            del script
+            del payload
+            raise PlaywrightError("Page.evaluate: Target page, context or browser has been closed")
+
+    class HealthyPage:
+        def __init__(self):
+            self.calls = []
+
+        def evaluate(self, script, payload):
+            del script
+            self.calls.append(payload["token"])
+            return {"status": 200, "body": {"ok": True, "messages": []}}
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_api_contexts(
+        {"oracle": ("fresh-token", "https://oracle.enterprise.slack.com")}
+    )
+    healthy_page = HealthyPage()
+    pages = [ClosedPage(), healthy_page]
+    close_calls = []
+
+    adapter._api_page = lambda origin: pages.pop(0)  # type: ignore[method-assign]
+    adapter.close = lambda: close_calls.append("closed")  # type: ignore[method-assign]
+
+    payload = adapter._call_slack_api("oracle", "conversations.history", {})
+
+    assert payload["ok"] is True
+    assert close_calls == ["closed"]
+    assert healthy_page.calls == ["fresh-token"]
+
+
+def test_call_slack_api_retries_once_when_api_page_closes_mid_call():
+    class ApiPage:
+        def __init__(self, should_close: bool):
+            self.should_close = should_close
+            self.tokens = []
+
+        def evaluate(self, script, payload):
+            del script
+            self.tokens.append(payload["token"])
+            if self.should_close:
+                raise TargetClosedError("Target page, context or browser has been closed")
+            return {"status": 200, "body": {"ok": True, "messages": []}}
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_api_contexts(
+        {"oracle": ("token-1", "https://oracle.enterprise.slack.com")}
+    )
+    pages = [ApiPage(should_close=True), ApiPage(should_close=False)]
+    adapter._api_page = lambda origin: pages.pop(0)  # type: ignore[method-assign]
+
+    payload = adapter._call_slack_api("oracle", "conversations.history", {})
+
+    assert payload["ok"] is True
+    assert len(pages) == 0
