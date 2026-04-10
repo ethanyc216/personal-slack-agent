@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Dict
 
 from .auth import SlackApiSession
@@ -60,3 +61,31 @@ class SlackApiClient:
         if thread_ts is not None:
             params["thread_ts"] = thread_ts
         return self._call_api("chat.postMessage", params)
+
+    def files_get_upload_url_external(
+        self,
+        filename: str,
+        length: int,
+    ) -> Dict[str, Any]:
+        return self._call_api(
+            "files.getUploadURLExternal",
+            {
+                "filename": filename,
+                "length": str(length),
+            },
+        )
+
+    def files_complete_upload_external(
+        self,
+        files: list[dict[str, str]],
+        channel_id: str | None = None,
+        thread_ts: str | None = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "files": json.dumps(files, separators=(",", ":")),
+        }
+        if channel_id is not None:
+            params["channel_id"] = channel_id
+        if thread_ts is not None:
+            params["thread_ts"] = thread_ts
+        return self._call_api("files.completeUploadExternal", params)

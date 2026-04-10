@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 from playwright.sync_api import Error as PlaywrightError
@@ -187,6 +190,41 @@ class PlaywrightSlackAdapter:
             raise RuntimeError("Slack API post succeeded but no message timestamp was returned.")
         return latest_ts
 
+    def upload_text_snippet(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        upload_name = self._snippet_filename(filename)
+        payload = self._api_client(workspace_name).files_get_upload_url_external(
+            filename=upload_name,
+            length=len(content.encode("utf-8")),
+        )
+        if not payload.get("ok"):
+            raise RuntimeError(
+                "Slack API files.getUploadURLExternal failed: {0}".format(payload.get("error"))
+            )
+        upload_url = str(payload.get("upload_url") or "")
+        file_id = str(payload.get("file_id") or "")
+        if not upload_url or not file_id:
+            raise RuntimeError("Slack upload URL flow returned an incomplete payload.")
+        self._upload_external_bytes(upload_url, content.encode("utf-8"))
+        completion = self._api_client(workspace_name).files_complete_upload_external(
+            files=[{"id": file_id, "title": filename}],
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            thread_ts=thread_ts,
+        )
+        if not completion.get("ok"):
+            raise RuntimeError(
+                "Slack API files.completeUploadExternal failed: {0}".format(
+                    completion.get("error")
+                )
+            )
+        return file_id
+
     def list_root_messages(
         self,
         workspace_name: str,
@@ -296,6 +334,12 @@ class PlaywrightSlackAdapter:
         self._channel_urls[(workspace_name, channel_name)] = resolved_url
         return resolved_url
 
+    def _snippet_filename(self, filename: str) -> str:
+        candidate = PurePosixPath(filename).name
+        if candidate:
+            return candidate
+        return filename.replace("/", "__")
+
     def _resolve_sidebar_channel_id(self, workspace_name: str, channel_name: str) -> str:
         page = self._workspace_page(workspace_name)
         selector = '[data-qa="channel_sidebar_name_{0}"]'.format(
@@ -346,6 +390,21 @@ class PlaywrightSlackAdapter:
             page = runtime.new_page()
         page.goto(api_test_url, wait_until="commit", timeout=15000)
         return page
+
+    def _upload_external_bytes(self, upload_url: str, content: bytes) -> None:
+        request = urllib.request.Request(
+            upload_url,
+            data=content,
+            method="POST",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30.0) as response:
+                status = int(getattr(response, "status", 0))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError("Slack snippet upload failed: {0}".format(exc)) from exc
+        if status < 200 or status >= 300:
+            raise RuntimeError("Slack snippet upload failed with status {0}.".format(status))
 
     def _extract_api_session_info(self, url: str, post_data: str) -> Tuple[Optional[str], Optional[str]]:
         session = extract_api_session_from_request(url, post_data or "")

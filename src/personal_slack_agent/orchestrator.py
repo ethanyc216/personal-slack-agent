@@ -2,6 +2,7 @@ import time
 from typing import List, Optional, Protocol, Tuple
 
 from .codex_runner import CodexRunResult
+from .generated_files import GeneratedFile, extract_generated_files
 from .models import AppConfig, ChannelConfig, OutboundIntentRecord, SessionRecord, SessionStatus
 from .slack import SlackBrowserAdapter
 from .state import BobStateStore
@@ -423,12 +424,13 @@ class BobOrchestrator:
             return
 
         if run_result.final_output:
-            self._deliver_thread_message(
+            self._deliver_final_output(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
                 thread_ts=thread_ts,
-                intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
-                text="{0} {1}".format(self._LABEL_DONE, run_result.final_output),
+                session_id=session_id,
+                result_key_suffix=result_key_suffix,
+                final_output=run_result.final_output,
             )
             self.state_store.update_status(
                 workspace_name=workspace_name,
@@ -452,6 +454,63 @@ class BobOrchestrator:
                 thread_ts=thread_ts,
                 status=SessionStatus.FAILED,
             )
+
+    def _deliver_final_output(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        session_id: str,
+        result_key_suffix: str,
+        final_output: str,
+    ) -> None:
+        summary, files = extract_generated_files(final_output)
+        if not files:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
+                text="{0} {1}".format(self._LABEL_DONE, final_output),
+            )
+            return
+
+        uploaded_any = False
+        for generated_file in files:
+            try:
+                self.browser.upload_text_snippet(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    filename=generated_file.path,
+                    content=generated_file.content,
+                )
+                uploaded_any = True
+            except Exception:
+                if not uploaded_any:
+                    self._deliver_thread_message(
+                        workspace_name=workspace_name,
+                        channel_name=channel_name,
+                        thread_ts=thread_ts,
+                        intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
+                        text="{0} {1}".format(self._LABEL_DONE, final_output),
+                    )
+                    return
+                raise
+
+        summary_text = summary or "Uploaded generated file snippets."
+        file_list = ", ".join("`{0}`".format(item.path) for item in files)
+        self._deliver_thread_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
+            text="{0} {1}\n\nUploaded snippets: {2}".format(
+                self._LABEL_DONE,
+                summary_text,
+                file_list,
+            ),
+        )
 
     def _resume_record(
         self,

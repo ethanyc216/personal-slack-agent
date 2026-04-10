@@ -20,7 +20,9 @@ class FakeSlackBrowser:
     def __init__(self) -> None:
         self.thread_posts: Dict[str, List[str]] = {}
         self.deleted_messages: List[str] = []
+        self.uploaded_snippets: List[dict] = []
         self.post_error: Exception = None
+        self.upload_error: Exception = None
 
     def post_thread_reply(
         self,
@@ -56,6 +58,27 @@ class FakeSlackBrowser:
         del workspace_name
         del channel_name
         return list(self.thread_posts.get(thread_ts, []))
+
+    def upload_text_snippet(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        if self.upload_error is not None:
+            raise self.upload_error
+        self.uploaded_snippets.append(
+            {
+                "workspace_name": workspace_name,
+                "channel_name": channel_name,
+                "thread_ts": thread_ts,
+                "filename": filename,
+                "content": content,
+            }
+        )
+        return "F{0}".format(len(self.uploaded_snippets))
 
 
 @dataclass
@@ -140,6 +163,46 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     assert thread_posts[0].startswith("_*Bob is working on it :arrows_counterclockwise::*_ ")
     assert thread_posts[1] == "_*codex Bob :white_check_mark::*_ Final answer"
     assert len(runner.new_session_calls) == 1
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_IDLE
+
+
+def test_final_output_with_generated_files_posts_summary_and_uploads_snippets(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output=(
+            "Use this set as a repo-local starter package.\n\n"
+            "**`scripts/shepherd/README.md`**\n"
+            "```md\n"
+            "# Shepherd\n"
+            "Hello\n"
+            "```\n"
+        ),
+    )
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, hi there",
+    )
+
+    assert browser.uploaded_snippets == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "thread_ts": "1743461000.000001",
+            "filename": "scripts/shepherd/README.md",
+            "content": "# Shepherd\nHello",
+        }
+    ]
+    final_post = browser.thread_posts["1743461000.000001"][-1]
+    assert "Use this set as a repo-local starter package." in final_post
+    assert "scripts/shepherd/README.md" in final_post
+    assert "# Shepherd" not in final_post
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE

@@ -75,6 +75,16 @@ class SlackBrowserAdapter(Protocol):
     ) -> str:
         ...
 
+    def upload_text_snippet(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        ...
+
     def delete_message(
         self,
         workspace_name: str,

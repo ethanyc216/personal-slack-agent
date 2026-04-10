@@ -358,6 +358,56 @@ def test_post_root_message_uses_api_client_path_only():
     assert calls == [("C222", "Bob, smoke ok", None, False)]
 
 
+def test_upload_text_snippet_uses_external_file_upload_flow():
+    calls = []
+
+    class FakeApiClient:
+        def files_get_upload_url_external(self, filename, length):
+            calls.append(("get", filename, length))
+            return {
+                "ok": True,
+                "upload_url": "https://uploads.slack.test/upload",
+                "file_id": "F123",
+            }
+
+        def files_complete_upload_external(self, files, channel_id=None, thread_ts=None):
+            calls.append(("complete", files, channel_id, thread_ts))
+            return {"ok": True, "files": [{"id": "F123"}]}
+
+    uploads = []
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/T123/C111"})
+    adapter.set_channel_urls(
+        {("oracle", "yifanche-bob"): "https://app.slack.com/client/T123/C222"}
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+    adapter._upload_external_bytes = lambda upload_url, content: uploads.append((upload_url, content))  # type: ignore[method-assign]
+
+    file_id = adapter.upload_text_snippet(
+        "oracle",
+        "yifanche-bob",
+        "5.0",
+        "scripts/shepherd/README.md",
+        "# hello\n",
+    )
+
+    assert file_id == "F123"
+    assert uploads == [("https://uploads.slack.test/upload", b"# hello\n")]
+    assert calls == [
+        ("get", "README.md", 8),
+        (
+            "complete",
+            [{"id": "F123", "title": "scripts/shepherd/README.md"}],
+            "C222",
+            "5.0",
+        ),
+    ]
+
+
 def test_call_slack_api_rediscovers_when_seeded_workspace_auth_is_invalid():
     class FakeRequest:
         def __init__(self, url: str, post_data: str):

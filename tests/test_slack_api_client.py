@@ -153,3 +153,39 @@ def test_conversations_replies_supports_oldest_cursor_params():
             },
         )
     ]
+
+
+def test_file_upload_api_methods_use_expected_private_api_shapes():
+    calls = []
+
+    def fake_call(method_name, params):
+        calls.append((method_name, params))
+        return {"ok": True}
+
+    client = SlackApiClient(
+        workspace_name="workspace",
+        session=SlackApiSession(
+            origin="https://example.enterprise.slack.com",
+            token="xoxc-demo-token",
+        ),
+        call_api=fake_call,
+    )
+
+    client.files_get_upload_url_external(filename="README.md", length=42)
+    client.files_complete_upload_external(
+        files=[{"id": "F123", "title": "scripts/shepherd/README.md"}],
+        channel_id="C123",
+        thread_ts="5.0",
+    )
+
+    assert calls == [
+        ("files.getUploadURLExternal", {"filename": "README.md", "length": "42"}),
+        (
+            "files.completeUploadExternal",
+            {
+                "files": '[{"id":"F123","title":"scripts/shepherd/README.md"}]',
+                "channel_id": "C123",
+                "thread_ts": "5.0",
+            },
+        ),
+    ]
