@@ -231,7 +231,7 @@ class BobOrchestrator:
             return
 
         if record.status is SessionStatus.WAITING_FOR_INPUT:
-            if author_actor_id != record.owner_actor_id:
+            if not self._is_actor_allowed(workspace_name, author_actor_id):
                 return
             self._clear_waiting_message(record)
             self._resume_record(
@@ -250,7 +250,7 @@ class BobOrchestrator:
             SessionStatus.CLOSED_MANUAL,
             SessionStatus.FAILED,
         ):
-            if author_actor_id != record.owner_actor_id:
+            if not self._is_actor_allowed(workspace_name, author_actor_id):
                 return
             self._resume_record(
                 workspace_name=workspace_name,

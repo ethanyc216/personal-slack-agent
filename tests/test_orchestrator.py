@@ -471,6 +471,38 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Follow-up answer"
 
 
+def test_closed_idle_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.allowed_actor_ids = []
+    orchestrator.config.workspaces[0].allowed_actor_ids = []
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Follow-up answer",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461020.000001",
+        author_actor_id="U999",
+        text="What about a follow-up?",
+    )
+
+    assert len(runner.resume_calls) == 1
+    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Follow-up answer"
+
+
 def test_waiting_reply_deletes_previous_wait_prompt_before_resuming(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
@@ -495,6 +527,39 @@ def test_waiting_reply_deletes_previous_wait_prompt_before_resuming(fake_environ
         thread_ts="1743461000.000001",
         message_ts="1743461020.000001",
         author_actor_id="U123",
+        text="Option A",
+    )
+
+    assert browser.deleted_messages == ["1743461001.000001"]
+    assert runner.resume_calls[0]["prompt"] == "Option A"
+
+
+def test_waiting_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.allowed_actor_ids = []
+    orchestrator.config.workspaces[0].allowed_actor_ids = []
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_INPUT,
+        waiting_message_ts="1743461001.000001",
+    )
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Thanks for the answer",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461020.000001",
+        author_actor_id="U999",
         text="Option A",
     )
 
