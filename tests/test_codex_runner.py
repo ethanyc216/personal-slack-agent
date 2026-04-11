@@ -51,6 +51,19 @@ def test_parse_jsonl_events_extracts_final_message():
     assert result.failure_text is None
 
 
+def test_parse_jsonl_events_keeps_first_final_response_item_when_multiple_exist():
+    payload = """
+{"type":"session_meta","payload":{"id":"session-123"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Bob is fine."}],"phase":"final"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"There is nothing queued to resume."}],"phase":"final"}}
+""".strip()
+
+    result = parse_jsonl_events(payload.splitlines())
+
+    assert result.session_id == "session-123"
+    assert result.final_output == "Bob is fine."
+
+
 def test_parse_jsonl_events_extracts_normalized_wait_and_failure():
     payload = """
 {"type":"session_meta","payload":{"id":"session-123"}}
@@ -78,6 +91,20 @@ def test_parse_jsonl_events_supports_current_thread_started_and_agent_message_fo
 
     assert result.session_id == "session-456"
     assert result.final_output == "Final answer from current format"
+
+
+def test_parse_jsonl_events_prefers_response_item_final_over_item_completed_messages():
+    payload = """
+{"type":"thread.started","thread_id":"session-456"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Intermediate note"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Correct final answer"}],"phase":"final"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Later unrelated artifact"}}
+""".strip()
+
+    result = parse_jsonl_events(payload.splitlines())
+
+    assert result.session_id == "session-456"
+    assert result.final_output == "Correct final answer"
 
 
 def test_subprocess_codex_runner_executes_new_session_and_parses_result():

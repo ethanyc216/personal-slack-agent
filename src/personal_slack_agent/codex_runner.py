@@ -66,6 +66,7 @@ def build_resume_command(session_id: str, prompt: str) -> List[str]:
 
 def parse_jsonl_events(lines: Iterable[str]) -> CodexRunResult:
     result = CodexRunResult()
+    saw_response_item_final = False
     for line in lines:
         stripped = line.strip()
         if not stripped:
@@ -92,15 +93,21 @@ def parse_jsonl_events(lines: Iterable[str]) -> CodexRunResult:
 
         if event_type == "item.completed":
             item = event.get("item")
-            if isinstance(item, dict) and item.get("type") == "agent_message":
+            if not saw_response_item_final and isinstance(item, dict) and item.get("type") == "agent_message":
                 text = item.get("text")
                 if isinstance(text, str) and text.strip():
                     result.final_output = text.strip()
             continue
 
         if event_type == "response_item" and isinstance(payload, dict):
-            if payload.get("type") == "message" and payload.get("phase") == "final":
+            if (
+                not saw_response_item_final
+                and payload.get("type") == "message"
+                and payload.get("phase") == "final"
+            ):
                 result.final_output = _extract_output_text(payload.get("content", []))
+                if result.final_output:
+                    saw_response_item_final = True
             continue
 
         if event_type == "event_msg" and isinstance(payload, dict):
