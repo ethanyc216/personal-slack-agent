@@ -192,6 +192,8 @@ def test_channel_override_wins_over_global_default(tmp_path):
         name = "yifanche-private"
         default_cwd = "{channel_root}"
         accept_root_bob_requests = false
+        persistent_memory_mode = "owner_only"
+        persistent_memory_owner = "yifanche"
         """,
         encoding="utf-8",
     )
@@ -202,6 +204,111 @@ def test_channel_override_wins_over_global_default(tmp_path):
     assert channel.effective_default_cwd == str(channel_root.resolve())
     assert channel.effective_accept_root_bob_requests is False
     assert config.workspaces[0].allowed_actor_ids == ["U123"]
+
+
+def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "owner-only.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-private"
+        persistent_memory_mode = "owner_only"
+        persistent_memory_owner = "yifanche"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    channel = config.workspaces[0].channels[0]
+
+    assert channel.persistent_memory_mode == "owner_only"
+    assert channel.persistent_memory_owner == "yifanche"
+
+
+def test_channel_memory_policy_disabled_rejects_owner(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "disabled-with-owner.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob"
+        persistent_memory_mode = "disabled"
+        persistent_memory_owner = "yifanche"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="persistent_memory_owner"):
+        load_config(config_path)
+
+
+def test_channel_memory_policy_owner_only_requires_owner(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "missing-owner.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-private"
+        persistent_memory_mode = "owner_only"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="persistent_memory_owner"):
+        load_config(config_path)
+
+
+def test_channel_memory_policy_mode_is_required(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "missing-mode.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-private"
+        persistent_memory_owner = "yifanche"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="persistent_memory_mode"):
+        load_config(config_path)
 
 
 def test_channel_legacy_slack_url_is_ignored_and_not_dumped(tmp_path):
@@ -222,6 +329,8 @@ def test_channel_legacy_slack_url_is_ignored_and_not_dumped(tmp_path):
         [[workspaces.channels]]
         name = "yifanche-private"
         slack_url = "https://app.slack.com/client/T12345678/C12345678"
+        persistent_memory_mode = "owner_only"
+        persistent_memory_owner = "yifanche"
         """,
         encoding="utf-8",
     )
@@ -319,6 +428,7 @@ def test_duplicate_workspace_and_channel_names_raise(tmp_path):
 
         [[workspaces.channels]]
         name = "ops"
+        persistent_memory_mode = "disabled"
 
         [[workspaces]]
         name = "oracle"

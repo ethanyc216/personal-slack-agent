@@ -54,6 +54,8 @@ At minimum:
 - `slack_url`
 - one `[[workspaces.channels]]` `name`
 - `default_cwd`
+- `persistent_memory_mode`
+- `persistent_memory_owner` for any `owner_only` channel
 
 ## 5. Discover Slack API auth automatically
 
@@ -103,6 +105,8 @@ Bob should create a thread and reply with:
 If you want terminal-originated Bob requests without specifying the channel each time, mark exactly one channel with:
 
 ```toml
+persistent_memory_mode = "owner_only"
+persistent_memory_owner = "yifanche"
 post_terminal_threads_here = true
 ```
 
@@ -124,5 +128,6 @@ Recommended validation sequence:
 ## Notes
 
 - `slack_api_token` is sensitive. Do not commit your personal config.
+- Every configured channel must declare `persistent_memory_mode`. Use `owner_only` plus `persistent_memory_owner` for a private owner channel, or `disabled` for shared/test channels that must not update personal durable notes.
 - Bob currently uses Slack Web realtime sockets for detection and private browser-session-backed Slack web APIs for hydration and posting, not a public Slack app install flow.
 - Per-channel message scraping through the Slack DOM is not part of the normal read path anymore. The browser is used for auth/bootstrap, channel-id discovery, and realtime websocket attachment.

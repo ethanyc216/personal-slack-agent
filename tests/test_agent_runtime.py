@@ -66,6 +66,8 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
                 "",
                 "[[workspaces.channels]]",
                 'name = "yifanche-private"',
+                'persistent_memory_mode = "owner_only"',
+                'persistent_memory_owner = "yifanche"',
             ]
         ),
         encoding="utf-8",

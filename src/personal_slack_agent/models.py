@@ -6,6 +6,8 @@ DEFAULT_SLACK_SIGNIN_URL = "https://slack.com/signin?entry_point=nav_menu#/signi
 DEFAULT_BROWSER_CDP_URL = "http://127.0.0.1:9222"
 SHARED_BROWSER_MODE = "shared_browser"
 DEDICATED_BROWSER_MODE = "dedicated_browser"
+PERSISTENT_MEMORY_MODE_DISABLED = "disabled"
+PERSISTENT_MEMORY_MODE_OWNER_ONLY = "owner_only"
 
 
 @dataclass
@@ -30,6 +32,8 @@ class ChannelConfig:
     default_cwd: Optional[str] = None
     accept_root_bob_requests: Optional[bool] = None
     post_terminal_threads_here: bool = False
+    persistent_memory_mode: str = ""
+    persistent_memory_owner: Optional[str] = None
     effective_default_cwd: str = ""
     effective_accept_root_bob_requests: bool = True
 

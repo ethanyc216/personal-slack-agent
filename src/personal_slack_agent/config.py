@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 from .models import (
     DEDICATED_BROWSER_MODE,
     DEFAULT_SLACK_SIGNIN_URL,
+    PERSISTENT_MEMORY_MODE_DISABLED,
+    PERSISTENT_MEMORY_MODE_OWNER_ONLY,
     SHARED_BROWSER_MODE,
     AppConfig,
     ChannelConfig,
@@ -105,6 +107,17 @@ def dump_config(config: AppConfig) -> str:
                 lines.append(
                     "accept_root_bob_requests = {0}".format(
                         "true" if channel.accept_root_bob_requests else "false"
+                    )
+                )
+            lines.append(
+                'persistent_memory_mode = "{0}"'.format(
+                    _toml_escape(channel.persistent_memory_mode)
+                )
+            )
+            if channel.persistent_memory_owner is not None:
+                lines.append(
+                    'persistent_memory_owner = "{0}"'.format(
+                        _toml_escape(channel.persistent_memory_owner)
                     )
                 )
             if channel.post_terminal_threads_here:
@@ -259,8 +272,16 @@ def _parse_channels(
                 "channel.post_terminal_threads_here",
                 default=False,
             ),
+            persistent_memory_mode=_persistent_memory_mode(
+                raw_channel.get("persistent_memory_mode"),
+                "channel.persistent_memory_mode",
+            ),
+            persistent_memory_owner=_optional_string(
+                raw_channel.get("persistent_memory_owner"),
+                "channel.persistent_memory_owner",
+            ),
         )
-        channels.append(apply_channel_defaults(defaults, channel))
+        channels.append(_validate_channel_memory_policy(apply_channel_defaults(defaults, channel)))
     return channels
 
 
@@ -362,6 +383,37 @@ def _optional_string(value: Any, field_name: str) -> Optional[str]:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError("{0} must be a non-empty string.".format(field_name))
     return value.strip()
+
+
+def _persistent_memory_mode(value: Any, field_name: str) -> str:
+    if value is None:
+        raise ConfigError("{0} is required.".format(field_name))
+    if value not in (PERSISTENT_MEMORY_MODE_OWNER_ONLY, PERSISTENT_MEMORY_MODE_DISABLED):
+        raise ConfigError(
+            "{0} must be one of: {1}, {2}.".format(
+                field_name,
+                PERSISTENT_MEMORY_MODE_OWNER_ONLY,
+                PERSISTENT_MEMORY_MODE_DISABLED,
+            )
+        )
+    return value
+
+
+def _validate_channel_memory_policy(channel: ChannelConfig) -> ChannelConfig:
+    if channel.persistent_memory_mode == PERSISTENT_MEMORY_MODE_OWNER_ONLY:
+        if channel.persistent_memory_owner is None:
+            raise ConfigError(
+                "channel.persistent_memory_owner is required when "
+                "channel.persistent_memory_mode is owner_only."
+            )
+        return channel
+
+    if channel.persistent_memory_owner is not None:
+        raise ConfigError(
+            "channel.persistent_memory_owner is only allowed when "
+            "channel.persistent_memory_mode is owner_only."
+        )
+    return channel
 
 
 def _toml_escape(value: str) -> str:

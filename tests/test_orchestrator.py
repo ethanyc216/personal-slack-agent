@@ -132,6 +132,8 @@ def fake_environment(tmp_path):
                 channels=[
                     ChannelConfig(
                         name="yifanche-private",
+                        persistent_memory_mode="owner_only",
+                        persistent_memory_owner="yifanche",
                         effective_default_cwd=str(tmp_path),
                         effective_accept_root_bob_requests=True,
                     )
@@ -166,6 +168,51 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
+
+
+def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_environment):
+    orchestrator, _browser, _store, runner = fake_environment
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, remember that I prefer reviewer passes",
+    )
+
+    prompt = runner.new_session_calls[0]["prompt"]
+    assert "channel: yifanche-private" in prompt
+    assert "persistent_memory_mode: owner_only" in prompt
+    assert "persistent_memory_owner: yifanche" in prompt
+    assert "may use all available tools, skills, MCP servers, and agents" in prompt
+
+
+def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_channel(
+    fake_environment,
+):
+    orchestrator, _browser, _store, runner = fake_environment
+    orchestrator.config.workspaces[0].channels.append(
+        ChannelConfig(
+            name="yifanche-bob",
+            persistent_memory_mode="disabled",
+            effective_default_cwd=orchestrator.config.defaults.default_cwd,
+            effective_accept_root_bob_requests=True,
+        )
+    )
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-bob",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, help my coworker debug this test",
+    )
+
+    prompt = runner.new_session_calls[0]["prompt"]
+    assert "channel: yifanche-bob" in prompt
+    assert "persistent_memory_mode: disabled" in prompt
+    assert "do not update personal session notes" in prompt.lower()
 
 
 def test_final_output_with_generated_files_posts_summary_and_uploads_snippets(fake_environment):
@@ -534,6 +581,42 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Follow-up answer"
 
 
+def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environment):
+    orchestrator, _browser, store, runner = fake_environment
+    orchestrator.config.workspaces[0].channels.append(
+        ChannelConfig(
+            name="yifanche-bob-test",
+            persistent_memory_mode="disabled",
+            effective_default_cwd=orchestrator.config.defaults.default_cwd,
+            effective_accept_root_bob_requests=True,
+        )
+    )
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-bob-test",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-bob-test",
+        thread_ts="1743461000.000001",
+        message_ts="1743461010.000001",
+        author_actor_id="U123",
+        text="Keep investigating",
+    )
+
+    prompt = runner.resume_calls[0]["prompt"]
+    assert "channel: yifanche-bob-test" in prompt
+    assert "persistent_memory_mode: disabled" in prompt
+    assert "do not update personal session notes" in prompt.lower()
+
+
 def test_closed_idle_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.defaults.allowed_actor_ids = []
@@ -594,7 +677,7 @@ def test_waiting_reply_deletes_previous_wait_prompt_before_resuming(fake_environ
     )
 
     assert browser.deleted_messages == ["1743461001.000001"]
-    assert runner.resume_calls[0]["prompt"] == "Option A"
+    assert runner.resume_calls[0]["prompt"].endswith("User request from Slack:\nOption A")
 
 
 def test_waiting_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fake_environment):
@@ -627,7 +710,7 @@ def test_waiting_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fak
     )
 
     assert browser.deleted_messages == ["1743461001.000001"]
-    assert runner.resume_calls[0]["prompt"] == "Option A"
+    assert runner.resume_calls[0]["prompt"].endswith("User request from Slack:\nOption A")
 
 
 def test_process_due_reminders_posts_reminder_and_schedules_next_one(fake_environment):

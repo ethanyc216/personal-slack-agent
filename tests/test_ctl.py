@@ -80,6 +80,7 @@ def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
                 "",
                 "[[workspaces.channels]]",
                 'name = "yifanche-bob"',
+                'persistent_memory_mode = "disabled"',
             ]
         ),
         encoding="utf-8",

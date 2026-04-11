@@ -23,5 +23,19 @@ slack_api_token = "xoxc-..."
 name = "my-private-channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
+persistent_memory_mode = "owner_only"
+persistent_memory_owner = "yifanche"
 # Optional: mark one channel for the `bob` terminal wrapper to use by default.
 post_terminal_threads_here = true
+
+[[workspaces.channels]]
+name = "my-shared-bob-channel"
+default_cwd = "/Users/you/Code"
+accept_root_bob_requests = true
+persistent_memory_mode = "disabled"
+
+[[workspaces.channels]]
+name = "my-bob-test-channel"
+default_cwd = "/Users/you/Code"
+accept_root_bob_requests = true
+persistent_memory_mode = "disabled"

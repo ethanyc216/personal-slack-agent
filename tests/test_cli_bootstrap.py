@@ -75,6 +75,7 @@ def test_wrapper_runs_terminal_request_with_explicit_target(monkeypatch, tmp_pat
                 "",
                 "[[workspaces.channels]]",
                 'name = "yifanche-bob"',
+                'persistent_memory_mode = "disabled"',
                 "post_terminal_threads_here = true",
             ]
         ),
@@ -143,6 +144,7 @@ def test_wrapper_uses_unique_terminal_channel_when_not_explicit(monkeypatch, tmp
                 "",
                 "[[workspaces.channels]]",
                 'name = "yifanche-bob"',
+                'persistent_memory_mode = "disabled"',
                 "post_terminal_threads_here = true",
             ]
         ),

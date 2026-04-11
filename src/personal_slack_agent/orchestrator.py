@@ -85,8 +85,9 @@ class BobOrchestrator:
 
         try:
             cwd = self._resolve_default_cwd(workspace_name, channel_name)
+            prompt = self._build_codex_prompt(workspace_name, channel_name, text)
             run_result = self.codex_runner.run_new_session(
-                prompt=text,
+                prompt=prompt,
                 cwd=cwd,
                 additional_roots=list(self.config.defaults.additional_roots),
             )
@@ -525,7 +526,8 @@ class BobOrchestrator:
         if record is None:
             return
         try:
-            run_result = self.codex_runner.resume_session(session_id, prompt, record.cwd)
+            wrapped_prompt = self._build_codex_prompt(workspace_name, channel_name, prompt)
+            run_result = self.codex_runner.resume_session(session_id, wrapped_prompt, record.cwd)
         except Exception:
             self.state_store.release_processed_message(
                 workspace_name=workspace_name,
@@ -658,6 +660,45 @@ class BobOrchestrator:
         if record is not None:
             return record.cwd
         return self._resolve_default_cwd(workspace_name, channel_name)
+
+    def _build_codex_prompt(self, workspace_name: str, channel_name: str, user_text: str) -> str:
+        workspace = self._find_workspace(workspace_name)
+        channel = self._find_channel(workspace, channel_name)
+        if channel is None:
+            return user_text
+
+        owner = channel.persistent_memory_owner or "none"
+        if channel.persistent_memory_mode == "owner_only":
+            memory_rule = (
+                "This Slack channel is allowed to update durable personal preference notes "
+                "for owner `{0}` when the conversation reveals a durable preference or workflow rule."
+            ).format(owner)
+        else:
+            memory_rule = (
+                "This Slack channel does not grant permission to update Yifan Chen / Ethan's "
+                "personal durable preference files. Do not update personal session notes or "
+                "similar durable preference files for Yifan from this conversation."
+            )
+
+        return (
+            "Bob execution context:\n"
+            "- workspace: {0}\n"
+            "- channel: {1}\n"
+            "- persistent_memory_mode: {2}\n"
+            "- persistent_memory_owner: {3}\n\n"
+            "Rules:\n"
+            "- You may use all available tools, skills, MCP servers, and agents normally.\n"
+            "- {4}\n\n"
+            "User request from Slack:\n"
+            "{5}"
+        ).format(
+            workspace_name,
+            channel_name,
+            channel.persistent_memory_mode,
+            owner,
+            memory_rule,
+            user_text,
+        )
 
     def _is_actor_allowed(self, workspace_name: str, actor_id: str) -> bool:
         workspace = self._find_workspace(workspace_name)

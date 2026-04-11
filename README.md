@@ -106,6 +106,14 @@ slack_api_token = "xoxc-..."
 name = "my-private-channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
+persistent_memory_mode = "owner_only"
+persistent_memory_owner = "yifanche"
+
+[[workspaces.channels]]
+name = "my-shared-bob-channel"
+default_cwd = "/Users/you/Code"
+accept_root_bob_requests = true
+persistent_memory_mode = "disabled"
 ```
 
 ### Important config notes
@@ -127,6 +135,15 @@ accept_root_bob_requests = true
 - `post_terminal_threads_here`
   Channels with this flag can be targeted by the `bob` terminal wrapper for terminal-originated Bob requests.
   If exactly one channel across your config has this flag, `bob "<prompt>"` can use it by default.
+
+- `persistent_memory_mode`
+  Required for every configured channel.
+  Use `owner_only` for a private channel that is allowed to update one person's durable preference notes.
+  Use `disabled` for shared or test channels that must not update personal durable notes.
+
+- `persistent_memory_owner`
+  Required only when `persistent_memory_mode = "owner_only"`.
+  This identifies whose durable preference notes the channel may update.
 
 ### Automatic Slack auth bootstrap
 
