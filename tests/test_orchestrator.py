@@ -182,6 +182,11 @@ def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_enviro
     )
 
     prompt = runner.new_session_calls[0]["prompt"]
+    assert "Bob is Ethan's personal assistant" in prompt
+    assert "CTDM tickets" in prompt
+    assert "internal topics" in prompt
+    assert "checking work status" in prompt
+    assert "approved Slack channels" in prompt
     assert "channel: yifanche-private" in prompt
     assert "persistent_memory_mode: owner_only" in prompt
     assert "persistent_memory_owner: yifanche" in prompt
@@ -669,6 +674,11 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
     )
 
     prompt = runner.resume_calls[0]["prompt"]
+    assert "Bob is Ethan's personal assistant" in prompt
+    assert "CTDM tickets" in prompt
+    assert "internal topics" in prompt
+    assert "checking work status" in prompt
+    assert "approved Slack channels" in prompt
     assert "channel: yifanche-bob-test" in prompt
     assert "persistent_memory_mode: disabled" in prompt
     assert "do not update personal session notes" in prompt.lower()
