@@ -58,6 +58,8 @@ class FakeBrowser:
         self.channel_ids = {}
         self.root_messages = {}
         self.thread_replies = {}
+        self.thread_reply_errors = {}
+        self.thread_reply_calls = []
         self.frame_handlers = {}
         self.disconnect_handlers = {}
 
@@ -91,6 +93,10 @@ class FakeBrowser:
         oldest: str = None,
         limit: int = 200,
     ):
+        self.thread_reply_calls.append((workspace_name, channel_name, thread_ts, oldest, limit))
+        error = self.thread_reply_errors.get((workspace_name, channel_name, thread_ts))
+        if error is not None:
+            raise error
         replies = list(self.thread_replies.get((workspace_name, channel_name, thread_ts), []))
         if oldest is not None:
             replies = [reply for reply in replies if float(reply.message_ts) > float(oldest)]
@@ -266,7 +272,96 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
             "text": "follow-up",
         }
     ]
-    assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") == "9999999999.0"
+
+
+def test_watcher_skips_ratelimited_thread_reconcile_without_aborting_cycle(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.thread_reply_errors[("oracle", "yifanche-private", "10.0")] = RuntimeError(
+        "Slack API conversations.replies failed: ratelimited"
+    )
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.reply_calls == []
+    assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") is None
+
+
+def test_watcher_backs_off_workspace_after_ratelimited_thread_reply_call(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="11.0",
+        root_ts="11.0",
+        codex_session_id="session-456",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.thread_reply_errors[("oracle", "yifanche-private", "10.0")] = RuntimeError(
+        "Slack API conversations.replies failed: ratelimited"
+    )
+    browser.thread_replies[("oracle", "yifanche-private", "11.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="11.0",
+            message_ts="20.0",
+            author_actor_id="U123",
+            text="follow-up",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "10.0", None, 200)
+    ]
+    assert orchestrator.reply_calls == []
 
 
 def test_watcher_periodically_reconciles_follow_up_replies_without_websocket_event(tmp_path):

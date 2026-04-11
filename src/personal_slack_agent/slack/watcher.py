@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from logging import Logger
+import time
 from typing import Deque, Dict, Optional, Set, Tuple
 
 from ..models import AppConfig, SessionStatus
@@ -14,6 +15,7 @@ from .websocket_client import SlackWebsocketClient
 class SlackWatcher:
     _ROOT_BATCH_SIZE = 50
     _THREAD_BATCH_SIZE = 200
+    _THREAD_REPLY_RATE_LIMIT_BACKOFF_SECONDS = 60.0
 
     def __init__(
         self,
@@ -34,6 +36,7 @@ class SlackWatcher:
         self._workspace_clients: Dict[str, SlackWebsocketClient] = {}
         self._workspaces_pending_reconcile: Set[str] = set()
         self._threads_pending_reconcile: Set[Tuple[str, str, str]] = set()
+        self._thread_reply_backoff_until: Dict[str, float] = {}
 
     def run_cycle(self) -> None:
         if not self._initialized:
@@ -217,6 +220,8 @@ class SlackWatcher:
         channel_name: str,
         thread_ts: str,
     ) -> None:
+        if self._thread_reply_backoff_active(workspace_name):
+            return
         record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
         if record is None or record.status is SessionStatus.RUNNING:
             return
@@ -230,13 +235,25 @@ class SlackWatcher:
         )
         current_cursor = cursor
         while True:
-            replies = self.browser.list_thread_replies(
-                workspace_name,
-                channel_name,
-                thread_ts,
-                oldest=current_cursor,
-                limit=self._THREAD_BATCH_SIZE,
-            )
+            try:
+                replies = self.browser.list_thread_replies(
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    oldest=current_cursor,
+                    limit=self._THREAD_BATCH_SIZE,
+                )
+            except RuntimeError as exc:
+                if _is_slack_ratelimited_error(exc):
+                    self._record_thread_reply_backoff(workspace_name)
+                    self._log_warning(
+                        "slack replies reconcile rate-limited workspace=%s channel=%s thread=%s",
+                        workspace_name,
+                        channel_name,
+                        thread_ts,
+                    )
+                    return
+                raise
             if not replies:
                 return
             for reply in replies:
@@ -359,7 +376,22 @@ class SlackWatcher:
         thread_ts: str,
         message_ts: str,
     ) -> Optional[SlackThreadReplyMessage]:
-        for reply in self.browser.list_thread_replies(workspace_name, channel_name, thread_ts):
+        if self._thread_reply_backoff_active(workspace_name):
+            return None
+        try:
+            replies = self.browser.list_thread_replies(workspace_name, channel_name, thread_ts)
+        except RuntimeError as exc:
+            if _is_slack_ratelimited_error(exc):
+                self._record_thread_reply_backoff(workspace_name)
+                self._log_warning(
+                    "slack reply hydration rate-limited workspace=%s channel=%s thread=%s",
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                )
+                return None
+            raise
+        for reply in replies:
             if reply.message_ts == message_ts:
                 return reply
         return None
@@ -375,6 +407,25 @@ class SlackWatcher:
             return
         self.logger.debug(message, *args)
 
+    def _log_warning(self, message: str, *args) -> None:
+        if self.logger is None:
+            return
+        self.logger.warning(message, *args)
+
+    def _thread_reply_backoff_active(self, workspace_name: str) -> bool:
+        until = self._thread_reply_backoff_until.get(workspace_name)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            self._thread_reply_backoff_until.pop(workspace_name, None)
+            return False
+        return True
+
+    def _record_thread_reply_backoff(self, workspace_name: str) -> None:
+        self._thread_reply_backoff_until[workspace_name] = (
+            time.monotonic() + self._THREAD_REPLY_RATE_LIMIT_BACKOFF_SECONDS
+        )
+
 
 def _is_newer_timestamp(message_ts: str, cursor: Optional[str]) -> bool:
     if cursor is None:
@@ -383,6 +434,11 @@ def _is_newer_timestamp(message_ts: str, cursor: Optional[str]) -> bool:
         return float(message_ts) > float(cursor)
     except (TypeError, ValueError):
         return message_ts != cursor
+
+
+def _is_slack_ratelimited_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "ratelimited" in text and "conversations.replies" in text
 
 
 def _should_route_reply(
