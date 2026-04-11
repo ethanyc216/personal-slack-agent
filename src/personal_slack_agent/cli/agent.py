@@ -20,6 +20,35 @@ from ..slack.watcher import SlackWatcher
 from ..state import BobStateStore
 
 
+def _seed_channel_urls(browser: PlaywrightSlackAdapter, config) -> None:
+    channel_urls = {}
+    for workspace in config.workspaces:
+        if not workspace.slack_url:
+            continue
+        team_id = _workspace_team_id(workspace.slack_url)
+        if not team_id:
+            continue
+        for channel in workspace.channels:
+            if not channel.slack_channel_id:
+                continue
+            channel_urls[(workspace.name, channel.name)] = "https://app.slack.com/client/{0}/{1}".format(
+                team_id,
+                channel.slack_channel_id,
+            )
+    browser.set_channel_urls(channel_urls)
+
+
+def _workspace_team_id(workspace_url: str) -> str | None:
+    prefix = "https://app.slack.com/client/"
+    if not workspace_url.startswith(prefix):
+        return None
+    suffix = workspace_url[len(prefix):].split("?", 1)[0].strip("/")
+    parts = suffix.split("/")
+    if len(parts) < 2 or not parts[0]:
+        return None
+    return parts[0]
+
+
 def run_poll_cycle(
     watcher: SlackWatcher,
     orchestrator: BobOrchestrator,
@@ -167,6 +196,7 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                     if workspace.slack_api_token and workspace.slack_api_origin
                 }
             )
+            _seed_channel_urls(browser, config)
             codex_runner = SubprocessCodexRunner()
             orchestrator = BobOrchestrator(
                 browser=browser,

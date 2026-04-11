@@ -145,6 +145,11 @@ persistent_memory_mode = "disabled"
   Required only when `persistent_memory_mode = "owner_only"`.
   This identifies whose durable preference notes the channel may update.
 
+- `slack_channel_id`
+  Optional per channel.
+  Use this when Slack does not expose the channel in the rendered sidebar for Bob's browser session.
+  If provided, Bob will seed the channel route directly instead of relying on sidebar discovery for that channel.
+
 ### Automatic Slack auth bootstrap
 
 If the target workspace is already open in your debuggable Chrome session, you can populate

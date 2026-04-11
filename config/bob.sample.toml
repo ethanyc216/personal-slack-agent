@@ -39,3 +39,5 @@ name = "my-bob-test-channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
 persistent_memory_mode = "disabled"
+# Optional: seed the Slack route directly when this channel is not visible in the sidebar.
+# slack_channel_id = "C0123456789"

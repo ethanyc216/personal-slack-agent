@@ -34,6 +34,7 @@ class ChannelConfig:
     post_terminal_threads_here: bool = False
     persistent_memory_mode: str = ""
     persistent_memory_owner: Optional[str] = None
+    slack_channel_id: Optional[str] = None
     effective_default_cwd: str = ""
     effective_accept_root_bob_requests: bool = True
 

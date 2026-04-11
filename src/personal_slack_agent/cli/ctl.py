@@ -458,7 +458,33 @@ def _build_browser(config: AppConfig) -> PlaywrightSlackAdapter:
             if workspace.slack_api_token and workspace.slack_api_origin
         }
     )
+    channel_urls = {}
+    for workspace in config.workspaces:
+        team_id = _workspace_team_id(workspace.slack_url)
+        if not team_id:
+            continue
+        for channel in workspace.channels:
+            if not channel.slack_channel_id:
+                continue
+            channel_urls[(workspace.name, channel.name)] = "https://app.slack.com/client/{0}/{1}".format(
+                team_id,
+                channel.slack_channel_id,
+            )
+    browser.set_channel_urls(channel_urls)
     return browser
+
+
+def _workspace_team_id(workspace_url: Optional[str]) -> Optional[str]:
+    if not workspace_url:
+        return None
+    prefix = "https://app.slack.com/client/"
+    if not workspace_url.startswith(prefix):
+        return None
+    suffix = workspace_url[len(prefix):].split("?", 1)[0].strip("/")
+    parts = suffix.split("/")
+    if len(parts) < 2 or not parts[0]:
+        return None
+    return parts[0]
 
 
 def _wait_for_smoke_result(

@@ -73,7 +73,12 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
         encoding="utf-8",
     )
 
-    calls = {"cycle": 0, "workspace_urls": None, "workspace_api_contexts": None}
+    calls = {
+        "cycle": 0,
+        "workspace_urls": None,
+        "workspace_api_contexts": None,
+        "channel_urls": None,
+    }
 
     class FakeBrowser:
         def __init__(self, **kwargs):
@@ -84,6 +89,9 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
 
         def set_workspace_api_contexts(self, workspace_api_contexts):
             calls["workspace_api_contexts"] = dict(workspace_api_contexts)
+
+        def set_channel_urls(self, channel_urls):
+            calls["channel_urls"] = dict(channel_urls)
 
         def close(self):
             return None
@@ -118,6 +126,87 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
         "oracle": "https://app.slack.com/client/T12345678/C12345678"
     }
     assert calls["workspace_api_contexts"] == {}
+    assert calls["channel_urls"] == {}
+
+
+def test_run_once_seeds_explicit_channel_urls_when_channel_ids_are_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "bob.toml"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(workspace_root),
+                'allowed_actor_ids = ["U123"]',
+                'browser_mode = "shared_browser"',
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'allowed_actor_ids = ["U123"]',
+                'slack_url = "https://app.slack.com/client/E655JKQRX/C040C3N43B8"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-private"',
+                'persistent_memory_mode = "owner_only"',
+                'persistent_memory_owner = "yifanche"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-bob-test"',
+                'persistent_memory_mode = "disabled"',
+                'slack_channel_id = "C0AS82WLCBU"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {"channel_urls": None}
+
+    class FakeBrowser:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def set_workspace_urls(self, workspace_urls):
+            return None
+
+        def set_workspace_api_contexts(self, workspace_api_contexts):
+            return None
+
+        def set_channel_urls(self, channel_urls):
+            calls["channel_urls"] = dict(channel_urls)
+
+        def close(self):
+            return None
+
+    class FakeRunner:
+        pass
+
+    class FakeOrchestrator:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def process_scheduled_actions(self):
+            return None
+
+    class FakeWatcher:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run_cycle(self):
+            return None
+
+    monkeypatch.setattr(agent_module, "PlaywrightSlackAdapter", FakeBrowser)
+    monkeypatch.setattr(agent_module, "SubprocessCodexRunner", FakeRunner)
+    monkeypatch.setattr(agent_module, "BobOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(agent_module, "SlackWatcher", FakeWatcher)
+
+    exit_code = run_once(config_file)
+
+    assert exit_code == 0
+    assert calls["channel_urls"] == {
+        ("oracle", "yifanche-bob-test"): "https://app.slack.com/client/E655JKQRX/C0AS82WLCBU"
+    }
 
 
 def test_agent_parser_exposes_poll_interval_flag_with_default():

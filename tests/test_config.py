@@ -235,6 +235,39 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
     assert channel.persistent_memory_owner == "yifanche"
 
 
+def test_channel_slack_channel_id_is_loaded_and_dumped(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "channel-id.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+        slack_url = "https://app.slack.com/client/T12345678/C00000001"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob-test"
+        persistent_memory_mode = "disabled"
+        slack_channel_id = "C0AS82WLCBU"
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+    rendered = dump_config(loaded)
+    rewritten = tmp_path / "rewritten.toml"
+    rewritten.write_text(rendered, encoding="utf-8")
+    reloaded = load_config(rewritten)
+
+    assert reloaded.workspaces[0].channels[0].slack_channel_id == "C0AS82WLCBU"
+    assert 'slack_channel_id = "C0AS82WLCBU"' in rendered
+
+
 def test_channel_memory_policy_disabled_rejects_owner(tmp_path):
     root = tmp_path / "project"
     root.mkdir()

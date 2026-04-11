@@ -120,6 +120,10 @@ def dump_config(config: AppConfig) -> str:
                         _toml_escape(channel.persistent_memory_owner)
                     )
                 )
+            if channel.slack_channel_id is not None:
+                lines.append(
+                    'slack_channel_id = "{0}"'.format(_toml_escape(channel.slack_channel_id))
+                )
             if channel.post_terminal_threads_here:
                 lines.append("post_terminal_threads_here = true")
     lines.append("")
@@ -279,6 +283,10 @@ def _parse_channels(
             persistent_memory_owner=_optional_string(
                 raw_channel.get("persistent_memory_owner"),
                 "channel.persistent_memory_owner",
+            ),
+            slack_channel_id=_optional_string(
+                raw_channel.get("slack_channel_id"),
+                "channel.slack_channel_id",
             ),
         )
         channels.append(_validate_channel_memory_policy(apply_channel_defaults(defaults, channel)))
