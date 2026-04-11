@@ -187,6 +187,8 @@ def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_enviro
     assert "internal topics" in prompt
     assert "checking work status" in prompt
     assert "approved Slack channels" in prompt
+    assert "always use `Bob`" in prompt
+    assert "Do not tell the user to use `Codex` as the default name" in prompt
     assert "channel: yifanche-private" in prompt
     assert "persistent_memory_mode: owner_only" in prompt
     assert "persistent_memory_owner: yifanche" in prompt
@@ -679,6 +681,8 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
     assert "internal topics" in prompt
     assert "checking work status" in prompt
     assert "approved Slack channels" in prompt
+    assert "always use `Bob`" in prompt
+    assert "Do not tell the user to use `Codex` as the default name" in prompt
     assert "channel: yifanche-bob-test" in prompt
     assert "persistent_memory_mode: disabled" in prompt
     assert "do not update personal session notes" in prompt.lower()
