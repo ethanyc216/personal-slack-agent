@@ -38,9 +38,9 @@ def _seed_channel_urls(browser: PlaywrightSlackAdapter, config) -> None:
     browser.set_channel_urls(channel_urls)
 
 
-def _prepare_bob_codex_home(state_dir: Path) -> Path:
+def _prepare_bob_codex_home(target_home: Path) -> Path:
     source_home = Path.home() / ".codex"
-    bob_home = state_dir / "codex-home"
+    bob_home = target_home
     bob_home.mkdir(parents=True, exist_ok=True)
     if not source_home.exists():
         return bob_home
@@ -251,7 +251,11 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                 }
             )
             _seed_channel_urls(browser, config)
-            bob_codex_home = _prepare_bob_codex_home(paths.state_dir)
+            bob_codex_home = _prepare_bob_codex_home(
+                Path(config.defaults.bob_codex_home)
+                if config.defaults.bob_codex_home is not None
+                else paths.state_dir / "codex-home"
+            )
             codex_runner = SubprocessCodexRunner(
                 env_overrides={"CODEX_HOME": str(bob_codex_home)}
             )

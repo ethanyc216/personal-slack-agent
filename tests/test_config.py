@@ -61,6 +61,27 @@ def test_defaults_include_browser_fields_when_configured(tmp_path):
     assert config.defaults.browser_user_data_dir == str(user_data_dir.resolve())
 
 
+def test_defaults_include_bob_codex_home_when_configured(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    bob_codex_home = tmp_path / "bob-codex-home"
+
+    config_path = tmp_path / "bob-codex-home.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        bob_codex_home = "{bob_codex_home}"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.bob_codex_home == str(bob_codex_home.resolve())
+
+
 def test_workspace_slack_url_accepts_enterprise_domain(tmp_path):
     root = tmp_path / "project"
     root.mkdir()

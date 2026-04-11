@@ -140,12 +140,90 @@ def test_prepare_bob_codex_home_links_config_without_hooks(tmp_path, monkeypatch
     (codex_home / "hooks.json").write_text('{"hooks":{}}', encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
 
-    bob_home = agent_module._prepare_bob_codex_home(tmp_path / "state")
+    bob_home = agent_module._prepare_bob_codex_home(tmp_path / "state" / "codex-home")
 
     assert bob_home == tmp_path / "state" / "codex-home"
     assert (bob_home / "config.toml").exists()
     assert (bob_home / "config.toml").read_text(encoding="utf-8") == 'model = "gpt-5.4"\n'
     assert not (bob_home / "hooks.json").exists()
+
+
+def test_run_once_uses_configured_bob_codex_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "bob.toml"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    configured_bob_home = tmp_path / "custom-bob-codex-home"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(workspace_root),
+                'allowed_actor_ids = ["U123"]',
+                'browser_mode = "shared_browser"',
+                'bob_codex_home = "{0}"'.format(configured_bob_home),
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'allowed_actor_ids = ["U123"]',
+                'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-private"',
+                'persistent_memory_mode = "owner_only"',
+                'persistent_memory_owner = "yifanche"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {"runner_kwargs": None}
+
+    class FakeBrowser:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def set_workspace_urls(self, workspace_urls):
+            return None
+
+        def set_workspace_api_contexts(self, workspace_api_contexts):
+            return None
+
+        def set_channel_urls(self, channel_urls):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            calls["runner_kwargs"] = kwargs
+
+    class FakeOrchestrator:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def process_scheduled_actions(self):
+            return None
+
+    class FakeWatcher:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run_cycle(self):
+            return None
+
+    monkeypatch.setattr(agent_module, "PlaywrightSlackAdapter", FakeBrowser)
+    monkeypatch.setattr(agent_module, "SubprocessCodexRunner", FakeRunner)
+    monkeypatch.setattr(agent_module, "BobOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(agent_module, "SlackWatcher", FakeWatcher)
+
+    exit_code = run_once(config_file)
+
+    assert exit_code == 0
+    assert calls["runner_kwargs"]["env_overrides"]["CODEX_HOME"] == str(
+        configured_bob_home.resolve()
+    )
 
 
 def test_run_once_seeds_explicit_channel_urls_when_channel_ids_are_configured(tmp_path, monkeypatch):

@@ -16,6 +16,7 @@ class DefaultSettings:
     additional_roots: List[str] = field(default_factory=list)
     accept_root_bob_requests: bool = True
     allowed_actor_ids: List[str] = field(default_factory=list)
+    bob_codex_home: Optional[str] = None
     slack_signin_url: str = DEFAULT_SLACK_SIGNIN_URL
     browser_mode: str = DEDICATED_BROWSER_MODE
     browser_url: str = DEFAULT_BROWSER_CDP_URL

@@ -58,6 +58,8 @@ def dump_config(config: AppConfig) -> str:
             ", ".join('"{}"'.format(_toml_escape(item)) for item in config.defaults.allowed_actor_ids)
         )
     )
+    if config.defaults.bob_codex_home is not None:
+        lines.append('bob_codex_home = "{0}"'.format(_toml_escape(config.defaults.bob_codex_home)))
     lines.append(
         "accept_root_bob_requests = {0}".format("true" if config.defaults.accept_root_bob_requests else "false")
     )
@@ -143,6 +145,11 @@ def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
         ),
         accept_root_bob_requests=_optional_bool(raw_defaults.get("accept_root_bob_requests"), "defaults.accept_root_bob_requests", default=True),
         allowed_actor_ids=_string_list(raw_defaults.get("allowed_actor_ids"), "defaults.allowed_actor_ids"),
+        bob_codex_home=_optional_path(
+            raw_defaults.get("bob_codex_home"),
+            "defaults.bob_codex_home",
+            base_dir=base_dir,
+        ),
         slack_signin_url=_optional_https_url(
             raw_defaults.get("slack_signin_url"),
             "defaults.slack_signin_url",
