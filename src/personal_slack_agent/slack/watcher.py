@@ -446,6 +446,8 @@ def _should_route_reply(
     session_created_at: int,
     delivered_timestamps: Set[str],
 ) -> bool:
+    if not reply.text or not reply.text.strip():
+        return False
     if reply.message_ts in delivered_timestamps:
         return False
     if _is_bob_generated_reply_text(reply.text):

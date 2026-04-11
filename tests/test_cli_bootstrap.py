@@ -5,6 +5,7 @@ from personal_slack_agent.cli.agent import build_parser as build_agent_parser
 from personal_slack_agent.cli.agent import main as agent_main
 from personal_slack_agent.cli.ctl import build_parser as build_ctl_parser
 from personal_slack_agent.cli.ctl import main as ctl_main
+from personal_slack_agent.cli.wrapper import build_parser as build_wrapper_parser
 from personal_slack_agent.cli.wrapper import main as wrapper_main
 from personal_slack_agent.paths import default_config_file
 
@@ -169,3 +170,9 @@ def test_agent_default_config_path_is_expanded(tmp_path, monkeypatch):
     args = build_agent_parser().parse_args([])
 
     assert args.config == str(default_config_file())
+
+
+def test_wrapper_uses_longer_default_timeout():
+    args = build_wrapper_parser().parse_args(["hello"])
+
+    assert args.timeout_seconds == 1800.0

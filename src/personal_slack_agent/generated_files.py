@@ -14,6 +14,7 @@ class GeneratedFile:
 _FILE_BLOCK_PATTERN = re.compile(
     r"""
     ^[ \t]*
+    (?:[-*+][ \t]+)?
     (?:\*\*)?
     (?:
         `(?P<backtick_path>[^`\n]+)` |
@@ -21,6 +22,7 @@ _FILE_BLOCK_PATTERN = re.compile(
         (?P<plain_path>[A-Za-z0-9_./-]+\.[A-Za-z0-9._-]+)
     )
     (?:\*\*)?
+    [ \t]*:?
     [ \t]*\n
     ```[^\n`]*\n
     (?P<content>.*?)
@@ -56,3 +58,10 @@ def extract_generated_files(final_output: str) -> Tuple[str, List[GeneratedFile]
 
     summary = "\n\n".join(part for part in summary_parts if part).strip()
     return summary, files
+
+
+_SLACK_CODE_FENCE_LANGUAGE_PATTERN = re.compile(r"(?m)^```[^\n`]+\n")
+
+
+def normalize_slack_markdown(text: str) -> str:
+    return _SLACK_CODE_FENCE_LANGUAGE_PATTERN.sub("```\n", text)

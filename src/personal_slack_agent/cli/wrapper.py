@@ -17,8 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout-seconds",
         type=float,
-        default=300.0,
-        help="How long to wait for Bob to complete the request (default: 300).",
+        default=1800.0,
+        help="How long to wait for Bob to complete the request (default: 1800).",
     )
     parser.add_argument(
         "--poll-interval-seconds",

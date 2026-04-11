@@ -33,3 +33,29 @@ def test_extract_generated_files_leaves_normal_text_untouched():
 
     assert summary == text
     assert files == []
+
+
+def test_extract_generated_files_supports_bullet_and_colon_file_headers():
+    text = """
+Here is a shepherd skill set.
+
+- **`skills/shepherd/SKILL.md`**:
+```md
+# Shepherd Deploy
+Use this skill.
+```
+
+- **`skills/shepherd/checklist.txt`**:
+```text
+step one
+step two
+```
+""".strip()
+
+    summary, files = extract_generated_files(text)
+
+    assert summary == "Here is a shepherd skill set."
+    assert [(item.path, item.content) for item in files] == [
+        ("skills/shepherd/SKILL.md", "# Shepherd Deploy\nUse this skill."),
+        ("skills/shepherd/checklist.txt", "step one\nstep two"),
+    ]

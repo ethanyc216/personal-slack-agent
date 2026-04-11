@@ -2,7 +2,7 @@ import time
 from typing import List, Optional, Protocol, Tuple
 
 from .codex_runner import CodexRunResult
-from .generated_files import GeneratedFile, extract_generated_files
+from .generated_files import GeneratedFile, extract_generated_files, normalize_slack_markdown
 from .models import AppConfig, ChannelConfig, OutboundIntentRecord, SessionRecord, SessionStatus
 from .slack import SlackBrowserAdapter
 from .state import BobStateStore
@@ -569,13 +569,14 @@ class BobOrchestrator:
         intent_key: str,
         text: str,
     ) -> Optional[str]:
+        normalized_text = normalize_slack_markdown(text)
         self.state_store.upsert_outbound_intent(
             workspace_name=workspace_name,
             channel_name=channel_name,
             thread_ts=thread_ts,
             intent_key=intent_key,
             action="post_thread_reply",
-            text=text,
+            text=normalized_text,
             delivered=False,
             message_ts=None,
         )
@@ -594,7 +595,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=thread_ts,
             )
-            if text in existing_messages:
+            if normalized_text in existing_messages:
                 reconciled_ts = "{0}.reconciled".format(thread_ts.split(".")[0])
                 self.state_store.mark_outbound_intent_delivered(
                     workspace_name=workspace_name,
@@ -610,7 +611,7 @@ class BobOrchestrator:
                 workspace_name=workspace_name,
                 channel_name=channel_name,
                 thread_ts=thread_ts,
-                text=text,
+                text=normalized_text,
             )
         except Exception:
             self.state_store.mark_outbound_intent_attempted(
@@ -677,7 +678,9 @@ class BobOrchestrator:
             memory_rule = (
                 "This Slack channel does not grant permission to update Yifan Chen / Ethan's "
                 "personal durable preference files. Do not update personal session notes or "
-                "similar durable preference files for Yifan from this conversation."
+                "similar durable preference files for Yifan from this conversation. Do not "
+                "modify repo-local or global skill files such as `.codex/skills/**`, `SKILL.md`, "
+                "or similar skill definitions unless the user explicitly asks you to create or edit them."
             )
 
         return (

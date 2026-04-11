@@ -213,6 +213,8 @@ def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_ch
     assert "channel: yifanche-bob" in prompt
     assert "persistent_memory_mode: disabled" in prompt
     assert "do not update personal session notes" in prompt.lower()
+    assert "do not modify" in prompt.lower()
+    assert ".codex/skills" in prompt
 
 
 def test_final_output_with_generated_files_posts_summary_and_uploads_snippets(fake_environment):
@@ -253,6 +255,61 @@ def test_final_output_with_generated_files_posts_summary_and_uploads_snippets(fa
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
+
+
+def test_final_output_with_bulleted_generated_files_uploads_snippets(fake_environment):
+    orchestrator, browser, _store, runner = fake_environment
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output=(
+            "Here is a shepherd skill set.\n\n"
+            "- **`skills/shepherd/SKILL.md`**:\n"
+            "```md\n"
+            "# Shepherd Deploy\n"
+            "Use this skill.\n"
+            "```\n"
+        ),
+    )
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, build a shepherd skill set",
+    )
+
+    assert browser.uploaded_snippets == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "thread_ts": "1743461000.000001",
+            "filename": "skills/shepherd/SKILL.md",
+            "content": "# Shepherd Deploy\nUse this skill.",
+        }
+    ]
+    final_post = browser.thread_posts["1743461000.000001"][-1]
+    assert "Uploaded snippets: `skills/shepherd/SKILL.md`" in final_post
+
+
+def test_final_output_normalizes_code_fence_language_for_slack(fake_environment):
+    orchestrator, browser, _store, runner = fake_environment
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Use this:\n```md\n# Title\nBody\n```",
+    )
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, show markdown",
+    )
+
+    final_post = browser.thread_posts["1743461000.000001"][-1]
+    assert "```md" not in final_post
+    assert "```\n# Title\nBody\n```" in final_post
 
 
 def test_waiting_for_input_posts_wait_message_and_saves_wait_state(fake_environment):
