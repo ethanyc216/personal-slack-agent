@@ -1,7 +1,8 @@
 import json
+import os
 import subprocess
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Iterable, List, Mapping, Optional
 
 
 @dataclass
@@ -17,8 +18,10 @@ class SubprocessCodexRunner:
     def __init__(
         self,
         exec_command: Optional[Callable[[List[str], Optional[str]], str]] = None,
+        env_overrides: Optional[Mapping[str, str]] = None,
     ) -> None:
         self._exec_command = exec_command or self._default_exec_command
+        self._env_overrides = dict(env_overrides or {})
 
     def run_new_session(self, prompt: str, cwd: str, additional_roots: List[str]) -> CodexRunResult:
         command = build_new_session_command(prompt=prompt, cwd=cwd, additional_roots=additional_roots)
@@ -36,12 +39,17 @@ class SubprocessCodexRunner:
         return parse_jsonl_events(output.splitlines())
 
     def _default_exec_command(self, command: List[str], cwd: Optional[str] = None) -> str:
+        env = None
+        if self._env_overrides:
+            env = os.environ.copy()
+            env.update(self._env_overrides)
         completed = subprocess.run(
             command,
             check=False,
             capture_output=True,
             text=True,
             cwd=cwd,
+            env=env,
         )
         output = completed.stdout or ""
         if completed.returncode == 0:

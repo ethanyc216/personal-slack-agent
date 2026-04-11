@@ -38,6 +38,60 @@ def _seed_channel_urls(browser: PlaywrightSlackAdapter, config) -> None:
     browser.set_channel_urls(channel_urls)
 
 
+def _prepare_bob_codex_home(state_dir: Path) -> Path:
+    source_home = Path.home() / ".codex"
+    bob_home = state_dir / "codex-home"
+    bob_home.mkdir(parents=True, exist_ok=True)
+    if not source_home.exists():
+        return bob_home
+
+    excluded = {
+        "hooks.json",
+        "sessions",
+        "history.jsonl",
+        "log",
+        "logs_1.sqlite",
+        "logs_1.sqlite-shm",
+        "logs_1.sqlite-wal",
+        "logs_2.sqlite",
+        "logs_2.sqlite-shm",
+        "logs_2.sqlite-wal",
+        "sqlite",
+        "state_5.sqlite",
+        "state_5.sqlite-shm",
+        "state_5.sqlite-wal",
+        "shell_snapshots",
+        "tmp",
+        ".tmp",
+        "active",
+        ".git",
+        ".worktrees",
+        ".omx",
+    }
+
+    for source_path in source_home.iterdir():
+        if source_path.name in excluded:
+            continue
+        target_path = bob_home / source_path.name
+        if target_path.exists() or target_path.is_symlink():
+            if target_path.is_dir() and not target_path.is_symlink():
+                for child in target_path.iterdir():
+                    if child.is_dir() and not child.is_symlink():
+                        continue
+                # Fall through to unlink for symlink/file cases only.
+            if target_path.is_symlink() or target_path.is_file():
+                target_path.unlink()
+            elif target_path.is_dir():
+                continue
+        target_path.symlink_to(source_path, target_is_directory=source_path.is_dir())
+
+    target_hooks = bob_home / "hooks.json"
+    if target_hooks.exists() or target_hooks.is_symlink():
+        target_hooks.unlink()
+
+    return bob_home
+
+
 def _workspace_team_id(workspace_url: str) -> str | None:
     prefix = "https://app.slack.com/client/"
     if not workspace_url.startswith(prefix):
@@ -197,7 +251,10 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                 }
             )
             _seed_channel_urls(browser, config)
-            codex_runner = SubprocessCodexRunner()
+            bob_codex_home = _prepare_bob_codex_home(paths.state_dir)
+            codex_runner = SubprocessCodexRunner(
+                env_overrides={"CODEX_HOME": str(bob_codex_home)}
+            )
             orchestrator = BobOrchestrator(
                 browser=browser,
                 state_store=state_store,

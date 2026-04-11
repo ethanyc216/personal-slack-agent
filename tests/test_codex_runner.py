@@ -186,7 +186,7 @@ def test_subprocess_codex_runner_returns_failure_text_for_nonzero_exit_without_j
 def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd):
+    def fake_run(command, check, capture_output, text, cwd, env):
         calls.append(
             {
                 "command": command,
@@ -194,6 +194,7 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
                 "capture_output": capture_output,
                 "text": text,
                 "cwd": cwd,
+                "env": env,
             }
         )
 
@@ -225,5 +226,37 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
             "capture_output": True,
             "text": True,
             "cwd": "/tmp/project",
+            "env": None,
         }
     ]
+
+
+def test_default_exec_command_merges_env_overrides(monkeypatch):
+    calls = []
+
+    def fake_run(command, check, capture_output, text, cwd, env):
+        calls.append(
+            {
+                "command": command,
+                "check": check,
+                "capture_output": capture_output,
+                "text": text,
+                "cwd": cwd,
+                "env": env,
+            }
+        )
+
+        class CompletedProcess:
+            returncode = 0
+            stdout = '{"type":"session_meta","payload":{"id":"session-123"}}\n'
+            stderr = ""
+
+        return CompletedProcess()
+
+    monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.run", fake_run)
+    runner = SubprocessCodexRunner(env_overrides={"CODEX_HOME": "/tmp/bob-codex-home"})
+
+    result = runner.resume_session("session-123", "continue", "/tmp/project")
+
+    assert result.session_id == "session-123"
+    assert calls[0]["env"]["CODEX_HOME"] == "/tmp/bob-codex-home"

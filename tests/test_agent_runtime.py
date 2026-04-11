@@ -78,6 +78,7 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
         "workspace_urls": None,
         "workspace_api_contexts": None,
         "channel_urls": None,
+        "runner_kwargs": None,
     }
 
     class FakeBrowser:
@@ -97,7 +98,8 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
             return None
 
     class FakeRunner:
-        pass
+        def __init__(self, **kwargs):
+            calls["runner_kwargs"] = kwargs
 
     class FakeOrchestrator:
         def __init__(self, **kwargs):
@@ -127,6 +129,23 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
     }
     assert calls["workspace_api_contexts"] == {}
     assert calls["channel_urls"] == {}
+    assert calls["runner_kwargs"]["env_overrides"]["CODEX_HOME"].endswith("/codex-home")
+
+
+def test_prepare_bob_codex_home_links_config_without_hooks(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
+    (codex_home / "hooks.json").write_text('{"hooks":{}}', encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = agent_module._prepare_bob_codex_home(tmp_path / "state")
+
+    assert bob_home == tmp_path / "state" / "codex-home"
+    assert (bob_home / "config.toml").exists()
+    assert (bob_home / "config.toml").read_text(encoding="utf-8") == 'model = "gpt-5.4"\n'
+    assert not (bob_home / "hooks.json").exists()
 
 
 def test_run_once_seeds_explicit_channel_urls_when_channel_ids_are_configured(tmp_path, monkeypatch):
@@ -180,7 +199,8 @@ def test_run_once_seeds_explicit_channel_urls_when_channel_ids_are_configured(tm
             return None
 
     class FakeRunner:
-        pass
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
     class FakeOrchestrator:
         def __init__(self, **kwargs):
