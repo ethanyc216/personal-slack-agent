@@ -242,6 +242,139 @@ def test_get_channel_id_resolves_sidebar_channel_id_and_caches_it():
     assert second == "C0AQT4S6QHM"
 
 
+def test_get_channel_id_falls_back_to_users_conversations_when_sidebar_lookup_fails():
+    calls = []
+
+    class FakeApiClient:
+        def users_conversations(self, limit=200, types=None):
+            calls.append(("users.conversations", limit, types))
+            return {
+                "ok": True,
+                "channels": [
+                    {
+                        "id": "C0AS82WLCBU",
+                        "name": "yifanche-bob-test",
+                    }
+                ],
+            }
+
+        def conversations_list(self, limit=200, types=None, exclude_archived=True):
+            raise AssertionError("conversations.list should not be used when users.conversations works")
+
+        def search_messages(self, query, count=20, page=1):
+            raise AssertionError("search.messages should not be used when users.conversations works")
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/E655JKQRX/C03J3TXQBSP"})
+    adapter._resolve_sidebar_channel_id = lambda workspace_name, channel_name: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RuntimeError("sidebar missing")
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+
+    channel_id = adapter.get_channel_id("oracle", "yifanche-bob-test")
+
+    assert channel_id == "C0AS82WLCBU"
+    assert calls == [("users.conversations", 999, "public_channel,private_channel")]
+
+
+def test_get_channel_id_falls_back_to_search_when_api_listing_is_restricted():
+    calls = []
+
+    class FakeApiClient:
+        def users_conversations(self, limit=200, types=None):
+            calls.append(("users.conversations", limit, types))
+            return {"ok": False, "error": "enterprise_is_restricted"}
+
+        def conversations_list(self, limit=200, types=None, exclude_archived=True):
+            calls.append(("conversations.list", limit, types, exclude_archived))
+            return {"ok": False, "error": "enterprise_is_restricted"}
+
+        def search_messages(self, query, count=20, page=1):
+            calls.append(("search.messages", query, count, page))
+            return {
+                "ok": True,
+                "messages": {
+                    "matches": [
+                        {
+                            "channel": {
+                                "id": "C0AS82WLCBU",
+                                "name": "yifanche-bob-test",
+                            }
+                        }
+                    ]
+                },
+            }
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/E655JKQRX/C03J3TXQBSP"})
+    adapter._resolve_sidebar_channel_id = lambda workspace_name, channel_name: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RuntimeError("sidebar missing")
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+
+    channel_id = adapter.get_channel_id("oracle", "yifanche-bob-test")
+
+    assert channel_id == "C0AS82WLCBU"
+    assert calls == [
+        ("users.conversations", 999, "public_channel,private_channel"),
+        ("conversations.list", 999, "public_channel,private_channel", True),
+        ("search.messages", "in:yifanche-bob-test", 20, 1),
+    ]
+
+
+def test_get_channel_id_raises_when_search_fallback_finds_no_exact_channel_match():
+    class FakeApiClient:
+        def users_conversations(self, limit=200, types=None):
+            return {"ok": False, "error": "enterprise_is_restricted"}
+
+        def conversations_list(self, limit=200, types=None, exclude_archived=True):
+            return {"ok": False, "error": "enterprise_is_restricted"}
+
+        def search_messages(self, query, count=20, page=1):
+            del query
+            del count
+            del page
+            return {
+                "ok": True,
+                "messages": {
+                    "matches": [
+                        {
+                            "channel": {
+                                "id": "C123",
+                                "name": "some-other-channel",
+                            }
+                        }
+                    ]
+                },
+            }
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/E655JKQRX/C03J3TXQBSP"})
+    adapter._resolve_sidebar_channel_id = lambda workspace_name, channel_name: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RuntimeError("sidebar missing")
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+
+    try:
+        adapter.get_channel_id("oracle", "yifanche-bob-test")
+    except RuntimeError as exc:
+        assert str(exc) == "Could not resolve Slack channel id for channel yifanche-bob-test."
+    else:
+        raise AssertionError("Expected RuntimeError")
+
+
 def test_subscribe_to_realtime_frames_registers_listener_and_reloads_page():
     page = FakePage("https://app.slack.com/client/T123/C123")
     adapter = PlaywrightSlackAdapter(

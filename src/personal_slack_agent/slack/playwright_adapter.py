@@ -329,7 +329,7 @@ class PlaywrightSlackAdapter:
             raise RuntimeError(
                 "Could not determine Slack workspace route for workspace {0}.".format(workspace_name)
             )
-        resolved_channel_id = self._resolve_sidebar_channel_id(workspace_name, channel_name)
+        resolved_channel_id = self._resolve_channel_id(workspace_name, channel_name)
         resolved_url = "https://app.slack.com/client/{0}/{1}".format(team_id, resolved_channel_id)
         self._channel_urls[(workspace_name, channel_name)] = resolved_url
         return resolved_url
@@ -372,6 +372,89 @@ class PlaywrightSlackAdapter:
                 channel_name
             )
         )
+
+    def _resolve_channel_id(self, workspace_name: str, channel_name: str) -> str:
+        try:
+            return self._resolve_sidebar_channel_id(workspace_name, channel_name)
+        except RuntimeError:
+            pass
+
+        api_client = self._api_client(workspace_name)
+        channel_id = self._channel_id_from_conversations_payload(
+            api_client.users_conversations(
+                limit=999,
+                types="public_channel,private_channel",
+            ),
+            channel_name,
+        )
+        if channel_id is not None:
+            return channel_id
+
+        channel_id = self._channel_id_from_conversations_payload(
+            api_client.conversations_list(
+                limit=999,
+                types="public_channel,private_channel",
+                exclude_archived=True,
+            ),
+            channel_name,
+        )
+        if channel_id is not None:
+            return channel_id
+
+        channel_id = self._channel_id_from_search(
+            payload=api_client.search_messages(
+                query="in:{0}".format(self._channel_sidebar_key(channel_name)),
+                count=20,
+                page=1,
+            ),
+            channel_name=channel_name,
+        )
+        if channel_id is not None:
+            return channel_id
+
+        raise RuntimeError(
+            "Could not resolve Slack channel id for channel {0}.".format(channel_name)
+        )
+
+    def _channel_id_from_conversations_payload(
+        self,
+        payload: Dict[str, Any],
+        channel_name: str,
+    ) -> Optional[str]:
+        if not payload.get("ok"):
+            return None
+        expected_name = self._channel_sidebar_key(channel_name)
+        for item in payload.get("channels", []):
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("id") or "").strip()
+            candidate_name = self._channel_sidebar_key(str(item.get("name") or ""))
+            if candidate_id and candidate_name == expected_name:
+                return candidate_id
+        return None
+
+    def _channel_id_from_search(
+        self,
+        payload: Dict[str, Any],
+        channel_name: str,
+    ) -> Optional[str]:
+        if not payload.get("ok"):
+            return None
+        expected_name = self._channel_sidebar_key(channel_name)
+        messages = payload.get("messages")
+        if not isinstance(messages, dict):
+            return None
+        for item in messages.get("matches", []):
+            if not isinstance(item, dict):
+                continue
+            channel = item.get("channel")
+            if not isinstance(channel, dict):
+                continue
+            candidate_id = str(channel.get("id") or "").strip()
+            candidate_name = self._channel_sidebar_key(str(channel.get("name") or ""))
+            if candidate_id and candidate_name == expected_name:
+                return candidate_id
+        return None
 
     def _api_page(self, origin: str) -> Any:
         runtime = self.connect()

@@ -155,6 +155,99 @@ def test_conversations_replies_supports_oldest_cursor_params():
     ]
 
 
+def test_users_conversations_uses_expected_private_api_post_shape():
+    calls = []
+
+    def fake_call(method_name, params):
+        calls.append((method_name, params))
+        return {"ok": True, "channels": []}
+
+    client = SlackApiClient(
+        workspace_name="workspace",
+        session=SlackApiSession(
+            origin="https://example.enterprise.slack.com",
+            token="xoxc-demo-token",
+        ),
+        call_api=fake_call,
+    )
+
+    client.users_conversations(limit=200, types="public_channel,private_channel")
+
+    assert calls == [
+        (
+            "users.conversations",
+            {
+                "limit": 200,
+                "types": "public_channel,private_channel",
+            },
+        )
+    ]
+
+
+def test_conversations_list_uses_expected_private_api_post_shape():
+    calls = []
+
+    def fake_call(method_name, params):
+        calls.append((method_name, params))
+        return {"ok": True, "channels": []}
+
+    client = SlackApiClient(
+        workspace_name="workspace",
+        session=SlackApiSession(
+            origin="https://example.enterprise.slack.com",
+            token="xoxc-demo-token",
+        ),
+        call_api=fake_call,
+    )
+
+    client.conversations_list(
+        limit=200,
+        types="public_channel,private_channel",
+        exclude_archived=True,
+    )
+
+    assert calls == [
+        (
+            "conversations.list",
+            {
+                "limit": 200,
+                "types": "public_channel,private_channel",
+                "exclude_archived": "true",
+            },
+        )
+    ]
+
+
+def test_search_messages_uses_expected_private_api_post_shape():
+    calls = []
+
+    def fake_call(method_name, params):
+        calls.append((method_name, params))
+        return {"ok": True, "messages": {"matches": []}}
+
+    client = SlackApiClient(
+        workspace_name="workspace",
+        session=SlackApiSession(
+            origin="https://example.enterprise.slack.com",
+            token="xoxc-demo-token",
+        ),
+        call_api=fake_call,
+    )
+
+    client.search_messages(query="in:yifanche-bob-test", count=20, page=1)
+
+    assert calls == [
+        (
+            "search.messages",
+            {
+                "query": "in:yifanche-bob-test",
+                "count": 20,
+                "page": 1,
+            },
+        )
+    ]
+
+
 def test_file_upload_api_methods_use_expected_private_api_shapes():
     calls = []
 

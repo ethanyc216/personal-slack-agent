@@ -46,6 +46,45 @@ class SlackApiClient:
             params["inclusive"] = "false"
         return self._call_api("conversations.replies", params)
 
+    def users_conversations(
+        self,
+        limit: int = 200,
+        types: str | None = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"limit": limit}
+        if types is not None:
+            params["types"] = types
+        return self._call_api("users.conversations", params)
+
+    def conversations_list(
+        self,
+        limit: int = 200,
+        types: str | None = None,
+        exclude_archived: bool = True,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "limit": limit,
+            "exclude_archived": str(exclude_archived).lower(),
+        }
+        if types is not None:
+            params["types"] = types
+        return self._call_api("conversations.list", params)
+
+    def search_messages(
+        self,
+        query: str,
+        count: int = 20,
+        page: int = 1,
+    ) -> Dict[str, Any]:
+        return self._call_api(
+            "search.messages",
+            {
+                "query": query,
+                "count": count,
+                "page": page,
+            },
+        )
+
     def chat_post_message(
         self,
         channel_id: str,
