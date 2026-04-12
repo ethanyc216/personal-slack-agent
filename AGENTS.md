@@ -29,6 +29,18 @@ These instructions apply to the `personal_slack_agent` repository.
   2. Ensure the dynamic runtime state was copied over, not just the symlinked/static files.
   3. Restart Bob only after the migration is complete.
 
+- Distinguish global Bob/runtime breakage from a bad single Codex session bootstrap:
+  - If one Bob session fails on its very first trivial `exec_command` calls (for example `cat ~/.codex/...` or `/bin/echo test`) with `sandbox-exec: sandbox_apply: Operation not permitted`,
+  - but another fresh Bob smoke session on the same running Bob process can execute shell commands successfully,
+  - then treat the failed session as a bad per-session Codex bootstrap rather than evidence that Bob is globally broken.
+- In that case, prefer discarding the bad session and retrying in a fresh Bob session before changing Bob config or runtime state again.
+
+- Distinguish Jira/browser-path failure from global browser availability:
+  - If a Bob session can start normally but Chrome DevTools calls such as `new_page`, `navigate_page`, `evaluate_script`, or `take_snapshot` return `user cancelled MCP tool call`,
+  - while the same Chrome DevTools Jira navigation works from a normal top-level Codex session,
+  - then treat the problem as Bob-session-specific browser/MCP access failure, not proof that the shared browser session or Jira site is globally unavailable.
+- In that case, debug the Bob session/tooling path separately from the browser login state.
+
 ## Bob Control
 
 - `bobctl restart` is cooperative: it writes a stop request and may race if the old agent has not exited yet.
