@@ -284,7 +284,6 @@ class BobOrchestrator:
         if record.status is SessionStatus.WAITING_FOR_INPUT:
             if not self._is_actor_allowed(workspace_name, author_actor_id):
                 return
-            self._clear_waiting_message(record)
             self._resume_record(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -358,57 +357,15 @@ class BobOrchestrator:
             )
             return
 
-        try:
-            run_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
-                record.codex_session_id,
-                text,
-                record.cwd,
-                sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
-                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
-                    workspace_name,
-                    channel_name,
-                ),
-            )
-        except Exception:
-            self.state_store.release_processed_message(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=record.thread_ts,
-                message_ts=message_ts,
-                purpose=self._PURPOSE_THREAD_REPLY,
-            )
-            raise
-        self._clear_waiting_message(record)
-        self.state_store.update_status(
+        self._resume_record(
             workspace_name=workspace_name,
             channel_name=channel_name,
             thread_ts=record.thread_ts,
-            status=SessionStatus.RUNNING,
-        )
-        self._try_deliver_working_message(
-            workspace_name=workspace_name,
-            channel_name=channel_name,
-            thread_ts=record.thread_ts,
-            intent_key="resume-status-{0}".format(message_ts),
+            message_ts=message_ts,
             session_id=record.codex_session_id,
+            prompt=text,
+            wrap_prompt=False,
         )
-        try:
-            self._process_run_result(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=record.thread_ts,
-                session_id=record.codex_session_id,
-                run_result=run_result,
-                result_key_suffix=message_ts,
-            )
-        except Exception:
-            self.state_store.update_status(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=record.thread_ts,
-                status=SessionStatus.FAILED,
-            )
-            raise
 
     def _process_run_result(
         self,
@@ -591,15 +548,35 @@ class BobOrchestrator:
         message_ts: str,
         session_id: str,
         prompt: str,
+        wrap_prompt: bool = True,
     ) -> None:
         record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
         if record is None:
             return
+        previous_status = record.status
+        self.state_store.update_status(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            status=SessionStatus.RUNNING,
+            clear_waiting_fields=False,
+        )
+        self._try_deliver_working_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key="resume-status-{0}".format(message_ts),
+            session_id=session_id,
+        )
         try:
-            wrapped_prompt = self._build_codex_prompt(workspace_name, channel_name, prompt)
+            resume_prompt = (
+                self._build_codex_prompt(workspace_name, channel_name, prompt)
+                if wrap_prompt
+                else prompt
+            )
             run_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
                 session_id,
-                wrapped_prompt,
+                resume_prompt,
                 record.cwd,
                 sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
                 workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
@@ -615,20 +592,25 @@ class BobOrchestrator:
                 message_ts=message_ts,
                 purpose=self._PURPOSE_THREAD_REPLY,
             )
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=previous_status,
+                clear_waiting_fields=False,
+            )
             raise
-        self.state_store.update_status(
-            workspace_name=workspace_name,
-            channel_name=channel_name,
-            thread_ts=thread_ts,
-            status=SessionStatus.RUNNING,
-        )
-        self._try_deliver_working_message(
-            workspace_name=workspace_name,
-            channel_name=channel_name,
-            thread_ts=thread_ts,
-            intent_key="resume-status-{0}".format(message_ts),
-            session_id=session_id,
-        )
+        if previous_status in (
+            SessionStatus.WAITING_FOR_INPUT,
+            SessionStatus.WAITING_FOR_APPROVAL,
+        ):
+            self._clear_waiting_message(record)
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.RUNNING,
+            )
         try:
             self._process_run_result(
                 workspace_name=workspace_name,

@@ -114,6 +114,7 @@ class FakeCodexRunner:
         self.new_session_error: Exception = None
         self.resume_error: Exception = None
         self.next_resume_result: CodexRunResult | None = None
+        self.on_resume: Optional[Callable[[dict], None]] = None
 
     def run_new_session(
         self,
@@ -166,6 +167,8 @@ class FakeCodexRunner:
                 ),
             }
         )
+        if self.on_resume is not None:
+            self.on_resume(self.resume_calls[-1])
         if self.next_resume_result is not None:
             return self.next_resume_result
         return self.next_result
@@ -803,6 +806,46 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Follow-up answer"
 
 
+def test_closed_idle_reply_marks_running_before_resume_returns(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Follow-up answer",
+    )
+    observed = {}
+
+    def _record_running_state(_call):
+        record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+        observed["status"] = record.status if record is not None else None
+        observed["posts"] = list(browser.thread_posts.get("1743461000.000001", []))
+
+    runner.on_resume = _record_running_state
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461020.000001",
+        author_actor_id="U123",
+        text="What about a follow-up?",
+    )
+
+    assert observed["status"] is SessionStatus.RUNNING
+    assert observed["posts"] == [
+        "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
+    ]
+
+
 def test_root_message_continues_when_ack_reaction_fails(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     browser.reaction_error = RuntimeError("reaction failed")
@@ -854,6 +897,48 @@ def test_approval_accept_posts_immediate_working_status_before_final(fake_enviro
         == "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
     )
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Approved answer"
+
+
+def test_approval_accept_marks_running_before_resume_returns(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_APPROVAL,
+        approval_request_id="APR-001",
+        approval_command_summary="git status -sb",
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Approved answer",
+    )
+    observed = {}
+
+    def _record_running_state(_call):
+        record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+        observed["status"] = record.status if record is not None else None
+        observed["posts"] = list(browser.thread_posts.get("1743461000.000001", []))
+
+    runner.on_resume = _record_running_state
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461050.000001",
+        author_actor_id="U123",
+        text="approve APR-001",
+    )
+
+    assert observed["status"] is SessionStatus.RUNNING
+    assert observed["posts"] == [
+        "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
+    ]
 
 
 def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environment):
@@ -1075,6 +1160,85 @@ def test_failed_reply_resumes_same_session(fake_environment):
     assert len(runner.resume_calls) == 1
     assert runner.resume_calls[0]["cwd"] == "/tmp/project"
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Recovered answer"
+
+
+def test_closed_idle_reply_resume_exception_restores_previous_status_and_releases_claim(
+    fake_environment,
+):
+    orchestrator, _browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    runner.resume_error = RuntimeError("resume failed")
+
+    with pytest.raises(RuntimeError, match="resume failed"):
+        orchestrator.handle_thread_reply(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1743461000.000001",
+            message_ts="1743461020.000001",
+            author_actor_id="U123",
+            text="Try again",
+        )
+
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_IDLE
+    assert not store.has_processed_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461020.000001",
+        purpose="thread_reply",
+    )
+
+
+def test_approval_accept_resume_exception_restores_waiting_status_and_releases_claim(
+    fake_environment,
+):
+    orchestrator, _browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_APPROVAL,
+        approval_request_id="APR-001",
+        approval_command_summary="git status -sb",
+    )
+    runner.resume_error = RuntimeError("resume failed")
+
+    with pytest.raises(RuntimeError, match="resume failed"):
+        orchestrator.handle_thread_reply(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1743461000.000001",
+            message_ts="1743461050.000001",
+            author_actor_id="U123",
+            text="approve APR-001",
+        )
+
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.WAITING_FOR_APPROVAL
+    assert record.approval_request_id == "APR-001"
+    assert not store.has_processed_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461050.000001",
+        purpose="thread_reply",
+    )
 
 
 def test_second_waiting_input_prompt_is_posted(fake_environment):
