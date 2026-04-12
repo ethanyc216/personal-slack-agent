@@ -31,11 +31,13 @@ class BobOrchestrator:
         state_store: BobStateStore,
         codex_runner: CodexRunner,
         config: AppConfig,
+        isolated_codex_runner: Optional[CodexRunner] = None,
     ) -> None:
         self.browser = browser
         self.state_store = state_store
         self.codex_runner = codex_runner
         self.config = config
+        self.isolated_codex_runner = isolated_codex_runner
 
     def handle_new_root_message(
         self,
@@ -86,7 +88,7 @@ class BobOrchestrator:
         try:
             cwd = self._resolve_default_cwd(workspace_name, channel_name)
             prompt = self._build_codex_prompt(workspace_name, channel_name, text)
-            run_result = self.codex_runner.run_new_session(
+            run_result = self._runner_for_channel(workspace_name, channel_name).run_new_session(
                 prompt=prompt,
                 cwd=cwd,
                 additional_roots=list(self.config.defaults.additional_roots),
@@ -527,7 +529,9 @@ class BobOrchestrator:
             return
         try:
             wrapped_prompt = self._build_codex_prompt(workspace_name, channel_name, prompt)
-            run_result = self.codex_runner.resume_session(session_id, wrapped_prompt, record.cwd)
+            run_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
+                session_id, wrapped_prompt, record.cwd
+            )
         except Exception:
             self.state_store.release_processed_message(
                 workspace_name=workspace_name,
@@ -661,6 +665,17 @@ class BobOrchestrator:
         if record is not None:
             return record.cwd
         return self._resolve_default_cwd(workspace_name, channel_name)
+
+    def _runner_for_channel(self, workspace_name: str, channel_name: str) -> CodexRunner:
+        workspace = self._find_workspace(workspace_name)
+        channel = self._find_channel(workspace, channel_name)
+        if (
+            channel is not None
+            and channel.effective_codex_home_mode == "isolated"
+            and self.isolated_codex_runner is not None
+        ):
+            return self.isolated_codex_runner
+        return self.codex_runner
 
     def _build_codex_prompt(self, workspace_name: str, channel_name: str, user_text: str) -> str:
         workspace = self._find_workspace(workspace_name)

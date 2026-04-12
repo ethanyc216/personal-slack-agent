@@ -256,13 +256,15 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                 if config.defaults.bob_codex_home is not None
                 else paths.state_dir / "codex-home"
             )
-            codex_runner = SubprocessCodexRunner(
+            codex_runner = SubprocessCodexRunner()
+            isolated_codex_runner = SubprocessCodexRunner(
                 env_overrides={"CODEX_HOME": str(bob_codex_home)}
             )
             orchestrator = BobOrchestrator(
                 browser=browser,
                 state_store=state_store,
                 codex_runner=codex_runner,
+                isolated_codex_runner=isolated_codex_runner,
                 config=config,
             )
             watcher = SlackWatcher(

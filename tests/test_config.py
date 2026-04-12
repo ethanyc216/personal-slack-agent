@@ -80,6 +80,27 @@ def test_defaults_include_bob_codex_home_when_configured(tmp_path):
     config = load_config(config_path)
 
     assert config.defaults.bob_codex_home == str(bob_codex_home.resolve())
+    assert config.defaults.codex_home_mode == "default"
+
+
+def test_defaults_include_codex_home_mode_when_configured(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "codex-home-mode.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_home_mode = "isolated"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.codex_home_mode == "isolated"
 
 
 def test_workspace_slack_url_accepts_enterprise_domain(tmp_path):
@@ -254,6 +275,37 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
 
     assert channel.persistent_memory_mode == "owner_only"
     assert channel.persistent_memory_owner == "yifanche"
+    assert channel.effective_codex_home_mode == "default"
+
+
+def test_channel_codex_home_mode_override_is_loaded(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "channel-codex-home-mode.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_home_mode = "default"
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob"
+        codex_home_mode = "isolated"
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    channel = config.workspaces[0].channels[0]
+
+    assert channel.codex_home_mode == "isolated"
+    assert channel.effective_codex_home_mode == "isolated"
 
 
 def test_channel_slack_channel_id_is_loaded_and_dumped(tmp_path):

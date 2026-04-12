@@ -2,6 +2,9 @@
 default_cwd = "/Users/you/Code"
 additional_roots = ["/Users/you/Code"]
 allowed_actor_ids = ["U12345678"]
+# Optional: path for Bob's isolated Codex home used by channels configured with codex_home_mode = "isolated".
+bob_codex_home = "/Users/you/.local/share/personal-slack-agent/codex-home"
+codex_home_mode = "default"
 accept_root_bob_requests = true
 slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
 browser_mode = "shared_browser"
@@ -32,12 +35,14 @@ post_terminal_threads_here = true
 name = "my-shared-bob-channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
+codex_home_mode = "isolated"
 persistent_memory_mode = "disabled"
 
 [[workspaces.channels]]
 name = "my-bob-test-channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
+codex_home_mode = "isolated"
 persistent_memory_mode = "disabled"
 # Optional: seed the Slack route directly when this channel is not visible in the sidebar.
 # slack_channel_id = "C0123456789"

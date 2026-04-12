@@ -224,6 +224,35 @@ def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_ch
     assert ".codex/skills" in prompt
 
 
+def test_new_root_message_uses_isolated_runner_for_isolated_channel(fake_environment):
+    orchestrator, _browser, _store, runner = fake_environment
+    isolated_runner = FakeCodexRunner(
+        next_result=CodexRunResult(session_id="isolated-session", final_output="Isolated answer")
+    )
+    orchestrator.isolated_codex_runner = isolated_runner
+    orchestrator.config.workspaces[0].channels.append(
+        ChannelConfig(
+            name="yifanche-bob",
+            codex_home_mode="isolated",
+            persistent_memory_mode="disabled",
+            effective_default_cwd=orchestrator.config.defaults.default_cwd,
+            effective_accept_root_bob_requests=True,
+            effective_codex_home_mode="isolated",
+        )
+    )
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-bob",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, use isolated runner",
+    )
+
+    assert runner.new_session_calls == []
+    assert isolated_runner.new_session_calls[0]["prompt"].endswith("Bob, use isolated runner")
+
+
 def test_final_output_with_generated_files_posts_summary_and_uploads_snippets(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     runner.next_result = CodexRunResult(

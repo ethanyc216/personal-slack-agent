@@ -8,6 +8,8 @@ SHARED_BROWSER_MODE = "shared_browser"
 DEDICATED_BROWSER_MODE = "dedicated_browser"
 PERSISTENT_MEMORY_MODE_DISABLED = "disabled"
 PERSISTENT_MEMORY_MODE_OWNER_ONLY = "owner_only"
+CODEX_HOME_MODE_DEFAULT = "default"
+CODEX_HOME_MODE_ISOLATED = "isolated"
 
 
 @dataclass
@@ -17,6 +19,7 @@ class DefaultSettings:
     accept_root_bob_requests: bool = True
     allowed_actor_ids: List[str] = field(default_factory=list)
     bob_codex_home: Optional[str] = None
+    codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     slack_signin_url: str = DEFAULT_SLACK_SIGNIN_URL
     browser_mode: str = DEDICATED_BROWSER_MODE
     browser_url: str = DEFAULT_BROWSER_CDP_URL
@@ -33,11 +36,13 @@ class ChannelConfig:
     default_cwd: Optional[str] = None
     accept_root_bob_requests: Optional[bool] = None
     post_terminal_threads_here: bool = False
+    codex_home_mode: Optional[str] = None
     persistent_memory_mode: str = ""
     persistent_memory_owner: Optional[str] = None
     slack_channel_id: Optional[str] = None
     effective_default_cwd: str = ""
     effective_accept_root_bob_requests: bool = True
+    effective_codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
 
 
 @dataclass

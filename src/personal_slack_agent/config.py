@@ -3,6 +3,8 @@ from typing import Any, List, Mapping, Optional, Union
 from urllib.parse import urlparse
 
 from .models import (
+    CODEX_HOME_MODE_DEFAULT,
+    CODEX_HOME_MODE_ISOLATED,
     DEDICATED_BROWSER_MODE,
     DEFAULT_SLACK_SIGNIN_URL,
     PERSISTENT_MEMORY_MODE_DISABLED,
@@ -31,6 +33,7 @@ def apply_channel_defaults(defaults: DefaultSettings, channel: ChannelConfig) ->
         if channel.accept_root_bob_requests is None
         else channel.accept_root_bob_requests
     )
+    channel.effective_codex_home_mode = channel.codex_home_mode or defaults.codex_home_mode
     return channel
 
 
@@ -60,6 +63,7 @@ def dump_config(config: AppConfig) -> str:
     )
     if config.defaults.bob_codex_home is not None:
         lines.append('bob_codex_home = "{0}"'.format(_toml_escape(config.defaults.bob_codex_home)))
+    lines.append('codex_home_mode = "{0}"'.format(_toml_escape(config.defaults.codex_home_mode)))
     lines.append(
         "accept_root_bob_requests = {0}".format("true" if config.defaults.accept_root_bob_requests else "false")
     )
@@ -111,6 +115,10 @@ def dump_config(config: AppConfig) -> str:
                         "true" if channel.accept_root_bob_requests else "false"
                     )
                 )
+            if channel.codex_home_mode is not None:
+                lines.append(
+                    'codex_home_mode = "{0}"'.format(_toml_escape(channel.codex_home_mode))
+                )
             lines.append(
                 'persistent_memory_mode = "{0}"'.format(
                     _toml_escape(channel.persistent_memory_mode)
@@ -149,6 +157,11 @@ def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
             raw_defaults.get("bob_codex_home"),
             "defaults.bob_codex_home",
             base_dir=base_dir,
+        ),
+        codex_home_mode=_codex_home_mode(
+            raw_defaults.get("codex_home_mode"),
+            "defaults.codex_home_mode",
+            default=CODEX_HOME_MODE_DEFAULT,
         ),
         slack_signin_url=_optional_https_url(
             raw_defaults.get("slack_signin_url"),
@@ -283,6 +296,10 @@ def _parse_channels(
                 "channel.post_terminal_threads_here",
                 default=False,
             ),
+            codex_home_mode=_optional_codex_home_mode(
+                raw_channel.get("codex_home_mode"),
+                "channel.codex_home_mode",
+            ),
             persistent_memory_mode=_persistent_memory_mode(
                 raw_channel.get("persistent_memory_mode"),
                 "channel.persistent_memory_mode",
@@ -412,6 +429,26 @@ def _persistent_memory_mode(value: Any, field_name: str) -> str:
             )
         )
     return value
+
+
+def _codex_home_mode(value: Any, field_name: str, default: str) -> str:
+    if value is None:
+        return default
+    if value not in (CODEX_HOME_MODE_DEFAULT, CODEX_HOME_MODE_ISOLATED):
+        raise ConfigError(
+            "{0} must be one of: {1}, {2}.".format(
+                field_name,
+                CODEX_HOME_MODE_DEFAULT,
+                CODEX_HOME_MODE_ISOLATED,
+            )
+        )
+    return value
+
+
+def _optional_codex_home_mode(value: Any, field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    return _codex_home_mode(value, field_name, default=CODEX_HOME_MODE_DEFAULT)
 
 
 def _validate_channel_memory_policy(channel: ChannelConfig) -> ChannelConfig:
