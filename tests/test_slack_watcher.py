@@ -1,3 +1,5 @@
+import time
+
 from personal_slack_agent.models import (
     AppConfig,
     ChannelConfig,
@@ -362,6 +364,144 @@ def test_watcher_backs_off_workspace_after_ratelimited_thread_reply_call(tmp_pat
         ("oracle", "yifanche-private", "10.0", None, 200)
     ]
     assert orchestrator.reply_calls == []
+
+
+def test_watcher_skips_stale_closed_threads_during_periodic_reconcile(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-stale",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="11.0",
+        root_ts="11.0",
+        codex_session_id="session-recent",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    with state._connect() as connection:
+        connection.execute(
+            """
+            UPDATE sessions
+            SET updated_at = ?, created_at = ?
+            WHERE workspace_name = ?
+              AND channel_name = ?
+              AND thread_ts = ?
+            """,
+            (1, 1, "oracle", "yifanche-private", "10.0"),
+        )
+
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.thread_reply_errors[("oracle", "yifanche-private", "10.0")] = RuntimeError(
+        "Slack API conversations.replies failed: ratelimited"
+    )
+    browser.thread_replies[("oracle", "yifanche-private", "11.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="11.0",
+            message_ts="9999999999.0",
+            author_actor_id="U123",
+            text="recent follow-up",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert ("oracle", "yifanche-private", "10.0", None, 200) not in browser.thread_reply_calls
+    assert orchestrator.reply_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "thread_ts": "11.0",
+            "message_ts": "9999999999.0",
+            "author_actor_id": "U123",
+            "text": "recent follow-up",
+        }
+    ]
+
+
+def test_watcher_spaces_terminal_thread_reconcile_across_cycles(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    now_epoch = int(time.time())
+    for index, updated_at in ((10, now_epoch - 10), (11, now_epoch - 20), (12, now_epoch - 30)):
+        state.upsert_session(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="{0}.0".format(index),
+            root_ts="{0}.0".format(index),
+            codex_session_id="session-{0}".format(index),
+            cwd=str(tmp_path),
+            owner_actor_id="U123",
+            status=SessionStatus.CLOSED_IDLE,
+        )
+        with state._connect() as connection:
+            connection.execute(
+                """
+                UPDATE sessions
+                SET updated_at = ?, created_at = ?
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                """,
+                (
+                    updated_at,
+                    updated_at,
+                    "oracle",
+                    "yifanche-private",
+                    "{0}.0".format(index),
+                ),
+            )
+
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "10.0", None, 200)
+    ]
+
+    browser.thread_reply_calls.clear()
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "11.0", None, 200)
+    ]
+
+    browser.thread_reply_calls.clear()
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "12.0", None, 200)
+    ]
 
 
 def test_watcher_periodically_reconciles_follow_up_replies_without_websocket_event(tmp_path):

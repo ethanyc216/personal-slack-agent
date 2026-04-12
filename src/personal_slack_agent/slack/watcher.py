@@ -16,6 +16,17 @@ class SlackWatcher:
     _ROOT_BATCH_SIZE = 50
     _THREAD_BATCH_SIZE = 200
     _THREAD_REPLY_RATE_LIMIT_BACKOFF_SECONDS = 60.0
+    _RECENT_TERMINAL_THREAD_RECONCILE_WINDOW_SECONDS = 60 * 60
+    _RECENT_TERMINAL_THREAD_RECONCILE_LIMIT = 6
+    _PERIODIC_TERMINAL_THREAD_RECONCILE_BATCH_SIZE = 1
+    _TERMINAL_SESSION_STATUSES = frozenset(
+        (
+            SessionStatus.CLOSED_IDLE,
+            SessionStatus.CLOSED_TIMEOUT,
+            SessionStatus.CLOSED_MANUAL,
+            SessionStatus.FAILED,
+        )
+    )
 
     def __init__(
         self,
@@ -37,13 +48,14 @@ class SlackWatcher:
         self._workspaces_pending_reconcile: Set[str] = set()
         self._threads_pending_reconcile: Set[Tuple[str, str, str]] = set()
         self._thread_reply_backoff_until: Dict[str, float] = {}
+        self._terminal_reconcile_cursor: Dict[Tuple[str, str], int] = {}
 
     def run_cycle(self) -> None:
         if not self._initialized:
             self._initialize()
-        self._reconcile_pending_workspaces()
+        reconciled_workspaces = self._reconcile_pending_workspaces()
         self._process_event_queue()
-        self._reconcile_all_workspaces()
+        self._reconcile_all_workspaces(skip_workspaces=reconciled_workspaces)
         self._reconcile_pending_threads()
 
     def request_workspace_reconcile(self, workspace_name: str) -> None:
@@ -105,20 +117,25 @@ class SlackWatcher:
         return _handle_disconnect
 
     def _reconcile_pending_workspaces(self) -> None:
+        reconciled_workspaces = set()
         pending = list(self._workspaces_pending_reconcile)
         self._workspaces_pending_reconcile.clear()
         for workspace_name in pending:
             workspace = self._workspace_config(workspace_name)
             if workspace is None:
                 continue
+            reconciled_workspaces.add(workspace_name)
             for channel in workspace.channels:
                 self.reconcile_channel_since_cursor(workspace_name, channel.name)
-                for session in self.state_store.list_sessions(workspace_name, channel.name):
+                for session in self._sessions_for_periodic_thread_reconcile(
+                    workspace_name, channel.name
+                ):
                     self.reconcile_thread_since_cursor(
                         workspace_name=workspace_name,
                         channel_name=channel.name,
                         thread_ts=session.thread_ts,
                     )
+        return reconciled_workspaces
 
     def _process_event_queue(self) -> None:
         while self._event_queue:
@@ -139,11 +156,16 @@ class SlackWatcher:
             )
             self._threads_pending_reconcile.discard(key)
 
-    def _reconcile_all_workspaces(self) -> None:
+    def _reconcile_all_workspaces(self, skip_workspaces=None) -> None:
+        skipped = skip_workspaces or set()
         for workspace in self.config.workspaces:
+            if workspace.name in skipped:
+                continue
             for channel in workspace.channels:
                 self.reconcile_channel_since_cursor(workspace.name, channel.name)
-                for session in self.state_store.list_sessions(workspace.name, channel.name):
+                for session in self._sessions_for_periodic_thread_reconcile(
+                    workspace.name, channel.name
+                ):
                     self.reconcile_thread_since_cursor(
                         workspace_name=workspace.name,
                         channel_name=channel.name,
@@ -392,6 +414,57 @@ class SlackWatcher:
             if workspace.name == workspace_name:
                 return workspace
         return None
+
+    def _sessions_for_periodic_thread_reconcile(
+        self,
+        workspace_name: str,
+        channel_name: str,
+    ):
+        sessions = self.state_store.list_sessions(workspace_name, channel_name)
+        if not sessions:
+            return []
+
+        active_sessions = []
+        recent_terminal_sessions = []
+        cutoff = int(time.time()) - self._RECENT_TERMINAL_THREAD_RECONCILE_WINDOW_SECONDS
+        for session in sessions:
+            if session.status in self._TERMINAL_SESSION_STATUSES:
+                if session.updated_at >= cutoff:
+                    recent_terminal_sessions.append(session)
+                continue
+            active_sessions.append(session)
+
+        recent_terminal_sessions.sort(key=lambda item: item.updated_at, reverse=True)
+        recent_terminal_sessions = recent_terminal_sessions[
+            : self._RECENT_TERMINAL_THREAD_RECONCILE_LIMIT
+        ]
+        return active_sessions + self._rotate_terminal_sessions(
+            workspace_name,
+            channel_name,
+            recent_terminal_sessions,
+        )
+
+    def _rotate_terminal_sessions(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        sessions,
+    ):
+        if not sessions:
+            self._terminal_reconcile_cursor.pop((workspace_name, channel_name), None)
+            return []
+
+        key = (workspace_name, channel_name)
+        if len(sessions) <= self._PERIODIC_TERMINAL_THREAD_RECONCILE_BATCH_SIZE:
+            self._terminal_reconcile_cursor[key] = 0
+            return sessions
+
+        start = self._terminal_reconcile_cursor.get(key, 0) % len(sessions)
+        selected = [sessions[start]]
+        self._terminal_reconcile_cursor[key] = (
+            start + self._PERIODIC_TERMINAL_THREAD_RECONCILE_BATCH_SIZE
+        ) % len(sessions)
+        return selected
 
     def _log_debug(self, message: str, *args) -> None:
         if self.logger is None:
