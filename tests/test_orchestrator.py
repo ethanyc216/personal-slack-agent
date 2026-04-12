@@ -799,10 +799,6 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
             "emoji_name": "ack",
         }
     ]
-    assert (
-        browser.thread_posts["1743461000.000001"][-2]
-        == "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
-    )
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Follow-up answer"
 
 
@@ -841,9 +837,7 @@ def test_closed_idle_reply_marks_running_before_resume_returns(fake_environment)
     )
 
     assert observed["status"] is SessionStatus.RUNNING
-    assert observed["posts"] == [
-        "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
-    ]
+    assert observed["posts"] == []
 
 
 def test_root_message_continues_when_ack_reaction_fails(fake_environment):
@@ -864,7 +858,7 @@ def test_root_message_continues_when_ack_reaction_fails(fake_environment):
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
 
 
-def test_approval_accept_posts_immediate_working_status_before_final(fake_environment):
+def test_approval_accept_posts_final_message_without_working_status(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
         workspace_name="oracle",
@@ -892,10 +886,6 @@ def test_approval_accept_posts_immediate_working_status_before_final(fake_enviro
         text="approve APR-001",
     )
 
-    assert (
-        browser.thread_posts["1743461000.000001"][-2]
-        == "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
-    )
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Approved answer"
 
 
@@ -936,9 +926,7 @@ def test_approval_accept_marks_running_before_resume_returns(fake_environment):
     )
 
     assert observed["status"] is SessionStatus.RUNNING
-    assert observed["posts"] == [
-        "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
-    ]
+    assert observed["posts"] == []
 
 
 def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environment):
@@ -1160,6 +1148,40 @@ def test_failed_reply_resumes_same_session(fake_environment):
     assert len(runner.resume_calls) == 1
     assert runner.resume_calls[0]["cwd"] == "/tmp/project"
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Recovered answer"
+
+
+def test_closed_idle_reply_failure_text_marks_session_failed_and_posts_error(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="session-123",
+        failure_text="codex exec timed out after 600s",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461021.000001",
+        author_actor_id="U123",
+        text="Try again",
+    )
+
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.FAILED
+    assert browser.thread_posts["1743461000.000001"][-1] == (
+        "_*Bob hit an error :exclamation::*_ codex exec timed out after 600s"
+    )
 
 
 def test_closed_idle_reply_resume_exception_restores_previous_status_and_releases_claim(

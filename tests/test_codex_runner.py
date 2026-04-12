@@ -1,3 +1,5 @@
+import subprocess
+
 from personal_slack_agent.codex_runner import (
     SubprocessCodexRunner,
     build_new_session_command,
@@ -260,7 +262,7 @@ def test_subprocess_codex_runner_returns_failure_text_for_nonzero_exit_without_j
 def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd, env):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout):
         calls.append(
             {
                 "command": command,
@@ -269,6 +271,7 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
                 "text": text,
                 "cwd": cwd,
                 "env": env,
+                "timeout": timeout,
             }
         )
 
@@ -301,6 +304,7 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
             "text": True,
             "cwd": "/tmp/project",
             "env": None,
+            "timeout": 600.0,
         }
     ]
 
@@ -308,7 +312,7 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
 def test_default_exec_command_merges_env_overrides(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd, env):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout):
         calls.append(
             {
                 "command": command,
@@ -317,6 +321,7 @@ def test_default_exec_command_merges_env_overrides(monkeypatch):
                 "text": text,
                 "cwd": cwd,
                 "env": env,
+                "timeout": timeout,
             }
         )
 
@@ -348,7 +353,7 @@ def test_default_exec_command_merges_env_overrides(monkeypatch):
 def test_subprocess_codex_runner_uses_configured_sandbox_mode(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd, env):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout):
         calls.append(command)
 
         class CompletedProcess:
@@ -380,7 +385,7 @@ def test_subprocess_codex_runner_uses_configured_sandbox_mode(monkeypatch):
 def test_subprocess_codex_runner_includes_workspace_write_writable_roots(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd, env):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout):
         calls.append(command)
 
         class CompletedProcess:
@@ -418,3 +423,15 @@ def test_subprocess_codex_runner_includes_workspace_write_writable_roots(monkeyp
         "session-123",
         "continue",
     ]]
+
+
+def test_default_exec_command_returns_timeout_failure_text(monkeypatch):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout):
+        raise subprocess.TimeoutExpired(cmd=command, timeout=timeout)
+
+    monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.run", fake_run)
+    runner = SubprocessCodexRunner(exec_timeout_seconds=42)
+
+    result = runner.resume_session("session-123", "continue", "/tmp/project")
+
+    assert result.failure_text == "codex exec timed out after 42s"

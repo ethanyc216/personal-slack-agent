@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Mapping, Optional
 
@@ -20,10 +21,12 @@ class SubprocessCodexRunner:
         exec_command: Optional[Callable[[List[str], Optional[str]], str]] = None,
         env_overrides: Optional[Mapping[str, str]] = None,
         sandbox_mode: Optional[str] = None,
+        exec_timeout_seconds: Optional[float] = 600.0,
     ) -> None:
         self._exec_command = exec_command or self._default_exec_command
         self._env_overrides = dict(env_overrides or {})
         self._sandbox_mode = sandbox_mode
+        self._exec_timeout_seconds = exec_timeout_seconds
 
     def run_new_session(
         self,
@@ -64,14 +67,18 @@ class SubprocessCodexRunner:
         if self._env_overrides:
             env = os.environ.copy()
             env.update(self._env_overrides)
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            env=env,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                cwd=cwd,
+                env=env,
+                timeout=self._exec_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(_timeout_failure_text(exc.timeout)) from exc
         output = completed.stdout or ""
         if completed.returncode == 0:
             return output
@@ -101,18 +108,41 @@ class SubprocessCodexRunner:
         assert process.stdout is not None
         stdout_lines: List[str] = []
         session_started_notified = False
-        for line in process.stdout:
-            stdout_lines.append(line)
-            if session_started_notified or on_session_started is None:
-                continue
-            session_id = _extract_session_started_id(line)
-            if session_id is None:
-                continue
-            on_session_started(session_id)
-            session_started_notified = True
+        timed_out = False
+        timer: Optional[threading.Timer] = None
+        if self._exec_timeout_seconds is not None:
+            def _kill_process() -> None:
+                nonlocal timed_out
+                timed_out = True
+                try:
+                    process.kill()
+                except OSError:
+                    return
 
-        stderr_output = process.stderr.read() if process.stderr is not None else ""
-        returncode = process.wait()
+            timer = threading.Timer(self._exec_timeout_seconds, _kill_process)
+            timer.daemon = True
+            timer.start()
+
+        try:
+            for line in process.stdout:
+                stdout_lines.append(line)
+                if session_started_notified or on_session_started is None:
+                    continue
+                session_id = _extract_session_started_id(line)
+                if session_id is None:
+                    continue
+                on_session_started(session_id)
+                session_started_notified = True
+
+            stderr_output = process.stderr.read() if process.stderr is not None else ""
+            returncode = process.wait()
+        finally:
+            if timer is not None:
+                timer.cancel()
+
+        if timed_out:
+            raise RuntimeError(_timeout_failure_text(self._exec_timeout_seconds))
+
         output = "".join(stdout_lines)
         if returncode == 0:
             return output
@@ -294,3 +324,13 @@ def _extract_session_started_id(line: str) -> Optional[str]:
     if isinstance(thread_id, str) and thread_id:
         return thread_id
     return None
+
+
+def _timeout_failure_text(timeout_seconds: Optional[float]) -> str:
+    if timeout_seconds is None:
+        return "codex exec timed out"
+    if float(timeout_seconds).is_integer():
+        rendered = str(int(timeout_seconds))
+    else:
+        rendered = "{0:.1f}".format(timeout_seconds)
+    return "codex exec timed out after {0}s".format(rendered)

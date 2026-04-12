@@ -561,13 +561,6 @@ class BobOrchestrator:
             status=SessionStatus.RUNNING,
             clear_waiting_fields=False,
         )
-        self._try_deliver_working_message(
-            workspace_name=workspace_name,
-            channel_name=channel_name,
-            thread_ts=thread_ts,
-            intent_key="resume-status-{0}".format(message_ts),
-            session_id=session_id,
-        )
         try:
             resume_prompt = (
                 self._build_codex_prompt(workspace_name, channel_name, prompt)
