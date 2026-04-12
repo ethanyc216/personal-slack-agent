@@ -101,6 +101,21 @@ class SlackApiClient:
             params["thread_ts"] = thread_ts
         return self._call_api("chat.postMessage", params)
 
+    def reactions_add(
+        self,
+        channel_id: str,
+        name: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        return self._call_api(
+            "reactions.add",
+            {
+                "channel": channel_id,
+                "name": name,
+                "timestamp": timestamp,
+            },
+        )
+
     def files_get_upload_url_external(
         self,
         filename: str,

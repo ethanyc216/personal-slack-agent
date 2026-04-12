@@ -218,6 +218,36 @@ def test_conversations_list_uses_expected_private_api_post_shape():
     ]
 
 
+def test_reactions_add_uses_expected_private_api_post_shape():
+    calls = []
+
+    def fake_call(method_name, params):
+        calls.append((method_name, params))
+        return {"ok": True}
+
+    client = SlackApiClient(
+        workspace_name="workspace",
+        session=SlackApiSession(
+            origin="https://example.enterprise.slack.com",
+            token="xoxc-demo-token",
+        ),
+        call_api=fake_call,
+    )
+
+    client.reactions_add(channel_id="C123", name="ack", timestamp="123.456")
+
+    assert calls == [
+        (
+            "reactions.add",
+            {
+                "channel": "C123",
+                "name": "ack",
+                "timestamp": "123.456",
+            },
+        )
+    ]
+
+
 def test_search_messages_uses_expected_private_api_post_shape():
     calls = []
 

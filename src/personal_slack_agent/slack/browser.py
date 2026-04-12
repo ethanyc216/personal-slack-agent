@@ -93,6 +93,15 @@ class SlackBrowserAdapter(Protocol):
     ) -> None:
         ...
 
+    def add_reaction(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+        emoji_name: str,
+    ) -> None:
+        ...
+
     def find_existing_bob_messages(
         self,
         workspace_name: str,

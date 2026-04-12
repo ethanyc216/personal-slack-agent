@@ -190,6 +190,24 @@ class PlaywrightSlackAdapter:
             raise RuntimeError("Slack API post succeeded but no message timestamp was returned.")
         return latest_ts
 
+    def add_reaction(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+        emoji_name: str,
+    ) -> None:
+        payload = self._api_client(workspace_name).reactions_add(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            name=emoji_name,
+            timestamp=message_ts,
+        )
+        if payload.get("ok"):
+            return
+        if payload.get("error") == "already_reacted":
+            return
+        raise RuntimeError("Slack API reactions.add failed: {0}".format(payload.get("error")))
+
     def upload_text_snippet(
         self,
         workspace_name: str,

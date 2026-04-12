@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import time
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import pytest
 
@@ -21,8 +21,10 @@ class FakeSlackBrowser:
         self.thread_posts: Dict[str, List[str]] = {}
         self.deleted_messages: List[str] = []
         self.uploaded_snippets: List[dict] = []
+        self.reactions: List[dict] = []
         self.post_error: Exception = None
         self.upload_error: Exception = None
+        self.reaction_error: Exception = None
 
     def post_thread_reply(
         self,
@@ -80,6 +82,24 @@ class FakeSlackBrowser:
         )
         return "F{0}".format(len(self.uploaded_snippets))
 
+    def add_reaction(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+        emoji_name: str,
+    ) -> None:
+        if self.reaction_error is not None:
+            raise self.reaction_error
+        self.reactions.append(
+            {
+                "workspace_name": workspace_name,
+                "channel_name": channel_name,
+                "message_ts": message_ts,
+                "emoji_name": emoji_name,
+            }
+        )
+
 
 @dataclass
 class FakeCodexRunner:
@@ -102,6 +122,7 @@ class FakeCodexRunner:
         additional_roots: List[str],
         sandbox_mode: Optional[str] = None,
         workspace_write_writable_roots: Optional[List[str]] = None,
+        on_session_started: Optional[Callable[[str], None]] = None,
     ) -> CodexRunResult:
         if self.new_session_error is not None:
             raise self.new_session_error
@@ -118,6 +139,8 @@ class FakeCodexRunner:
                 ),
             }
         )
+        if on_session_started is not None and self.next_result.session_id is not None:
+            on_session_started(self.next_result.session_id)
         return self.next_result
 
     def resume_session(
@@ -199,7 +222,18 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     )
 
     thread_posts = browser.thread_posts["1743461000.000001"]
-    assert thread_posts[0].startswith("_*Bob is working on it :arrows_counterclockwise::*_ ")
+    assert browser.reactions == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "message_ts": "1743461000.000001",
+            "emoji_name": "ack",
+        }
+    ]
+    assert (
+        thread_posts[0]
+        == "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
+    )
     assert thread_posts[1] == "_*codex Bob :white_check_mark::*_ Final answer"
     assert len(runner.new_session_calls) == 1
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
@@ -754,7 +788,72 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
 
     assert len(runner.resume_calls) == 1
     assert runner.resume_calls[0]["cwd"] == "/tmp/project"
+    assert browser.reactions == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "message_ts": "1743461020.000001",
+            "emoji_name": "ack",
+        }
+    ]
+    assert (
+        browser.thread_posts["1743461000.000001"][-2]
+        == "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
+    )
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Follow-up answer"
+
+
+def test_root_message_continues_when_ack_reaction_fails(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    browser.reaction_error = RuntimeError("reaction failed")
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, hi there",
+    )
+
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_IDLE
+    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
+
+
+def test_approval_accept_posts_immediate_working_status_before_final(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_APPROVAL,
+        approval_request_id="APR-001",
+        approval_command_summary="git status -sb",
+    )
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Approved answer",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461050.000001",
+        author_actor_id="U123",
+        text="approve APR-001",
+    )
+
+    assert (
+        browser.thread_posts["1743461000.000001"][-2]
+        == "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-123` thread=`1743461000.000001`"
+    )
+    assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Approved answer"
 
 
 def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environment):

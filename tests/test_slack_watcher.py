@@ -456,6 +456,46 @@ def test_watcher_ignores_empty_text_thread_artifacts(tmp_path):
     assert orchestrator.reply_calls == []
 
 
+def test_watcher_ignores_escaped_thread_reply(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="10.0",
+            message_ts="9999999999.0",
+            author_actor_id="U999",
+            text="## \n bob should ignore",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.reply_calls == []
+
+
 def test_watcher_reconciles_root_messages_across_multiple_history_pages(tmp_path):
     from personal_slack_agent.slack.watcher import SlackWatcher
 

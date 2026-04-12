@@ -32,6 +32,7 @@ class SubprocessCodexRunner:
         additional_roots: List[str],
         sandbox_mode: Optional[str] = None,
         workspace_write_writable_roots: Optional[List[str]] = None,
+        on_session_started: Optional[Callable[[str], None]] = None,
     ) -> CodexRunResult:
         command = build_new_session_command(
             prompt=prompt,
@@ -40,7 +41,7 @@ class SubprocessCodexRunner:
             sandbox_mode=sandbox_mode or self._sandbox_mode,
             workspace_write_writable_roots=workspace_write_writable_roots,
         )
-        return self._run_and_parse(command, cwd=cwd)
+        return self._run_and_parse(command, cwd=cwd, on_session_started=on_session_started)
 
     def resume_session(
         self,
@@ -57,13 +58,6 @@ class SubprocessCodexRunner:
             workspace_write_writable_roots=workspace_write_writable_roots,
         )
         return self._run_and_parse(command, cwd=cwd)
-
-    def _run_and_parse(self, command: List[str], cwd: Optional[str] = None) -> CodexRunResult:
-        try:
-            output = self._exec_command(command, cwd)
-        except Exception as exc:
-            return CodexRunResult(failure_text=str(exc).strip() or exc.__class__.__name__)
-        return parse_jsonl_events(output.splitlines())
 
     def _default_exec_command(self, command: List[str], cwd: Optional[str] = None) -> str:
         env = None
@@ -85,6 +79,66 @@ class SubprocessCodexRunner:
         stderr = (completed.stderr or "").strip()
         combined = "\n".join(part for part in [output.strip(), stderr] if part).strip()
         raise RuntimeError(combined or "codex exec failed")
+
+    def _streaming_exec_command(
+        self,
+        command: List[str],
+        cwd: Optional[str] = None,
+        on_session_started: Optional[Callable[[str], None]] = None,
+    ) -> str:
+        env = None
+        if self._env_overrides:
+            env = os.environ.copy()
+            env.update(self._env_overrides)
+        process = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+            env=env,
+        )
+        assert process.stdout is not None
+        stdout_lines: List[str] = []
+        session_started_notified = False
+        for line in process.stdout:
+            stdout_lines.append(line)
+            if session_started_notified or on_session_started is None:
+                continue
+            session_id = _extract_session_started_id(line)
+            if session_id is None:
+                continue
+            on_session_started(session_id)
+            session_started_notified = True
+
+        stderr_output = process.stderr.read() if process.stderr is not None else ""
+        returncode = process.wait()
+        output = "".join(stdout_lines)
+        if returncode == 0:
+            return output
+
+        stderr = (stderr_output or "").strip()
+        combined = "\n".join(part for part in [output.strip(), stderr] if part).strip()
+        raise RuntimeError(combined or "codex exec failed")
+
+    def _run_and_parse(
+        self,
+        command: List[str],
+        cwd: Optional[str] = None,
+        on_session_started: Optional[Callable[[str], None]] = None,
+    ) -> CodexRunResult:
+        try:
+            if on_session_started is None:
+                output = self._exec_command(command, cwd)
+            else:
+                output = self._streaming_exec_command(
+                    command,
+                    cwd=cwd,
+                    on_session_started=on_session_started,
+                )
+        except Exception as exc:
+            return CodexRunResult(failure_text=str(exc).strip() or exc.__class__.__name__)
+        return parse_jsonl_events(output.splitlines())
 
 
 def build_new_session_command(
@@ -224,3 +278,19 @@ def _string_config_override(key: str, value: str) -> str:
 
 def _array_config_override(key: str, values: List[str]) -> str:
     return "{0}={1}".format(key, json.dumps(values))
+
+
+def _extract_session_started_id(line: str) -> Optional[str]:
+    stripped = line.strip()
+    if not stripped:
+        return None
+    try:
+        event = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    if event.get("type") != "thread.started":
+        return None
+    thread_id = event.get("thread_id")
+    if isinstance(thread_id, str) and thread_id:
+        return thread_id
+    return None

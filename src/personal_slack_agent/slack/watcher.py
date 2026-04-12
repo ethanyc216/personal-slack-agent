@@ -452,6 +452,8 @@ def _should_route_reply(
         return False
     if _is_bob_generated_reply_text(reply.text):
         return False
+    if _is_escaped_thread_reply(reply.text):
+        return False
     try:
         return float(reply.message_ts) > float(session_created_at)
     except (TypeError, ValueError):
@@ -461,3 +463,7 @@ def _should_route_reply(
 def _is_bob_generated_reply_text(text: str) -> bool:
     normalized = text.strip()
     return normalized.startswith("_*codex Bob ") or normalized.startswith("_*Bob ")
+
+
+def _is_escaped_thread_reply(text: str) -> bool:
+    return text.lstrip().startswith("##")

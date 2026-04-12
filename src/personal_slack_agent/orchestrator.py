@@ -1,5 +1,5 @@
 import time
-from typing import List, Optional, Protocol, Tuple
+from typing import Callable, List, Optional, Protocol, Tuple
 
 from .codex_runner import CodexRunResult
 from .generated_files import GeneratedFile, extract_generated_files, normalize_slack_markdown
@@ -16,6 +16,7 @@ class CodexRunner(Protocol):
         additional_roots: List[str],
         sandbox_mode: Optional[str] = None,
         workspace_write_writable_roots: Optional[List[str]] = None,
+        on_session_started: Optional[Callable[[str], None]] = None,
     ) -> CodexRunResult:
         ...
 
@@ -99,9 +100,28 @@ class BobOrchestrator:
             )
             return
 
+        self._try_ack_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            message_ts=message_ts,
+        )
+
         try:
             cwd = self._resolve_default_cwd(workspace_name, channel_name)
             prompt = self._build_codex_prompt(workspace_name, channel_name, text)
+            started_session_id: Optional[str] = None
+
+            def _on_session_started(session_id: str) -> None:
+                nonlocal started_session_id
+                started_session_id = session_id
+                self._try_deliver_working_message(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=message_ts,
+                    intent_key="start-status-{0}".format(session_id),
+                    session_id=session_id,
+                )
+
             run_result = self._runner_for_channel(workspace_name, channel_name).run_new_session(
                 prompt=prompt,
                 cwd=cwd,
@@ -111,6 +131,7 @@ class BobOrchestrator:
                     workspace_name,
                     channel_name,
                 ),
+                on_session_started=_on_session_started,
             )
             session_id = run_result.session_id or "unknown-session"
             self.state_store.upsert_session(
@@ -123,13 +144,14 @@ class BobOrchestrator:
                 owner_actor_id=author_actor_id,
                 status=SessionStatus.RUNNING,
             )
-            self._deliver_thread_message(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=message_ts,
-                intent_key="start-status",
-                text="{0} {1}".format(self._LABEL_WORKING, session_id),
-            )
+            if started_session_id is None:
+                self._try_deliver_working_message(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=message_ts,
+                    intent_key="start-status-{0}".format(session_id),
+                    session_id=session_id,
+                )
             self._process_run_result(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -222,6 +244,12 @@ class BobOrchestrator:
         )
         if not claimed:
             return
+
+        self._try_ack_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            message_ts=message_ts,
+        )
 
         if self._is_manual_close_request(text):
             self._clear_waiting_message(record)
@@ -356,6 +384,13 @@ class BobOrchestrator:
             channel_name=channel_name,
             thread_ts=record.thread_ts,
             status=SessionStatus.RUNNING,
+        )
+        self._try_deliver_working_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=record.thread_ts,
+            intent_key="resume-status-{0}".format(message_ts),
+            session_id=record.codex_session_id,
         )
         try:
             self._process_run_result(
@@ -586,6 +621,13 @@ class BobOrchestrator:
             channel_name=channel_name,
             thread_ts=thread_ts,
             status=SessionStatus.RUNNING,
+        )
+        self._try_deliver_working_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key="resume-status-{0}".format(message_ts),
+            session_id=session_id,
         )
         try:
             self._process_run_result(
@@ -888,6 +930,48 @@ class BobOrchestrator:
                 approval_id,
             )
         )
+
+    def _working_text(self, session_id: str, thread_ts: str) -> str:
+        return "{0} session=`{1}` thread=`{2}`".format(
+            self._LABEL_WORKING,
+            session_id,
+            thread_ts,
+        )
+
+    def _try_ack_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+    ) -> None:
+        try:
+            self.browser.add_reaction(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                message_ts=message_ts,
+                emoji_name="ack",
+            )
+        except Exception:
+            return
+
+    def _try_deliver_working_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        intent_key: str,
+        session_id: str,
+    ) -> None:
+        try:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key=intent_key,
+                text=self._working_text(session_id=session_id, thread_ts=thread_ts),
+            )
+        except Exception:
+            return
 
     def _reminder_text(self, record: SessionRecord) -> str:
         if record.status is SessionStatus.WAITING_FOR_APPROVAL:
