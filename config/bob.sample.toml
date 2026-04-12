@@ -2,6 +2,8 @@
 default_cwd = "/Users/you/Code"
 additional_roots = ["/Users/you/Code"]
 allowed_actor_ids = ["U12345678"]
+max_concurrent_tasks = 1
+max_concurrent_per_thread = 1
 # Optional: path for Bob's isolated Codex home used by channels configured with codex_home_mode = "isolated".
 bob_codex_home = "/Users/you/.local/share/personal-slack-agent/codex-home"
 codex_home_mode = "default"

@@ -83,6 +83,12 @@ def dump_config(config: AppConfig) -> str:
             ", ".join('"{}"'.format(_toml_escape(item)) for item in config.defaults.allowed_actor_ids)
         )
     )
+    lines.append("max_concurrent_tasks = {0}".format(config.defaults.max_concurrent_tasks))
+    lines.append(
+        "max_concurrent_per_thread = {0}".format(
+            config.defaults.max_concurrent_per_thread
+        )
+    )
     if config.defaults.bob_codex_home is not None:
         lines.append('bob_codex_home = "{0}"'.format(_toml_escape(config.defaults.bob_codex_home)))
     lines.append('codex_home_mode = "{0}"'.format(_toml_escape(config.defaults.codex_home_mode)))
@@ -209,6 +215,16 @@ def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
         ),
         accept_root_bob_requests=_optional_bool(raw_defaults.get("accept_root_bob_requests"), "defaults.accept_root_bob_requests", default=True),
         allowed_actor_ids=_string_list(raw_defaults.get("allowed_actor_ids"), "defaults.allowed_actor_ids"),
+        max_concurrent_tasks=_positive_int(
+            raw_defaults.get("max_concurrent_tasks"),
+            "defaults.max_concurrent_tasks",
+            default=1,
+        ),
+        max_concurrent_per_thread=_positive_int(
+            raw_defaults.get("max_concurrent_per_thread"),
+            "defaults.max_concurrent_per_thread",
+            default=1,
+        ),
         bob_codex_home=_optional_path(
             raw_defaults.get("bob_codex_home"),
             "defaults.bob_codex_home",
@@ -425,6 +441,14 @@ def _optional_int(value: Any, field_name: str) -> Optional[int]:
         return None
     if type(value) is not int:
         raise ConfigError("{0} must be an integer.".format(field_name))
+    return value
+
+
+def _positive_int(value: Any, field_name: str, default: int) -> int:
+    if value is None:
+        return default
+    if type(value) is not int or value <= 0:
+        raise ConfigError("{0} must be a positive integer.".format(field_name))
     return value
 
 

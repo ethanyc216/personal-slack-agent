@@ -152,6 +152,48 @@ def test_defaults_include_workspace_write_writable_roots_when_configured(tmp_pat
     ]
 
 
+def test_defaults_include_concurrency_settings_when_omitted(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "concurrency-defaults.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.max_concurrent_tasks == 1
+    assert config.defaults.max_concurrent_per_thread == 1
+
+
+def test_defaults_include_concurrency_settings_when_configured(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "concurrency-values.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        max_concurrent_tasks = 5
+        max_concurrent_per_thread = 1
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.max_concurrent_tasks == 5
+    assert config.defaults.max_concurrent_per_thread == 1
+
+
 def test_workspace_slack_url_accepts_enterprise_domain(tmp_path):
     root = tmp_path / "project"
     root.mkdir()

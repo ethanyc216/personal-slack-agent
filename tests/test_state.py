@@ -1,6 +1,6 @@
 import sqlite3
 
-from personal_slack_agent.models import SessionStatus
+from personal_slack_agent.models import SessionStatus, TaskStatus
 from personal_slack_agent.state import BobStateStore
 from personal_slack_agent import state as state_module
 
@@ -121,6 +121,90 @@ def test_claim_processed_message_is_atomic(tmp_path):
         purpose="root_ingest",
     )
     assert claimed_again is False
+
+
+def test_task_queue_round_trip_and_claim(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    first_task_id = store.enqueue_task(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        task_kind="new_root",
+        prompt_text="Bob, hi there",
+    )
+    second_task_id = store.enqueue_task(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461001.000001",
+        message_ts="1743461001.000001",
+        author_actor_id="U123",
+        task_kind="new_root",
+        prompt_text="Bob, another task",
+    )
+
+    queued = store.list_tasks(status=TaskStatus.QUEUED)
+    assert [item.task_id for item in queued] == [first_task_id, second_task_id]
+
+    claimed = store.claim_task(first_task_id)
+    assert claimed is not None
+    assert claimed.task_id == first_task_id
+    assert claimed.status is TaskStatus.RUNNING
+
+    claimed_again = store.claim_task(first_task_id)
+    assert claimed_again is None
+
+
+def test_requeue_running_tasks_moves_running_rows_back_to_queue(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    task_id = store.enqueue_task(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        task_kind="new_root",
+        prompt_text="Bob, hi there",
+    )
+    claimed = store.claim_task(task_id)
+    assert claimed is not None
+    assert claimed.status is TaskStatus.RUNNING
+
+    assert store.requeue_running_tasks() == 1
+
+    queued = store.list_tasks(status=TaskStatus.QUEUED)
+    assert [item.task_id for item in queued] == [task_id]
+
+
+def test_mark_task_failed_records_error_text(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    task_id = store.enqueue_task(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        task_kind="new_root",
+        prompt_text="Bob, hi there",
+    )
+    assert store.claim_task(task_id) is not None
+
+    store.mark_task_failed(task_id, "codex unavailable")
+
+    failed = store.list_tasks(status=TaskStatus.FAILED)
+    assert len(failed) == 1
+    assert failed[0].task_id == task_id
+    assert failed[0].error_text == "codex unavailable"
 
 
 def test_outbound_intents_support_retry_and_reconciliation(tmp_path):

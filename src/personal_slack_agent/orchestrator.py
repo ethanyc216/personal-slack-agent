@@ -1,9 +1,18 @@
+from concurrent.futures import Future, ThreadPoolExecutor
 import time
-from typing import Callable, List, Optional, Protocol, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from .codex_runner import CodexRunResult
 from .generated_files import GeneratedFile, extract_generated_files, normalize_slack_markdown
-from .models import AppConfig, ChannelConfig, OutboundIntentRecord, SessionRecord, SessionStatus
+from .models import (
+    AppConfig,
+    ChannelConfig,
+    OutboundIntentRecord,
+    SessionRecord,
+    SessionStatus,
+    TaskRecord,
+    TaskStatus,
+)
 from .slack import SlackBrowserAdapter
 from .state import BobStateStore
 
@@ -34,7 +43,10 @@ class CodexRunner(Protocol):
 class BobOrchestrator:
     _PURPOSE_ROOT_REQUEST = "root_request"
     _PURPOSE_THREAD_REPLY = "thread_reply"
+    _TASK_KIND_NEW_ROOT = "new_root"
+    _TASK_KIND_THREAD_REPLY = "thread_reply"
     _LABEL_WORKING = "_*Bob is working on it :arrows_counterclockwise::*_"
+    _LABEL_QUEUED = "_*Bob queued it :hourglass_flowing_sand::*_"
     _LABEL_INPUT = "_*Bob needs input :exclamation::*_"
     _LABEL_APPROVAL = "_*Bob needs approval :exclamation::*_"
     _LABEL_DONE = "_*codex Bob :white_check_mark::*_"
@@ -53,6 +65,21 @@ class BobOrchestrator:
         self.codex_runner = codex_runner
         self.config = config
         self.isolated_codex_runner = isolated_codex_runner
+        self._max_concurrent_tasks = max(1, int(self.config.defaults.max_concurrent_tasks))
+        self._max_concurrent_per_thread = max(
+            1, int(self.config.defaults.max_concurrent_per_thread)
+        )
+        self._worker_pool = ThreadPoolExecutor(
+            max_workers=self._max_concurrent_tasks,
+            thread_name_prefix="bob-task",
+        )
+        self._active_tasks: Dict[int, Future[None]] = {}
+        self._active_task_threads: Dict[int, Tuple[str, str, str]] = {}
+        self._thread_active_counts: Dict[Tuple[str, str, str], int] = {}
+        self.state_store.requeue_running_tasks()
+
+    def close(self) -> None:
+        self._worker_pool.shutdown(wait=True)
 
     def handle_new_root_message(
         self,
@@ -105,81 +132,20 @@ class BobOrchestrator:
             channel_name=channel_name,
             message_ts=message_ts,
         )
-
-        try:
-            cwd = self._resolve_default_cwd(workspace_name, channel_name)
-            prompt = self._build_codex_prompt(workspace_name, channel_name, text)
-            started_session_id: Optional[str] = None
-
-            def _on_session_started(session_id: str) -> None:
-                nonlocal started_session_id
-                started_session_id = session_id
-                self._try_deliver_working_message(
-                    workspace_name=workspace_name,
-                    channel_name=channel_name,
-                    thread_ts=message_ts,
-                    intent_key="start-status-{0}".format(session_id),
-                    session_id=session_id,
-                )
-
-            run_result = self._runner_for_channel(workspace_name, channel_name).run_new_session(
-                prompt=prompt,
-                cwd=cwd,
-                additional_roots=list(channel.effective_additional_roots),
-                sandbox_mode=channel.effective_codex_sandbox_mode,
-                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
-                    workspace_name,
-                    channel_name,
-                ),
-                on_session_started=_on_session_started,
-            )
-            session_id = run_result.session_id or "unknown-session"
-            self.state_store.upsert_session(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=message_ts,
-                root_ts=message_ts,
-                codex_session_id=session_id,
-                cwd=cwd,
-                owner_actor_id=author_actor_id,
-                status=SessionStatus.RUNNING,
-            )
-            if started_session_id is None:
-                self._try_deliver_working_message(
-                    workspace_name=workspace_name,
-                    channel_name=channel_name,
-                    thread_ts=message_ts,
-                    intent_key="start-status-{0}".format(session_id),
-                    session_id=session_id,
-                )
-            self._process_run_result(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=message_ts,
-                session_id=session_id,
-                run_result=run_result,
-                result_key_suffix=message_ts,
-            )
-        except Exception:
-            record = self.state_store.get_by_thread(workspace_name, channel_name, message_ts)
-            if record is None:
-                self.state_store.release_processed_message(
-                    workspace_name=workspace_name,
-                    channel_name=channel_name,
-                    thread_ts=message_ts,
-                    message_ts=message_ts,
-                    purpose=self._PURPOSE_ROOT_REQUEST,
-                )
-            else:
-                self.state_store.update_status(
-                    workspace_name=workspace_name,
-                    channel_name=channel_name,
-                    thread_ts=message_ts,
-                    status=SessionStatus.FAILED,
-                )
-            raise
+        self.state_store.enqueue_task(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=message_ts,
+            message_ts=message_ts,
+            author_actor_id=author_actor_id,
+            task_kind=self._TASK_KIND_NEW_ROOT,
+            prompt_text=text,
+        )
+        if self._max_concurrent_tasks == 1:
+            self._dispatch_queued_tasks()
 
     def process_scheduled_actions(self, now_epoch: Optional[int] = None) -> None:
+        self._drain_completed_tasks()
         current_epoch = int(time.time()) if now_epoch is None else int(now_epoch)
 
         for record in self.state_store.claim_due_reminders(current_epoch):
@@ -218,6 +184,7 @@ class BobOrchestrator:
                 thread_ts=record.thread_ts,
                 status=SessionStatus.CLOSED_TIMEOUT,
             )
+        self._dispatch_queued_tasks()
 
     def handle_thread_reply(
         self,
@@ -250,67 +217,29 @@ class BobOrchestrator:
             channel_name=channel_name,
             message_ts=message_ts,
         )
-
-        if self._is_manual_close_request(text):
-            self._clear_waiting_message(record)
-            self.state_store.update_status(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                status=SessionStatus.CLOSED_MANUAL,
-            )
-            self._deliver_thread_message(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                intent_key="manual-close-{0}".format(message_ts),
-                text="{0} Session closed. Reply again in this thread to resume.".format(
-                    self._LABEL_DONE
-                ),
-            )
-            return
-
-        if record.status is SessionStatus.WAITING_FOR_APPROVAL:
-            self._handle_approval_reply(
-                record=record,
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                message_ts=message_ts,
-                text=text,
-                author_actor_id=author_actor_id,
-            )
-            return
-
-        if record.status is SessionStatus.WAITING_FOR_INPUT:
-            if not self._is_actor_allowed(workspace_name, author_actor_id):
-                return
-            self._resume_record(
+        self.state_store.enqueue_task(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            author_actor_id=author_actor_id,
+            task_kind=self._TASK_KIND_THREAD_REPLY,
+            prompt_text=text,
+            codex_session_id=record.codex_session_id,
+        )
+        if self.state_store.count_incomplete_tasks_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        ) > 1:
+            self._try_deliver_queued_message(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 message_ts=message_ts,
-                session_id=record.codex_session_id,
-                prompt=text,
             )
-            return
-
-        if record.status in (
-            SessionStatus.CLOSED_IDLE,
-            SessionStatus.CLOSED_TIMEOUT,
-            SessionStatus.CLOSED_MANUAL,
-            SessionStatus.FAILED,
-        ):
-            if not self._is_actor_allowed(workspace_name, author_actor_id):
-                return
-            self._resume_record(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                message_ts=message_ts,
-                session_id=record.codex_session_id,
-                prompt=text,
-            )
-            return
+        if self._max_concurrent_tasks == 1:
+            self._dispatch_queued_tasks()
 
     def _handle_approval_reply(
         self,
@@ -539,6 +468,247 @@ class BobOrchestrator:
                 file_list,
             ),
         )
+
+    def _dispatch_queued_tasks(self) -> None:
+        available_slots = self._max_concurrent_tasks - len(self._active_tasks)
+        if available_slots <= 0:
+            return
+
+        for task in self.state_store.list_tasks(status=TaskStatus.QUEUED):
+            if available_slots <= 0:
+                break
+            thread_key = (task.workspace_name, task.channel_name, task.thread_ts)
+            if self._thread_active_counts.get(thread_key, 0) >= self._max_concurrent_per_thread:
+                continue
+            claimed_task = self.state_store.claim_task(task.task_id)
+            if claimed_task is None:
+                continue
+            if self._max_concurrent_tasks == 1:
+                self._run_task_inline(claimed_task)
+                available_slots -= 1
+                continue
+            future = self._worker_pool.submit(self._execute_claimed_task, claimed_task.task_id)
+            self._active_tasks[claimed_task.task_id] = future
+            self._active_task_threads[claimed_task.task_id] = thread_key
+            self._thread_active_counts[thread_key] = self._thread_active_counts.get(thread_key, 0) + 1
+            available_slots -= 1
+
+    def _drain_completed_tasks(self) -> None:
+        completed_task_ids = [
+            task_id for task_id, future in self._active_tasks.items() if future.done()
+        ]
+        for task_id in completed_task_ids:
+            future = self._active_tasks.pop(task_id)
+            thread_key = self._active_task_threads.pop(task_id, None)
+            if thread_key is not None:
+                remaining = self._thread_active_counts.get(thread_key, 0) - 1
+                if remaining > 0:
+                    self._thread_active_counts[thread_key] = remaining
+                else:
+                    self._thread_active_counts.pop(thread_key, None)
+            try:
+                future.result()
+            except Exception:
+                continue
+
+    def _execute_claimed_task(self, task_id: int) -> None:
+        task = self.state_store.get_task(task_id)
+        if task is None:
+            return
+        try:
+            if task.task_kind == self._TASK_KIND_NEW_ROOT:
+                self._execute_new_root_task(task)
+            elif task.task_kind == self._TASK_KIND_THREAD_REPLY:
+                self._execute_thread_reply_task(task)
+            else:
+                raise ValueError("Unknown task kind: {0}".format(task.task_kind))
+        except Exception as exc:
+            self.state_store.mark_task_failed(
+                task_id,
+                str(exc).strip() or exc.__class__.__name__,
+            )
+            raise
+        self.state_store.mark_task_completed(task_id)
+
+    def _run_task_inline(self, task: TaskRecord) -> None:
+        thread_key = (task.workspace_name, task.channel_name, task.thread_ts)
+        self._thread_active_counts[thread_key] = self._thread_active_counts.get(thread_key, 0) + 1
+        try:
+            self._execute_claimed_task(task.task_id)
+        finally:
+            remaining = self._thread_active_counts.get(thread_key, 0) - 1
+            if remaining > 0:
+                self._thread_active_counts[thread_key] = remaining
+            else:
+                self._thread_active_counts.pop(thread_key, None)
+
+    def _execute_new_root_task(self, task: TaskRecord) -> None:
+        workspace_name = task.workspace_name
+        channel_name = task.channel_name
+        message_ts = task.message_ts
+        author_actor_id = task.author_actor_id
+        existing = self.state_store.get_by_thread(workspace_name, channel_name, message_ts)
+        if existing is not None:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                intent_key="duplicate-session-warning",
+                text="Bob already has a session in this thread: {0}".format(
+                    existing.codex_session_id
+                ),
+            )
+            return
+
+        cwd = self._resolve_default_cwd(workspace_name, channel_name)
+        prompt = self._build_codex_prompt(workspace_name, channel_name, task.prompt_text)
+        started_session_id: Optional[str] = None
+
+        def _on_session_started(session_id: str) -> None:
+            nonlocal started_session_id
+            started_session_id = session_id
+            self.state_store.upsert_session(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                root_ts=message_ts,
+                codex_session_id=session_id,
+                cwd=cwd,
+                owner_actor_id=author_actor_id,
+                status=SessionStatus.RUNNING,
+            )
+            self._try_deliver_working_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                intent_key="start-status-{0}".format(session_id),
+                session_id=session_id,
+            )
+
+        try:
+            run_result = self._runner_for_channel(workspace_name, channel_name).run_new_session(
+                prompt=prompt,
+                cwd=cwd,
+                additional_roots=list(
+                    self._find_channel(self._find_workspace(workspace_name), channel_name).effective_additional_roots
+                ),
+                sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
+                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                    workspace_name,
+                    channel_name,
+                ),
+                on_session_started=_on_session_started,
+            )
+            session_id = run_result.session_id or started_session_id or "unknown-session"
+            self.state_store.upsert_session(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                root_ts=message_ts,
+                codex_session_id=session_id,
+                cwd=cwd,
+                owner_actor_id=author_actor_id,
+                status=SessionStatus.RUNNING,
+            )
+            if started_session_id is None:
+                self._try_deliver_working_message(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=message_ts,
+                    intent_key="start-status-{0}".format(session_id),
+                    session_id=session_id,
+                )
+            self._process_run_result(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                session_id=session_id,
+                run_result=run_result,
+                result_key_suffix=message_ts,
+            )
+        except Exception:
+            record = self.state_store.get_by_thread(workspace_name, channel_name, message_ts)
+            if record is None:
+                self.state_store.release_processed_message(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=message_ts,
+                    message_ts=message_ts,
+                    purpose=self._PURPOSE_ROOT_REQUEST,
+                )
+            else:
+                self.state_store.update_status(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=message_ts,
+                    status=SessionStatus.FAILED,
+                )
+            raise
+
+    def _execute_thread_reply_task(self, task: TaskRecord) -> None:
+        record = self.state_store.get_by_thread(
+            task.workspace_name,
+            task.channel_name,
+            task.thread_ts,
+        )
+        if record is None:
+            return
+
+        if self._is_manual_close_request(task.prompt_text):
+            self._clear_waiting_message(record)
+            self.state_store.update_status(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                status=SessionStatus.CLOSED_MANUAL,
+            )
+            self._deliver_thread_message(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                intent_key="manual-close-{0}".format(task.message_ts),
+                text="{0} Session closed. Reply again in this thread to resume.".format(
+                    self._LABEL_DONE
+                ),
+            )
+            return
+
+        if record.status is SessionStatus.WAITING_FOR_APPROVAL:
+            self._handle_approval_reply(
+                record=record,
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                message_ts=task.message_ts,
+                text=task.prompt_text,
+                author_actor_id=task.author_actor_id,
+            )
+            return
+
+        if record.status is SessionStatus.WAITING_FOR_INPUT:
+            self._resume_record(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                message_ts=task.message_ts,
+                session_id=record.codex_session_id,
+                prompt=task.prompt_text,
+            )
+            return
+
+        if record.status in (
+            SessionStatus.CLOSED_IDLE,
+            SessionStatus.CLOSED_TIMEOUT,
+            SessionStatus.CLOSED_MANUAL,
+            SessionStatus.FAILED,
+        ):
+            self._resume_record(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                message_ts=task.message_ts,
+                session_id=record.codex_session_id,
+                prompt=task.prompt_text,
+            )
 
     def _resume_record(
         self,
@@ -913,6 +1083,11 @@ class BobOrchestrator:
             thread_ts,
         )
 
+    def _queued_text(self) -> str:
+        return "{0} I will run this after the active task in this thread.".format(
+            self._LABEL_QUEUED
+        )
+
     def _try_ack_message(
         self,
         workspace_name: str,
@@ -944,6 +1119,24 @@ class BobOrchestrator:
                 thread_ts=thread_ts,
                 intent_key=intent_key,
                 text=self._working_text(session_id=session_id, thread_ts=thread_ts),
+            )
+        except Exception:
+            return
+
+    def _try_deliver_queued_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+    ) -> None:
+        try:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="queued-{0}".format(message_ts),
+                text=self._queued_text(),
             )
         except Exception:
             return

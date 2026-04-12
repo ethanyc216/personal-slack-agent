@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import time
+import threading
 from typing import Callable, Dict, List, Optional
 
 import pytest
@@ -10,6 +11,7 @@ from personal_slack_agent.models import (
     ChannelConfig,
     DefaultSettings,
     SessionStatus,
+    TaskStatus,
     WorkspaceConfig,
 )
 from personal_slack_agent.orchestrator import BobOrchestrator
@@ -761,6 +763,256 @@ def test_post_failure_marks_session_failed_instead_of_leaving_it_running(fake_en
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.FAILED
+
+
+def test_new_root_message_is_enqueued_before_worker_dispatch(fake_environment):
+    orchestrator, _browser, store, _runner = fake_environment
+    orchestrator._max_concurrent_tasks = 5  # type: ignore[attr-defined]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, hi there",
+    )
+
+    queued = store.list_tasks(status=TaskStatus.QUEUED)
+    assert len(queued) == 1
+    assert queued[0].task_kind == "new_root"
+    assert queued[0].prompt_text == "Bob, hi there"
+
+
+def test_process_scheduled_actions_runs_up_to_global_concurrency_limit(tmp_path):
+    store = BobStateStore(tmp_path / "bob.sqlite3")
+    store.initialize()
+    browser = FakeSlackBrowser()
+    runner = FakeCodexRunner()
+    config = AppConfig(
+        defaults=DefaultSettings(
+            default_cwd=str(tmp_path),
+            additional_roots=[str(tmp_path / "roots")],
+            allowed_actor_ids=["U123"],
+            max_concurrent_tasks=5,
+            max_concurrent_per_thread=1,
+        ),
+        workspaces=[
+            WorkspaceConfig(
+                name="oracle",
+                allowed_actor_ids=["U123"],
+                channels=[
+                    ChannelConfig(
+                        name="yifanche-private",
+                        persistent_memory_mode="owner_only",
+                        persistent_memory_owner="yifanche",
+                        effective_default_cwd=str(tmp_path),
+                        effective_additional_roots=[str(tmp_path / "roots")],
+                        effective_accept_root_bob_requests=True,
+                    )
+                ],
+            )
+        ],
+    )
+
+    release_event = threading.Event()
+    started_lock = threading.Lock()
+    started_threads: List[str] = []
+
+    def blocking_run_new_session(
+        prompt: str,
+        cwd: str,
+        additional_roots: List[str],
+        sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
+        on_session_started: Optional[Callable[[str], None]] = None,
+    ) -> CodexRunResult:
+        del cwd
+        del additional_roots
+        del sandbox_mode
+        del workspace_write_writable_roots
+        thread_marker = prompt.splitlines()[-1]
+        with started_lock:
+            started_threads.append(thread_marker)
+        if on_session_started is not None:
+            on_session_started("session-{0}".format(len(started_threads)))
+        release_event.wait(timeout=5)
+        return CodexRunResult(
+            session_id="session-{0}".format(len(started_threads)),
+            final_output="done",
+        )
+
+    runner.run_new_session = blocking_run_new_session  # type: ignore[method-assign]
+    orchestrator = BobOrchestrator(
+        browser=browser,
+        state_store=store,
+        codex_runner=runner,
+        config=config,
+    )
+
+    for index in range(6):
+        thread_ts = "174346100{0}.000001".format(index)
+        orchestrator.handle_new_root_message(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            message_ts=thread_ts,
+            author_actor_id="U123",
+            text="Bob, task {0}".format(index),
+        )
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        orchestrator.process_scheduled_actions()
+        with started_lock:
+            if len(started_threads) >= 5:
+                break
+        time.sleep(0.01)
+
+    with started_lock:
+        assert len(started_threads) == 5
+
+    queued = store.list_tasks(status=TaskStatus.QUEUED)
+    assert len(queued) == 1
+
+    release_event.set()
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        orchestrator.process_scheduled_actions()
+        if not store.list_tasks(status=TaskStatus.QUEUED) and not store.list_tasks(
+            status=TaskStatus.RUNNING
+        ):
+            break
+        time.sleep(0.01)
+
+    assert store.list_tasks(status=TaskStatus.QUEUED) == []
+    assert store.list_tasks(status=TaskStatus.RUNNING) == []
+
+
+def test_same_thread_tasks_do_not_overlap(tmp_path):
+    store = BobStateStore(tmp_path / "bob.sqlite3")
+    store.initialize()
+    browser = FakeSlackBrowser()
+    runner = FakeCodexRunner()
+    config = AppConfig(
+        defaults=DefaultSettings(
+            default_cwd=str(tmp_path),
+            additional_roots=[str(tmp_path / "roots")],
+            allowed_actor_ids=["U123"],
+            max_concurrent_tasks=5,
+            max_concurrent_per_thread=1,
+        ),
+        workspaces=[
+            WorkspaceConfig(
+                name="oracle",
+                allowed_actor_ids=["U123"],
+                channels=[
+                    ChannelConfig(
+                        name="yifanche-private",
+                        persistent_memory_mode="owner_only",
+                        persistent_memory_owner="yifanche",
+                        effective_default_cwd=str(tmp_path),
+                        effective_additional_roots=[str(tmp_path / "roots")],
+                        effective_accept_root_bob_requests=True,
+                    )
+                ],
+            )
+        ],
+    )
+
+    release_first = threading.Event()
+    second_started = threading.Event()
+    call_order: List[str] = []
+
+    def blocking_run_new_session(
+        prompt: str,
+        cwd: str,
+        additional_roots: List[str],
+        sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
+        on_session_started: Optional[Callable[[str], None]] = None,
+    ) -> CodexRunResult:
+        del cwd
+        del additional_roots
+        del sandbox_mode
+        del workspace_write_writable_roots
+        call_order.append(prompt.splitlines()[-1])
+        if on_session_started is not None:
+            on_session_started("session-{0}".format(len(call_order)))
+        if len(call_order) == 1:
+            release_first.wait(timeout=5)
+        else:
+            second_started.set()
+        return CodexRunResult(
+            session_id="session-{0}".format(len(call_order)),
+            final_output="done",
+        )
+
+    def blocking_resume_session(
+        session_id: str,
+        prompt: str,
+        cwd: str,
+        sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
+    ) -> CodexRunResult:
+        del session_id
+        del cwd
+        del sandbox_mode
+        del workspace_write_writable_roots
+        call_order.append(prompt.splitlines()[-1])
+        second_started.set()
+        return CodexRunResult(
+            session_id="session-1",
+            final_output="done",
+        )
+
+    runner.run_new_session = blocking_run_new_session  # type: ignore[method-assign]
+    runner.resume_session = blocking_resume_session  # type: ignore[method-assign]
+    orchestrator = BobOrchestrator(
+        browser=browser,
+        state_store=store,
+        codex_runner=runner,
+        config=config,
+    )
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, first",
+    )
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        orchestrator.process_scheduled_actions()
+        if store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is not None:
+            break
+        time.sleep(0.01)
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461001.000001",
+        author_actor_id="U123",
+        text="Bob, second",
+    )
+
+    deadline = time.time() + 5
+    while time.time() < deadline and len(call_order) < 1:
+        orchestrator.process_scheduled_actions()
+        time.sleep(0.01)
+
+    assert call_order == ["Bob, first"]
+    assert second_started.is_set() is False
+
+    release_first.set()
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        orchestrator.process_scheduled_actions()
+        if second_started.is_set():
+            break
+        time.sleep(0.01)
+
+    assert second_started.is_set() is True
 
 
 def test_closed_idle_reply_resumes_same_session(fake_environment):

@@ -21,6 +21,8 @@ class DefaultSettings:
     additional_roots: List[str] = field(default_factory=list)
     accept_root_bob_requests: bool = True
     allowed_actor_ids: List[str] = field(default_factory=list)
+    max_concurrent_tasks: int = 1
+    max_concurrent_per_thread: int = 1
     bob_codex_home: Optional[str] = None
     codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     codex_sandbox_mode: Optional[str] = None
@@ -82,6 +84,14 @@ class SessionStatus(str, Enum):
     FAILED = "failed"
 
 
+class TaskStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
 @dataclass
 class SessionRecord:
     workspace_name: str
@@ -102,6 +112,25 @@ class SessionRecord:
     last_error: Optional[str] = None
     created_at: int = 0
     updated_at: int = 0
+
+
+@dataclass
+class TaskRecord:
+    task_id: int
+    workspace_name: str
+    channel_name: str
+    thread_ts: str
+    message_ts: str
+    author_actor_id: str
+    task_kind: str
+    prompt_text: str
+    codex_session_id: Optional[str]
+    status: TaskStatus
+    error_text: Optional[str]
+    created_at: int
+    started_at: Optional[int]
+    finished_at: Optional[int]
+    updated_at: int
 
 
 @dataclass

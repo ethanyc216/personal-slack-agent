@@ -281,7 +281,14 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                     logger=logger,
                 )
             finally:
-                browser.close()
+                close_orchestrator = getattr(orchestrator, "close", None)
+                if callable(close_orchestrator):
+                    close_orchestrator()
+                shutdown_browser = getattr(browser, "shutdown", None)
+                if callable(shutdown_browser):
+                    shutdown_browser()
+                else:
+                    browser.close()
         except Exception:
             logger.exception("bob-agent runtime failed")
             raise

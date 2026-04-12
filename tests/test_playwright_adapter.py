@@ -1,3 +1,6 @@
+import threading
+import time
+
 from playwright._impl._errors import TargetClosedError
 
 from playwright.sync_api import Error as PlaywrightError
@@ -489,6 +492,81 @@ def test_post_root_message_uses_api_client_path_only():
 
     assert message_ts == "1775717794.417429"
     assert calls == [("C222", "Bob, smoke ok", None, False)]
+
+
+def test_post_root_message_serializes_concurrent_browser_api_calls():
+    class SlowApiPage:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self.inflight = 0
+            self.max_inflight = 0
+            self.texts = []
+            self.counter = 0
+
+        def evaluate(self, script, payload):
+            del script
+            with self._lock:
+                self.inflight += 1
+                self.max_inflight = max(self.max_inflight, self.inflight)
+            try:
+                time.sleep(0.05)
+                with self._lock:
+                    self.texts.append(payload["params"]["text"])
+                    self.counter += 1
+                    counter = self.counter
+                return {
+                    "status": 200,
+                    "body": {
+                        "ok": True,
+                        "ts": "1775717794.{0:06d}".format(counter),
+                        "message": {"ts": "1775717794.{0:06d}".format(counter)},
+                    },
+                }
+            finally:
+                with self._lock:
+                    self.inflight -= 1
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_api_contexts(
+        {"oracle": ("token-1", "https://oracle.enterprise.slack.com")}
+    )
+    adapter.set_channel_urls(
+        {("oracle", "yifanche-bob-test"): "https://app.slack.com/client/T123/C0AS82WLCBU"}
+    )
+    slow_page = SlowApiPage()
+    adapter._api_page = lambda origin: slow_page  # type: ignore[method-assign]
+
+    start = threading.Event()
+    errors = []
+    results = []
+
+    def worker(text: str) -> None:
+        start.wait(timeout=1)
+        try:
+            results.append(
+                adapter.post_root_message("oracle", "yifanche-bob-test", text)
+            )
+        except Exception as exc:  # pragma: no cover - failure path asserted below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=worker, args=("Bob, wrap-1",)),
+        threading.Thread(target=worker, args=("Bob, wrap-2",)),
+    ]
+    for thread in threads:
+        thread.start()
+    start.set()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert errors == []
+    assert len(results) == 2
+    assert slow_page.max_inflight == 1
+    assert sorted(slow_page.texts) == ["Bob, wrap-1", "Bob, wrap-2"]
 
 
 def test_upload_text_snippet_uses_external_file_upload_flow():

@@ -114,8 +114,6 @@ class SlackWatcher:
             for channel in workspace.channels:
                 self.reconcile_channel_since_cursor(workspace_name, channel.name)
                 for session in self.state_store.list_sessions(workspace_name, channel.name):
-                    if session.status is SessionStatus.RUNNING:
-                        continue
                     self.reconcile_thread_since_cursor(
                         workspace_name=workspace_name,
                         channel_name=channel.name,
@@ -134,8 +132,6 @@ class SlackWatcher:
             if record is None:
                 self._threads_pending_reconcile.discard(key)
                 continue
-            if record.status is SessionStatus.RUNNING:
-                continue
             self.reconcile_thread_since_cursor(
                 workspace_name=key[0],
                 channel_name=key[1],
@@ -148,8 +144,6 @@ class SlackWatcher:
             for channel in workspace.channels:
                 self.reconcile_channel_since_cursor(workspace.name, channel.name)
                 for session in self.state_store.list_sessions(workspace.name, channel.name):
-                    if session.status is SessionStatus.RUNNING:
-                        continue
                     self.reconcile_thread_since_cursor(
                         workspace_name=workspace.name,
                         channel_name=channel.name,
@@ -223,7 +217,7 @@ class SlackWatcher:
         if self._thread_reply_backoff_active(workspace_name):
             return
         record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
-        if record is None or record.status is SessionStatus.RUNNING:
+        if record is None:
             return
         cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
         delivered_timestamps = set(
@@ -317,9 +311,6 @@ class SlackWatcher:
     ) -> None:
         record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
         if record is None:
-            return
-        if record.status is SessionStatus.RUNNING:
-            self._threads_pending_reconcile.add((workspace_name, channel_name, thread_ts))
             return
         cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
         if not _is_newer_timestamp(message_ts, cursor):

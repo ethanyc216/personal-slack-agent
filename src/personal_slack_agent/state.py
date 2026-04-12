@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import Iterator, List, Optional, Union
 
-from .models import OutboundIntentRecord, SessionRecord, SessionStatus
+from .models import OutboundIntentRecord, SessionRecord, SessionStatus, TaskRecord, TaskStatus
 
 
 class BobStateStore:
@@ -83,6 +83,24 @@ class BobStateStore:
                     latest_message_ts TEXT NOT NULL,
                     updated_at INTEGER NOT NULL,
                     PRIMARY KEY (workspace_name, channel_name, thread_ts)
+                );
+
+                CREATE TABLE IF NOT EXISTS task_queue (
+                    task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace_name TEXT NOT NULL,
+                    channel_name TEXT NOT NULL,
+                    thread_ts TEXT NOT NULL,
+                    message_ts TEXT NOT NULL,
+                    author_actor_id TEXT NOT NULL,
+                    task_kind TEXT NOT NULL,
+                    prompt_text TEXT NOT NULL,
+                    codex_session_id TEXT,
+                    status TEXT NOT NULL,
+                    error_text TEXT,
+                    created_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    finished_at INTEGER,
+                    updated_at INTEGER NOT NULL
                 );
                 """
             )
@@ -229,6 +247,181 @@ class BobStateStore:
                 (workspace_name, channel_name),
             ).fetchall()
         return [self._session_record_from_row(row) for row in rows]
+
+    def enqueue_task(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        author_actor_id: str,
+        task_kind: str,
+        prompt_text: str,
+        codex_session_id: Optional[str] = None,
+    ) -> int:
+        now = int(time.time())
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO task_queue (
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    message_ts,
+                    author_actor_id,
+                    task_kind,
+                    prompt_text,
+                    codex_session_id,
+                    status,
+                    error_text,
+                    created_at,
+                    started_at,
+                    finished_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?)
+                """,
+                (
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    message_ts,
+                    author_actor_id,
+                    task_kind,
+                    prompt_text,
+                    codex_session_id,
+                    TaskStatus.QUEUED.value,
+                    now,
+                    now,
+                ),
+            )
+        return int(cursor.lastrowid)
+
+    def get_task(self, task_id: int) -> Optional[TaskRecord]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM task_queue
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._task_record_from_row(row)
+
+    def list_tasks(
+        self,
+        status: Optional[TaskStatus] = None,
+    ) -> List[TaskRecord]:
+        with self._connect() as connection:
+            if status is None:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM task_queue
+                    ORDER BY created_at ASC, task_id ASC
+                    """
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM task_queue
+                    WHERE status = ?
+                    ORDER BY created_at ASC, task_id ASC
+                    """,
+                    (status.value,),
+                ).fetchall()
+        return [self._task_record_from_row(row) for row in rows]
+
+    def count_incomplete_tasks_for_thread(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM task_queue
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                  AND status IN (?, ?)
+                """,
+                (
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    TaskStatus.QUEUED.value,
+                    TaskStatus.RUNNING.value,
+                ),
+            ).fetchone()
+        return int(row[0] if row is not None else 0)
+
+    def claim_task(self, task_id: int) -> Optional[TaskRecord]:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = int(time.time())
+            cursor = connection.execute(
+                """
+                UPDATE task_queue
+                SET status = ?,
+                    started_at = ?,
+                    updated_at = ?
+                WHERE task_id = ?
+                  AND status = ?
+                """,
+                (
+                    TaskStatus.RUNNING.value,
+                    now,
+                    now,
+                    task_id,
+                    TaskStatus.QUEUED.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = connection.execute(
+                """
+                SELECT *
+                FROM task_queue
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._task_record_from_row(row)
+
+    def mark_task_completed(self, task_id: int) -> None:
+        self._mark_task_finished(task_id=task_id, status=TaskStatus.COMPLETED, error_text=None)
+
+    def mark_task_failed(self, task_id: int, error_text: str) -> None:
+        self._mark_task_finished(task_id=task_id, status=TaskStatus.FAILED, error_text=error_text)
+
+    def requeue_running_tasks(self) -> int:
+        with self._connect() as connection:
+            now = int(time.time())
+            cursor = connection.execute(
+                """
+                UPDATE task_queue
+                SET status = ?,
+                    error_text = NULL,
+                    started_at = NULL,
+                    finished_at = NULL,
+                    updated_at = ?
+                WHERE status = ?
+                """,
+                (
+                    TaskStatus.QUEUED.value,
+                    now,
+                    TaskStatus.RUNNING.value,
+                ),
+            )
+        return int(cursor.rowcount)
 
     def list_due_reminders(self, now_epoch: int) -> List[SessionRecord]:
         with self._connect() as connection:
@@ -942,6 +1135,51 @@ class BobStateStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+    def _task_record_from_row(self, row: sqlite3.Row) -> TaskRecord:
+        return TaskRecord(
+            task_id=row["task_id"],
+            workspace_name=row["workspace_name"],
+            channel_name=row["channel_name"],
+            thread_ts=row["thread_ts"],
+            message_ts=row["message_ts"],
+            author_actor_id=row["author_actor_id"],
+            task_kind=row["task_kind"],
+            prompt_text=row["prompt_text"],
+            codex_session_id=row["codex_session_id"],
+            status=TaskStatus(row["status"]),
+            error_text=row["error_text"],
+            created_at=row["created_at"],
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def _mark_task_finished(
+        self,
+        task_id: int,
+        status: TaskStatus,
+        error_text: Optional[str],
+    ) -> None:
+        now = int(time.time())
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE task_queue
+                SET status = ?,
+                    error_text = ?,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE task_id = ?
+                """,
+                (
+                    status.value,
+                    error_text,
+                    now,
+                    now,
+                    task_id,
+                ),
+            )
 
     def _coerce_delivery_state(
         self,
