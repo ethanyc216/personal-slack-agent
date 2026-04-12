@@ -104,10 +104,9 @@ def build_resume_command(
     prompt: str,
     sandbox_mode: Optional[str] = None,
 ) -> List[str]:
-    command = ["codex", "exec", "resume", session_id, "--json", "--skip-git-repo-check"]
-    if sandbox_mode:
-        command.extend(["--sandbox", sandbox_mode])
-    command.append(prompt)
+    del sandbox_mode
+    command = ["codex", "exec", "resume", "--json", "--skip-git-repo-check"]
+    command.extend([session_id, prompt])
     return command
 
 

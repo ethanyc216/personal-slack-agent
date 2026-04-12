@@ -218,6 +218,8 @@ def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_enviro
     assert "persistent_memory_mode: owner_only" in prompt
     assert "persistent_memory_owner: yifanche" in prompt
     assert "may use all available tools, skills, MCP servers, and agents" in prompt
+    assert "When passing `sh -lc` through another shell layer" in prompt
+    assert "escape `$` as `\\$`" in prompt
 
 
 def test_new_root_message_passes_channel_sandbox_mode_to_runner(fake_environment):
@@ -263,6 +265,7 @@ def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_ch
     assert "do not update personal session notes" in prompt.lower()
     assert "do not modify" in prompt.lower()
     assert ".codex/skills" in prompt
+    assert "When passing `sh -lc` through another shell layer" in prompt
 
 
 def test_new_root_message_uses_isolated_runner_for_isolated_channel(fake_environment):

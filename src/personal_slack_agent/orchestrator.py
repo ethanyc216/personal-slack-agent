@@ -743,6 +743,7 @@ class BobOrchestrator:
             "- Do not tell the user to use `Codex` as the default name in approved Bob channels.\n\n"
             "Rules:\n"
             "- You may use all available tools, skills, MCP servers, and agents normally.\n"
+            "- When passing `sh -lc` through another shell layer, keep the inner script in single quotes or escape `$` as `\\$` so loop variables and shell parameters are not expanded by the outer shell.\n"
             "- {4}\n\n"
             "User request from Slack:\n"
             "{5}"

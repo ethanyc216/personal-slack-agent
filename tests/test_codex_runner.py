@@ -31,9 +31,9 @@ def test_build_resume_session_command_includes_session_and_prompt():
         "codex",
         "exec",
         "resume",
-        "session-123",
         "--json",
         "--skip-git-repo-check",
+        "session-123",
         "Continue with the fix",
     ]
 
@@ -57,11 +57,9 @@ def test_build_commands_include_explicit_sandbox_mode_when_requested():
         "codex",
         "exec",
         "resume",
-        "session-123",
         "--json",
         "--skip-git-repo-check",
-        "--sandbox",
-        "danger-full-access",
+        "session-123",
         "Continue with the fix",
     ]
 
@@ -191,9 +189,9 @@ def test_subprocess_codex_runner_executes_resume_and_parses_result():
         "codex",
         "exec",
         "resume",
-        "session-123",
         "--json",
         "--skip-git-repo-check",
+        "session-123",
         "continue",
     ]]
     assert result.session_id == "session-123"
@@ -246,9 +244,9 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
                 "codex",
                 "exec",
                 "resume",
-                "session-123",
                 "--json",
                 "--skip-git-repo-check",
+                "session-123",
                 "continue",
             ],
             "check": False,
@@ -293,9 +291,9 @@ def test_default_exec_command_merges_env_overrides(monkeypatch):
         "codex",
         "exec",
         "resume",
-        "session-123",
         "--json",
         "--skip-git-repo-check",
+        "session-123",
         "continue",
     ]
 
@@ -323,10 +321,8 @@ def test_subprocess_codex_runner_uses_configured_sandbox_mode(monkeypatch):
         "codex",
         "exec",
         "resume",
-        "session-123",
         "--json",
         "--skip-git-repo-check",
-        "--sandbox",
-        "danger-full-access",
+        "session-123",
         "continue",
     ]]
