@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pytest
 
@@ -95,18 +95,42 @@ class FakeCodexRunner:
         self.resume_error: Exception = None
         self.next_resume_result: CodexRunResult | None = None
 
-    def run_new_session(self, prompt: str, cwd: str, additional_roots: List[str]) -> CodexRunResult:
+    def run_new_session(
+        self,
+        prompt: str,
+        cwd: str,
+        additional_roots: List[str],
+        sandbox_mode: Optional[str] = None,
+    ) -> CodexRunResult:
         if self.new_session_error is not None:
             raise self.new_session_error
         self.new_session_calls.append(
-            {"prompt": prompt, "cwd": cwd, "additional_roots": list(additional_roots)}
+            {
+                "prompt": prompt,
+                "cwd": cwd,
+                "additional_roots": list(additional_roots),
+                "sandbox_mode": sandbox_mode,
+            }
         )
         return self.next_result
 
-    def resume_session(self, session_id: str, prompt: str, cwd: str) -> CodexRunResult:
+    def resume_session(
+        self,
+        session_id: str,
+        prompt: str,
+        cwd: str,
+        sandbox_mode: Optional[str] = None,
+    ) -> CodexRunResult:
         if self.resume_error is not None:
             raise self.resume_error
-        self.resume_calls.append({"session_id": session_id, "prompt": prompt, "cwd": cwd})
+        self.resume_calls.append(
+            {
+                "session_id": session_id,
+                "prompt": prompt,
+                "cwd": cwd,
+                "sandbox_mode": sandbox_mode,
+            }
+        )
         if self.next_resume_result is not None:
             return self.next_resume_result
         return self.next_result
@@ -168,6 +192,7 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
+    assert runner.new_session_calls[0]["sandbox_mode"] is None
 
 
 def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_environment):
@@ -193,6 +218,22 @@ def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_enviro
     assert "persistent_memory_mode: owner_only" in prompt
     assert "persistent_memory_owner: yifanche" in prompt
     assert "may use all available tools, skills, MCP servers, and agents" in prompt
+
+
+def test_new_root_message_passes_channel_sandbox_mode_to_runner(fake_environment):
+    orchestrator, _browser, _store, runner = fake_environment
+    channel = orchestrator.config.workspaces[0].channels[0]
+    channel.effective_codex_sandbox_mode = "danger-full-access"
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, hi there",
+    )
+
+    assert runner.new_session_calls[0]["sandbox_mode"] == "danger-full-access"
 
 
 def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_channel(
@@ -982,6 +1023,7 @@ def test_low_risk_approval_is_auto_approved_without_slack_prompt(fake_environmen
             "session_id": "session-123",
             "prompt": "approve APR-001",
             "cwd": str(store.get_by_thread("oracle", "yifanche-private", "1743461000.000001").cwd),
+            "sandbox_mode": None,
         }
     ]
     posts = browser.thread_posts["1743461000.000001"]
@@ -1047,6 +1089,7 @@ def test_approval_accept_resumes_same_session_with_cwd(fake_environment):
             "session_id": "session-123",
             "prompt": "approve APR-001",
             "cwd": "/tmp/project",
+            "sandbox_mode": None,
         }
     ]
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Approved answer"

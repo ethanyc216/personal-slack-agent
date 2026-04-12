@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import time
 from logging import Logger
@@ -74,15 +75,10 @@ def _prepare_bob_codex_home(target_home: Path) -> Path:
             continue
         target_path = bob_home / source_path.name
         if target_path.exists() or target_path.is_symlink():
-            if target_path.is_dir() and not target_path.is_symlink():
-                for child in target_path.iterdir():
-                    if child.is_dir() and not child.is_symlink():
-                        continue
-                # Fall through to unlink for symlink/file cases only.
             if target_path.is_symlink() or target_path.is_file():
                 target_path.unlink()
             elif target_path.is_dir():
-                continue
+                shutil.rmtree(target_path)
         target_path.symlink_to(source_path, target_is_directory=source_path.is_dir())
 
     target_hooks = bob_home / "hooks.json"

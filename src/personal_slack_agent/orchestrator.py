@@ -9,10 +9,22 @@ from .state import BobStateStore
 
 
 class CodexRunner(Protocol):
-    def run_new_session(self, prompt: str, cwd: str, additional_roots: List[str]) -> CodexRunResult:
+    def run_new_session(
+        self,
+        prompt: str,
+        cwd: str,
+        additional_roots: List[str],
+        sandbox_mode: Optional[str] = None,
+    ) -> CodexRunResult:
         ...
 
-    def resume_session(self, session_id: str, prompt: str, cwd: str) -> CodexRunResult:
+    def resume_session(
+        self,
+        session_id: str,
+        prompt: str,
+        cwd: str,
+        sandbox_mode: Optional[str] = None,
+    ) -> CodexRunResult:
         ...
 
 
@@ -92,6 +104,7 @@ class BobOrchestrator:
                 prompt=prompt,
                 cwd=cwd,
                 additional_roots=list(self.config.defaults.additional_roots),
+                sandbox_mode=channel.effective_codex_sandbox_mode,
             )
             session_id = run_result.session_id or "unknown-session"
             self.state_store.upsert_session(
@@ -312,7 +325,12 @@ class BobOrchestrator:
             return
 
         try:
-            run_result = self.codex_runner.resume_session(record.codex_session_id, text, record.cwd)
+            run_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
+                record.codex_session_id,
+                text,
+                record.cwd,
+                sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
+            )
         except Exception:
             self.state_store.release_processed_message(
                 workspace_name=workspace_name,
@@ -385,10 +403,11 @@ class BobOrchestrator:
                 approval_request_id = "APR-{0}".format(thread_ts.replace(".", "")[-6:])
             approval_summary = run_result.wait_message or "Command requires approval"
             if self._should_auto_approve(approval_summary, approval_request_id):
-                auto_result = self.codex_runner.resume_session(
+                auto_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
                     session_id,
                     "approve {0}".format(approval_request_id),
                     self._cwd_for_thread(workspace_name, channel_name, thread_ts),
+                    sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
                 )
                 self._process_run_result(
                     workspace_name=workspace_name,
@@ -530,7 +549,10 @@ class BobOrchestrator:
         try:
             wrapped_prompt = self._build_codex_prompt(workspace_name, channel_name, prompt)
             run_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
-                session_id, wrapped_prompt, record.cwd
+                session_id,
+                wrapped_prompt,
+                record.cwd,
+                sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
             )
         except Exception:
             self.state_store.release_processed_message(
@@ -676,6 +698,13 @@ class BobOrchestrator:
         ):
             return self.isolated_codex_runner
         return self.codex_runner
+
+    def _sandbox_mode_for_channel(self, workspace_name: str, channel_name: str) -> Optional[str]:
+        workspace = self._find_workspace(workspace_name)
+        channel = self._find_channel(workspace, channel_name)
+        if channel is None:
+            return self.config.defaults.codex_sandbox_mode
+        return channel.effective_codex_sandbox_mode
 
     def _build_codex_prompt(self, workspace_name: str, channel_name: str, user_text: str) -> str:
         workspace = self._find_workspace(workspace_name)

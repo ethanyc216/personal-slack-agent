@@ -19,16 +19,39 @@ class SubprocessCodexRunner:
         self,
         exec_command: Optional[Callable[[List[str], Optional[str]], str]] = None,
         env_overrides: Optional[Mapping[str, str]] = None,
+        sandbox_mode: Optional[str] = None,
     ) -> None:
         self._exec_command = exec_command or self._default_exec_command
         self._env_overrides = dict(env_overrides or {})
+        self._sandbox_mode = sandbox_mode
 
-    def run_new_session(self, prompt: str, cwd: str, additional_roots: List[str]) -> CodexRunResult:
-        command = build_new_session_command(prompt=prompt, cwd=cwd, additional_roots=additional_roots)
+    def run_new_session(
+        self,
+        prompt: str,
+        cwd: str,
+        additional_roots: List[str],
+        sandbox_mode: Optional[str] = None,
+    ) -> CodexRunResult:
+        command = build_new_session_command(
+            prompt=prompt,
+            cwd=cwd,
+            additional_roots=additional_roots,
+            sandbox_mode=sandbox_mode or self._sandbox_mode,
+        )
         return self._run_and_parse(command, cwd=cwd)
 
-    def resume_session(self, session_id: str, prompt: str, cwd: str) -> CodexRunResult:
-        command = build_resume_command(session_id=session_id, prompt=prompt)
+    def resume_session(
+        self,
+        session_id: str,
+        prompt: str,
+        cwd: str,
+        sandbox_mode: Optional[str] = None,
+    ) -> CodexRunResult:
+        command = build_resume_command(
+            session_id=session_id,
+            prompt=prompt,
+            sandbox_mode=sandbox_mode or self._sandbox_mode,
+        )
         return self._run_and_parse(command, cwd=cwd)
 
     def _run_and_parse(self, command: List[str], cwd: Optional[str] = None) -> CodexRunResult:
@@ -60,16 +83,32 @@ class SubprocessCodexRunner:
         raise RuntimeError(combined or "codex exec failed")
 
 
-def build_new_session_command(prompt: str, cwd: str, additional_roots: List[str]) -> List[str]:
-    command = ["codex", "exec", "--json", "--skip-git-repo-check", "--cd", cwd]
+def build_new_session_command(
+    prompt: str,
+    cwd: str,
+    additional_roots: List[str],
+    sandbox_mode: Optional[str] = None,
+) -> List[str]:
+    command = ["codex", "exec", "--json", "--skip-git-repo-check"]
+    if sandbox_mode:
+        command.extend(["--sandbox", sandbox_mode])
+    command.extend(["--cd", cwd])
     for root in additional_roots:
         command.extend(["--add-dir", root])
     command.append(prompt)
     return command
 
 
-def build_resume_command(session_id: str, prompt: str) -> List[str]:
-    return ["codex", "exec", "resume", session_id, "--json", "--skip-git-repo-check", prompt]
+def build_resume_command(
+    session_id: str,
+    prompt: str,
+    sandbox_mode: Optional[str] = None,
+) -> List[str]:
+    command = ["codex", "exec", "resume", session_id, "--json", "--skip-git-repo-check"]
+    if sandbox_mode:
+        command.extend(["--sandbox", sandbox_mode])
+    command.append(prompt)
+    return command
 
 
 def parse_jsonl_events(lines: Iterable[str]) -> CodexRunResult:

@@ -103,6 +103,26 @@ def test_defaults_include_codex_home_mode_when_configured(tmp_path):
     assert config.defaults.codex_home_mode == "isolated"
 
 
+def test_defaults_include_codex_sandbox_mode_when_configured(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "codex-sandbox-mode.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_sandbox_mode = "danger-full-access"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.codex_sandbox_mode == "danger-full-access"
+
+
 def test_workspace_slack_url_accepts_enterprise_domain(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
@@ -308,6 +328,36 @@ def test_channel_codex_home_mode_override_is_loaded(tmp_path):
     assert channel.effective_codex_home_mode == "isolated"
 
 
+def test_channel_codex_sandbox_mode_override_is_loaded(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "channel-codex-sandbox-mode.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_sandbox_mode = "workspace-write"
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob-test"
+        codex_sandbox_mode = "danger-full-access"
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    channel = config.workspaces[0].channels[0]
+
+    assert channel.codex_sandbox_mode == "danger-full-access"
+    assert channel.effective_codex_sandbox_mode == "danger-full-access"
+
+
 def test_channel_slack_channel_id_is_loaded_and_dumped(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
@@ -339,6 +389,36 @@ def test_channel_slack_channel_id_is_loaded_and_dumped(tmp_path):
 
     assert reloaded.workspaces[0].channels[0].slack_channel_id == "C0AS82WLCBU"
     assert 'slack_channel_id = "C0AS82WLCBU"' in rendered
+
+
+def test_channel_codex_sandbox_mode_is_dumped(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "channel-sandbox-dump.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_sandbox_mode = "workspace-write"
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob-test"
+        codex_sandbox_mode = "danger-full-access"
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+    rendered = dump_config(loaded)
+
+    assert 'codex_sandbox_mode = "workspace-write"' in rendered
+    assert rendered.count('codex_sandbox_mode = "danger-full-access"') == 1
 
 
 def test_channel_memory_policy_disabled_rejects_owner(tmp_path):

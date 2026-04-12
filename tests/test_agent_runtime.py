@@ -148,6 +148,38 @@ def test_prepare_bob_codex_home_links_config_without_hooks(tmp_path, monkeypatch
     assert not (bob_home / "hooks.json").exists()
 
 
+def test_prepare_bob_codex_home_replaces_existing_real_skill_directory_with_symlink(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    source_skills = codex_home / "skills"
+    source_skills.mkdir(parents=True)
+    (source_skills / "cds-ops-skill").mkdir()
+    (source_skills / "cds-ops-skill" / "SKILL.md").write_text(
+        "Use when doing CDS ops.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home_root = tmp_path / "state" / "codex-home"
+    existing_skills = bob_home_root / "skills"
+    (existing_skills / ".system").mkdir(parents=True)
+    (existing_skills / ".system" / ".codex-system-skills.marker").write_text(
+        "marker\n",
+        encoding="utf-8",
+    )
+
+    bob_home = agent_module._prepare_bob_codex_home(bob_home_root)
+
+    assert bob_home == bob_home_root
+    assert (bob_home / "skills").is_symlink()
+    assert (bob_home / "skills").resolve() == source_skills.resolve()
+    assert (bob_home / "skills" / "cds-ops-skill" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "Use when doing CDS ops.\n"
+
+
 def test_run_once_uses_configured_bob_codex_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     config_file = tmp_path / "bob.toml"

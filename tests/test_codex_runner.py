@@ -18,6 +18,7 @@ def test_build_new_session_command_includes_json_and_roots():
     assert command.count("--add-dir") == 2
     assert "--cd" in command
     assert command[command.index("--cd") + 1] == "/Users/yifanche/Code/OHAI/ctdm"
+    assert "--sandbox" not in command
 
 
 def test_build_resume_session_command_includes_session_and_prompt():
@@ -33,6 +34,34 @@ def test_build_resume_session_command_includes_session_and_prompt():
         "session-123",
         "--json",
         "--skip-git-repo-check",
+        "Continue with the fix",
+    ]
+
+
+def test_build_commands_include_explicit_sandbox_mode_when_requested():
+    new_command = build_new_session_command(
+        prompt="Bob, hi there",
+        cwd="/Users/yifanche/Code/OHAI/ctdm",
+        additional_roots=[],
+        sandbox_mode="danger-full-access",
+    )
+    resume_command = build_resume_command(
+        session_id="session-123",
+        prompt="Continue with the fix",
+        sandbox_mode="danger-full-access",
+    )
+
+    assert "--sandbox" in new_command
+    assert new_command[new_command.index("--sandbox") + 1] == "danger-full-access"
+    assert resume_command == [
+        "codex",
+        "exec",
+        "resume",
+        "session-123",
+        "--json",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
         "Continue with the fix",
     ]
 
@@ -260,3 +289,44 @@ def test_default_exec_command_merges_env_overrides(monkeypatch):
 
     assert result.session_id == "session-123"
     assert calls[0]["env"]["CODEX_HOME"] == "/tmp/bob-codex-home"
+    assert calls[0]["command"] == [
+        "codex",
+        "exec",
+        "resume",
+        "session-123",
+        "--json",
+        "--skip-git-repo-check",
+        "continue",
+    ]
+
+
+def test_subprocess_codex_runner_uses_configured_sandbox_mode(monkeypatch):
+    calls = []
+
+    def fake_run(command, check, capture_output, text, cwd, env):
+        calls.append(command)
+
+        class CompletedProcess:
+            returncode = 0
+            stdout = '{"type":"session_meta","payload":{"id":"session-123"}}\n'
+            stderr = ""
+
+        return CompletedProcess()
+
+    monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.run", fake_run)
+    runner = SubprocessCodexRunner(sandbox_mode="danger-full-access")
+
+    result = runner.resume_session("session-123", "continue", "/tmp/project")
+
+    assert result.session_id == "session-123"
+    assert calls == [[
+        "codex",
+        "exec",
+        "resume",
+        "session-123",
+        "--json",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
+        "continue",
+    ]]
