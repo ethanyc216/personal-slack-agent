@@ -24,6 +24,7 @@ class DefaultSettings:
     bob_codex_home: Optional[str] = None
     codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     codex_sandbox_mode: Optional[str] = None
+    codex_workspace_write_writable_roots: Optional[List[str]] = None
     slack_signin_url: str = DEFAULT_SLACK_SIGNIN_URL
     browser_mode: str = DEDICATED_BROWSER_MODE
     browser_url: str = DEFAULT_BROWSER_CDP_URL
@@ -38,17 +39,21 @@ class DefaultSettings:
 class ChannelConfig:
     name: str
     default_cwd: Optional[str] = None
+    additional_roots: Optional[List[str]] = None
     accept_root_bob_requests: Optional[bool] = None
     post_terminal_threads_here: bool = False
     codex_home_mode: Optional[str] = None
     codex_sandbox_mode: Optional[str] = None
+    codex_workspace_write_writable_roots: Optional[List[str]] = None
     persistent_memory_mode: str = ""
     persistent_memory_owner: Optional[str] = None
     slack_channel_id: Optional[str] = None
     effective_default_cwd: str = ""
+    effective_additional_roots: List[str] = field(default_factory=list)
     effective_accept_root_bob_requests: bool = True
     effective_codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     effective_codex_sandbox_mode: Optional[str] = None
+    effective_codex_workspace_write_writable_roots: Optional[List[str]] = None
 
 
 @dataclass

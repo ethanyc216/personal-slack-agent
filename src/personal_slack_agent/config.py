@@ -31,6 +31,11 @@ class ConfigError(ValueError):
 
 def apply_channel_defaults(defaults: DefaultSettings, channel: ChannelConfig) -> ChannelConfig:
     channel.effective_default_cwd = channel.default_cwd or defaults.default_cwd
+    channel.effective_additional_roots = (
+        list(channel.additional_roots)
+        if channel.additional_roots is not None
+        else list(defaults.additional_roots)
+    )
     channel.effective_accept_root_bob_requests = (
         defaults.accept_root_bob_requests
         if channel.accept_root_bob_requests is None
@@ -41,6 +46,15 @@ def apply_channel_defaults(defaults: DefaultSettings, channel: ChannelConfig) ->
         channel.codex_sandbox_mode
         if channel.codex_sandbox_mode is not None
         else defaults.codex_sandbox_mode
+    )
+    channel.effective_codex_workspace_write_writable_roots = (
+        list(channel.codex_workspace_write_writable_roots)
+        if channel.codex_workspace_write_writable_roots is not None
+        else (
+            list(defaults.codex_workspace_write_writable_roots)
+            if defaults.codex_workspace_write_writable_roots is not None
+            else None
+        )
     )
     return channel
 
@@ -75,6 +89,15 @@ def dump_config(config: AppConfig) -> str:
     if config.defaults.codex_sandbox_mode is not None:
         lines.append(
             'codex_sandbox_mode = "{0}"'.format(_toml_escape(config.defaults.codex_sandbox_mode))
+        )
+    if config.defaults.codex_workspace_write_writable_roots is not None:
+        lines.append(
+            "codex_workspace_write_writable_roots = [{0}]".format(
+                ", ".join(
+                    '"{}"'.format(_toml_escape(item))
+                    for item in config.defaults.codex_workspace_write_writable_roots
+                )
+            )
         )
     lines.append(
         "accept_root_bob_requests = {0}".format("true" if config.defaults.accept_root_bob_requests else "false")
@@ -121,6 +144,12 @@ def dump_config(config: AppConfig) -> str:
             )
             if channel.default_cwd is not None:
                 lines.append('default_cwd = "{0}"'.format(_toml_escape(channel.default_cwd)))
+            if channel.additional_roots is not None:
+                lines.append(
+                    "additional_roots = [{0}]".format(
+                        ", ".join('"{}"'.format(_toml_escape(item)) for item in channel.additional_roots)
+                    )
+                )
             if channel.accept_root_bob_requests is not None:
                 lines.append(
                     "accept_root_bob_requests = {0}".format(
@@ -135,6 +164,15 @@ def dump_config(config: AppConfig) -> str:
                 lines.append(
                     'codex_sandbox_mode = "{0}"'.format(
                         _toml_escape(channel.codex_sandbox_mode)
+                    )
+                )
+            if channel.codex_workspace_write_writable_roots is not None:
+                lines.append(
+                    "codex_workspace_write_writable_roots = [{0}]".format(
+                        ", ".join(
+                            '"{}"'.format(_toml_escape(item))
+                            for item in channel.codex_workspace_write_writable_roots
+                        )
                     )
                 )
             lines.append(
@@ -184,6 +222,11 @@ def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
         codex_sandbox_mode=_optional_codex_sandbox_mode(
             raw_defaults.get("codex_sandbox_mode"),
             "defaults.codex_sandbox_mode",
+        ),
+        codex_workspace_write_writable_roots=_optional_directory_list(
+            raw_defaults.get("codex_workspace_write_writable_roots"),
+            "defaults.codex_workspace_write_writable_roots",
+            base_dir,
         ),
         slack_signin_url=_optional_https_url(
             raw_defaults.get("slack_signin_url"),
@@ -309,6 +352,11 @@ def _parse_channels(
                 "channel.default_cwd",
                 base_dir,
             ),
+            additional_roots=_optional_directory_list(
+                raw_channel.get("additional_roots"),
+                "channel.additional_roots",
+                base_dir,
+            ),
             accept_root_bob_requests=_optional_bool(
                 raw_channel.get("accept_root_bob_requests"),
                 "channel.accept_root_bob_requests",
@@ -325,6 +373,11 @@ def _parse_channels(
             codex_sandbox_mode=_optional_codex_sandbox_mode(
                 raw_channel.get("codex_sandbox_mode"),
                 "channel.codex_sandbox_mode",
+            ),
+            codex_workspace_write_writable_roots=_optional_directory_list(
+                raw_channel.get("codex_workspace_write_writable_roots"),
+                "channel.codex_workspace_write_writable_roots",
+                base_dir,
             ),
             persistent_memory_mode=_persistent_memory_mode(
                 raw_channel.get("persistent_memory_mode"),
@@ -527,6 +580,12 @@ def _directory_list(value: Any, field_name: str, base_dir: Path) -> List[str]:
     if not isinstance(value, list):
         raise ConfigError("{0} must be a list of directory paths.".format(field_name))
     return [_directory_path(item, field_name, base_dir) for item in value]
+
+
+def _optional_directory_list(value: Any, field_name: str, base_dir: Path) -> Optional[List[str]]:
+    if value is None:
+        return None
+    return _directory_list(value, field_name, base_dir)
 
 
 def _directory_path(value: Any, field_name: str, base_dir: Path) -> str:

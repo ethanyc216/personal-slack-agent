@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from personal_slack_agent.config import ConfigError, dump_config, load_config
 
@@ -121,6 +122,34 @@ def test_defaults_include_codex_sandbox_mode_when_configured(tmp_path):
     config = load_config(config_path)
 
     assert config.defaults.codex_sandbox_mode == "danger-full-access"
+
+
+def test_defaults_include_workspace_write_writable_roots_when_configured(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    sandbox_root = tmp_path / "workspace"
+    scratch_root = tmp_path / "scratch"
+    sandbox_root.mkdir()
+    scratch_root.mkdir()
+
+    config_path = tmp_path / "codex-writable-roots.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_workspace_write_writable_roots = ["{sandbox_root}", "{scratch_root}", "/tmp"]
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.codex_workspace_write_writable_roots == [
+        str(sandbox_root.resolve()),
+        str(scratch_root.resolve()),
+        str(Path("/tmp").resolve()),
+    ]
 
 
 def test_workspace_slack_url_accepts_enterprise_domain(tmp_path):
@@ -268,6 +297,38 @@ def test_channel_override_wins_over_global_default(tmp_path):
     assert config.workspaces[0].allowed_actor_ids == ["U123"]
 
 
+def test_channel_additional_roots_override_can_be_empty(tmp_path):
+    default_root = tmp_path / "Code"
+    default_root.mkdir()
+    extra_root = tmp_path / "extra"
+    extra_root.mkdir()
+
+    config_path = tmp_path / "channel-additional-roots.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{default_root}"
+        additional_roots = ["{extra_root}"]
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob"
+        additional_roots = []
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    channel = config.workspaces[0].channels[0]
+
+    assert channel.additional_roots == []
+    assert channel.effective_additional_roots == []
+
+
 def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
@@ -358,6 +419,48 @@ def test_channel_codex_sandbox_mode_override_is_loaded(tmp_path):
     assert channel.effective_codex_sandbox_mode == "danger-full-access"
 
 
+def test_channel_workspace_write_writable_roots_override_is_loaded(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    workspace_root = tmp_path / "workspace"
+    scratch_root = tmp_path / "scratch"
+    workspace_root.mkdir()
+    scratch_root.mkdir()
+
+    config_path = tmp_path / "channel-codex-writable-roots.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_workspace_write_writable_roots = ["{root}"]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob-test"
+        codex_workspace_write_writable_roots = ["{workspace_root}", "{scratch_root}", "/tmp"]
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    channel = config.workspaces[0].channels[0]
+
+    assert channel.codex_workspace_write_writable_roots == [
+        str(workspace_root.resolve()),
+        str(scratch_root.resolve()),
+        str(Path("/tmp").resolve()),
+    ]
+    assert channel.effective_codex_workspace_write_writable_roots == [
+        str(workspace_root.resolve()),
+        str(scratch_root.resolve()),
+        str(Path("/tmp").resolve()),
+    ]
+
+
 def test_channel_slack_channel_id_is_loaded_and_dumped(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
@@ -419,6 +522,41 @@ def test_channel_codex_sandbox_mode_is_dumped(tmp_path):
 
     assert 'codex_sandbox_mode = "workspace-write"' in rendered
     assert rendered.count('codex_sandbox_mode = "danger-full-access"') == 1
+
+
+def test_channel_workspace_write_writable_roots_is_dumped(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    workspace_root = tmp_path / "workspace"
+    scratch_root = tmp_path / "scratch"
+    workspace_root.mkdir()
+    scratch_root.mkdir()
+
+    config_path = tmp_path / "channel-writable-roots-dump.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob-test"
+        codex_workspace_write_writable_roots = ["{workspace_root}", "{scratch_root}", "/tmp"]
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+    rendered = dump_config(loaded)
+
+    assert "codex_workspace_write_writable_roots =" in rendered
+    assert str(workspace_root.resolve()) in rendered
+    assert str(scratch_root.resolve()) in rendered
+    assert '"{0}"'.format(str(Path("/tmp").resolve())) in rendered
 
 
 def test_channel_memory_policy_disabled_rejects_owner(tmp_path):

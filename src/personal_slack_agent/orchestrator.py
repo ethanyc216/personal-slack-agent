@@ -15,6 +15,7 @@ class CodexRunner(Protocol):
         cwd: str,
         additional_roots: List[str],
         sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
     ) -> CodexRunResult:
         ...
 
@@ -24,6 +25,7 @@ class CodexRunner(Protocol):
         prompt: str,
         cwd: str,
         sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
     ) -> CodexRunResult:
         ...
 
@@ -103,8 +105,12 @@ class BobOrchestrator:
             run_result = self._runner_for_channel(workspace_name, channel_name).run_new_session(
                 prompt=prompt,
                 cwd=cwd,
-                additional_roots=list(self.config.defaults.additional_roots),
+                additional_roots=list(channel.effective_additional_roots),
                 sandbox_mode=channel.effective_codex_sandbox_mode,
+                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                    workspace_name,
+                    channel_name,
+                ),
             )
             session_id = run_result.session_id or "unknown-session"
             self.state_store.upsert_session(
@@ -330,6 +336,10 @@ class BobOrchestrator:
                 text,
                 record.cwd,
                 sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
+                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                    workspace_name,
+                    channel_name,
+                ),
             )
         except Exception:
             self.state_store.release_processed_message(
@@ -408,6 +418,10 @@ class BobOrchestrator:
                     "approve {0}".format(approval_request_id),
                     self._cwd_for_thread(workspace_name, channel_name, thread_ts),
                     sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
+                    workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                        workspace_name,
+                        channel_name,
+                    ),
                 )
                 self._process_run_result(
                     workspace_name=workspace_name,
@@ -553,6 +567,10 @@ class BobOrchestrator:
                 wrapped_prompt,
                 record.cwd,
                 sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
+                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                    workspace_name,
+                    channel_name,
+                ),
             )
         except Exception:
             self.state_store.release_processed_message(
@@ -705,6 +723,17 @@ class BobOrchestrator:
         if channel is None:
             return self.config.defaults.codex_sandbox_mode
         return channel.effective_codex_sandbox_mode
+
+    def _workspace_write_writable_roots_for_channel(
+        self,
+        workspace_name: str,
+        channel_name: str,
+    ) -> Optional[List[str]]:
+        workspace = self._find_workspace(workspace_name)
+        channel = self._find_channel(workspace, channel_name)
+        if channel is None:
+            return self.config.defaults.codex_workspace_write_writable_roots
+        return channel.effective_codex_workspace_write_writable_roots
 
     def _build_codex_prompt(self, workspace_name: str, channel_name: str, user_text: str) -> str:
         workspace = self._find_workspace(workspace_name)

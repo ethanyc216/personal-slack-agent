@@ -31,12 +31,14 @@ class SubprocessCodexRunner:
         cwd: str,
         additional_roots: List[str],
         sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
     ) -> CodexRunResult:
         command = build_new_session_command(
             prompt=prompt,
             cwd=cwd,
             additional_roots=additional_roots,
             sandbox_mode=sandbox_mode or self._sandbox_mode,
+            workspace_write_writable_roots=workspace_write_writable_roots,
         )
         return self._run_and_parse(command, cwd=cwd)
 
@@ -46,11 +48,13 @@ class SubprocessCodexRunner:
         prompt: str,
         cwd: str,
         sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
     ) -> CodexRunResult:
         command = build_resume_command(
             session_id=session_id,
             prompt=prompt,
             sandbox_mode=sandbox_mode or self._sandbox_mode,
+            workspace_write_writable_roots=workspace_write_writable_roots,
         )
         return self._run_and_parse(command, cwd=cwd)
 
@@ -88,10 +92,21 @@ def build_new_session_command(
     cwd: str,
     additional_roots: List[str],
     sandbox_mode: Optional[str] = None,
+    workspace_write_writable_roots: Optional[List[str]] = None,
 ) -> List[str]:
     command = ["codex", "exec", "--json", "--skip-git-repo-check"]
     if sandbox_mode:
         command.extend(["--sandbox", sandbox_mode])
+    if workspace_write_writable_roots is not None:
+        command.extend(
+            [
+                "-c",
+                _array_config_override(
+                    "sandbox_workspace_write.writable_roots",
+                    workspace_write_writable_roots,
+                ),
+            ]
+        )
     command.extend(["--cd", cwd])
     for root in additional_roots:
         command.extend(["--add-dir", root])
@@ -103,9 +118,21 @@ def build_resume_command(
     session_id: str,
     prompt: str,
     sandbox_mode: Optional[str] = None,
+    workspace_write_writable_roots: Optional[List[str]] = None,
 ) -> List[str]:
-    del sandbox_mode
     command = ["codex", "exec", "resume", "--json", "--skip-git-repo-check"]
+    if sandbox_mode:
+        command.extend(["-c", _string_config_override("sandbox_mode", sandbox_mode)])
+    if workspace_write_writable_roots is not None:
+        command.extend(
+            [
+                "-c",
+                _array_config_override(
+                    "sandbox_workspace_write.writable_roots",
+                    workspace_write_writable_roots,
+                ),
+            ]
+        )
     command.extend([session_id, prompt])
     return command
 
@@ -188,3 +215,12 @@ def _extract_output_text(content: object) -> Optional[str]:
 
     final_text = "\n".join(texts).strip()
     return final_text or None
+
+
+def _string_config_override(key: str, value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return '{0}="{1}"'.format(key, escaped)
+
+
+def _array_config_override(key: str, values: List[str]) -> str:
+    return "{0}={1}".format(key, json.dumps(values))

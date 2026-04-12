@@ -101,6 +101,7 @@ class FakeCodexRunner:
         cwd: str,
         additional_roots: List[str],
         sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
     ) -> CodexRunResult:
         if self.new_session_error is not None:
             raise self.new_session_error
@@ -110,6 +111,11 @@ class FakeCodexRunner:
                 "cwd": cwd,
                 "additional_roots": list(additional_roots),
                 "sandbox_mode": sandbox_mode,
+                "workspace_write_writable_roots": (
+                    list(workspace_write_writable_roots)
+                    if workspace_write_writable_roots is not None
+                    else None
+                ),
             }
         )
         return self.next_result
@@ -120,6 +126,7 @@ class FakeCodexRunner:
         prompt: str,
         cwd: str,
         sandbox_mode: Optional[str] = None,
+        workspace_write_writable_roots: Optional[List[str]] = None,
     ) -> CodexRunResult:
         if self.resume_error is not None:
             raise self.resume_error
@@ -129,6 +136,11 @@ class FakeCodexRunner:
                 "prompt": prompt,
                 "cwd": cwd,
                 "sandbox_mode": sandbox_mode,
+                "workspace_write_writable_roots": (
+                    list(workspace_write_writable_roots)
+                    if workspace_write_writable_roots is not None
+                    else None
+                ),
             }
         )
         if self.next_resume_result is not None:
@@ -159,6 +171,7 @@ def fake_environment(tmp_path):
                         persistent_memory_mode="owner_only",
                         persistent_memory_owner="yifanche",
                         effective_default_cwd=str(tmp_path),
+                        effective_additional_roots=[str(tmp_path / "roots")],
                         effective_accept_root_bob_requests=True,
                     )
                 ],
@@ -193,6 +206,7 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
     assert runner.new_session_calls[0]["sandbox_mode"] is None
+    assert runner.new_session_calls[0]["workspace_write_writable_roots"] is None
 
 
 def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_environment):
@@ -236,6 +250,31 @@ def test_new_root_message_passes_channel_sandbox_mode_to_runner(fake_environment
     )
 
     assert runner.new_session_calls[0]["sandbox_mode"] == "danger-full-access"
+
+
+def test_new_root_message_passes_channel_workspace_write_writable_roots_to_runner(fake_environment):
+    orchestrator, _browser, _store, runner = fake_environment
+    channel = orchestrator.config.workspaces[0].channels[0]
+    channel.effective_codex_sandbox_mode = "workspace-write"
+    channel.effective_codex_workspace_write_writable_roots = [
+        "/Users/yifanche/workspace",
+        "/Users/yifanche/scratch",
+        "/tmp",
+    ]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, hi there",
+    )
+
+    assert runner.new_session_calls[0]["workspace_write_writable_roots"] == [
+        "/Users/yifanche/workspace",
+        "/Users/yifanche/scratch",
+        "/tmp",
+    ]
 
 
 def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_channel(
@@ -1027,6 +1066,7 @@ def test_low_risk_approval_is_auto_approved_without_slack_prompt(fake_environmen
             "prompt": "approve APR-001",
             "cwd": str(store.get_by_thread("oracle", "yifanche-private", "1743461000.000001").cwd),
             "sandbox_mode": None,
+            "workspace_write_writable_roots": None,
         }
     ]
     posts = browser.thread_posts["1743461000.000001"]
@@ -1093,9 +1133,101 @@ def test_approval_accept_resumes_same_session_with_cwd(fake_environment):
             "prompt": "approve APR-001",
             "cwd": "/tmp/project",
             "sandbox_mode": None,
+            "workspace_write_writable_roots": None,
         }
     ]
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Approved answer"
+
+
+def test_approval_accept_preserves_channel_sandbox_mode_on_resume(fake_environment):
+    orchestrator, _browser, store, runner = fake_environment
+    channel = orchestrator.config.workspaces[0].channels[0]
+    channel.effective_codex_sandbox_mode = "danger-full-access"
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_APPROVAL,
+        approval_request_id="APR-001",
+        approval_command_summary="git status -sb",
+    )
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Approved answer",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461050.000001",
+        author_actor_id="U123",
+        text="approve APR-001",
+    )
+
+    assert runner.resume_calls == [
+        {
+            "session_id": "session-123",
+            "prompt": "approve APR-001",
+            "cwd": "/tmp/project",
+            "sandbox_mode": "danger-full-access",
+            "workspace_write_writable_roots": None,
+        }
+    ]
+
+
+def test_approval_accept_preserves_channel_workspace_write_writable_roots_on_resume(fake_environment):
+    orchestrator, _browser, store, runner = fake_environment
+    channel = orchestrator.config.workspaces[0].channels[0]
+    channel.effective_codex_sandbox_mode = "workspace-write"
+    channel.effective_codex_workspace_write_writable_roots = [
+        "/Users/yifanche/workspace",
+        "/Users/yifanche/scratch",
+        "/tmp",
+    ]
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_APPROVAL,
+        approval_request_id="APR-001",
+        approval_command_summary="git status -sb",
+    )
+    runner.next_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Approved answer",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461050.000001",
+        author_actor_id="U123",
+        text="approve APR-001",
+    )
+
+    assert runner.resume_calls == [
+        {
+            "session_id": "session-123",
+            "prompt": "approve APR-001",
+            "cwd": "/tmp/project",
+            "sandbox_mode": "workspace-write",
+            "workspace_write_writable_roots": [
+                "/Users/yifanche/workspace",
+                "/Users/yifanche/scratch",
+                "/tmp",
+            ],
+        }
+    ]
 
 
 def test_deny_and_cancel_have_distinct_audit_messages(fake_environment):

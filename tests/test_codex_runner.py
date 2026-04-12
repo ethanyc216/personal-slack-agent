@@ -59,6 +59,53 @@ def test_build_commands_include_explicit_sandbox_mode_when_requested():
         "resume",
         "--json",
         "--skip-git-repo-check",
+        "-c",
+        'sandbox_mode="danger-full-access"',
+        "session-123",
+        "Continue with the fix",
+    ]
+
+
+def test_build_commands_include_workspace_write_writable_roots_override_when_requested():
+    roots = ["/Users/yifanche/workspace", "/Users/yifanche/scratch", "/tmp"]
+
+    new_command = build_new_session_command(
+        prompt="Bob, hi there",
+        cwd="/Users/yifanche/Code/OHAI/ctdm",
+        additional_roots=[],
+        sandbox_mode="workspace-write",
+        workspace_write_writable_roots=roots,
+    )
+    resume_command = build_resume_command(
+        session_id="session-123",
+        prompt="Continue with the fix",
+        sandbox_mode="workspace-write",
+        workspace_write_writable_roots=roots,
+    )
+
+    assert new_command == [
+        "codex",
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        'sandbox_workspace_write.writable_roots=["/Users/yifanche/workspace", "/Users/yifanche/scratch", "/tmp"]',
+        "--cd",
+        "/Users/yifanche/Code/OHAI/ctdm",
+        "Bob, hi there",
+    ]
+    assert resume_command == [
+        "codex",
+        "exec",
+        "resume",
+        "--json",
+        "--skip-git-repo-check",
+        "-c",
+        'sandbox_mode="workspace-write"',
+        "-c",
+        'sandbox_workspace_write.writable_roots=["/Users/yifanche/workspace", "/Users/yifanche/scratch", "/tmp"]',
         "session-123",
         "Continue with the fix",
     ]
@@ -323,6 +370,51 @@ def test_subprocess_codex_runner_uses_configured_sandbox_mode(monkeypatch):
         "resume",
         "--json",
         "--skip-git-repo-check",
+        "-c",
+        'sandbox_mode="danger-full-access"',
+        "session-123",
+        "continue",
+    ]]
+
+
+def test_subprocess_codex_runner_includes_workspace_write_writable_roots(monkeypatch):
+    calls = []
+
+    def fake_run(command, check, capture_output, text, cwd, env):
+        calls.append(command)
+
+        class CompletedProcess:
+            returncode = 0
+            stdout = '{"type":"session_meta","payload":{"id":"session-123"}}\n'
+            stderr = ""
+
+        return CompletedProcess()
+
+    monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.run", fake_run)
+    runner = SubprocessCodexRunner(sandbox_mode="workspace-write")
+
+    result = runner.resume_session(
+        "session-123",
+        "continue",
+        "/tmp/project",
+        workspace_write_writable_roots=[
+            "/Users/yifanche/workspace",
+            "/Users/yifanche/scratch",
+            "/tmp",
+        ],
+    )
+
+    assert result.session_id == "session-123"
+    assert calls == [[
+        "codex",
+        "exec",
+        "resume",
+        "--json",
+        "--skip-git-repo-check",
+        "-c",
+        'sandbox_mode="workspace-write"',
+        "-c",
+        'sandbox_workspace_write.writable_roots=["/Users/yifanche/workspace", "/Users/yifanche/scratch", "/tmp"]',
         "session-123",
         "continue",
     ]]
