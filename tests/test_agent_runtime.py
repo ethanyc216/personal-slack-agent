@@ -1,4 +1,6 @@
 from dataclasses import asdict
+import json
+import sqlite3
 
 from personal_slack_agent.cli import agent as agent_module
 from personal_slack_agent.cli.agent import run_once
@@ -178,6 +180,1132 @@ def test_prepare_bob_codex_home_replaces_existing_real_skill_directory_with_syml
     assert (bob_home / "skills" / "cds-ops-skill" / "SKILL.md").read_text(
         encoding="utf-8"
     ) == "Use when doing CDS ops.\n"
+
+
+def test_prepare_bob_codex_home_rewrites_migrated_runtime_paths(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    old_home = "/private/tmp/personal-slack-agent/custom-bob-home"
+    shell_snapshot = bob_home / "shell_snapshots" / "snapshot.sh"
+    shell_snapshot.parent.mkdir(parents=True, exist_ok=True)
+    shell_snapshot.write_text(
+        "\n".join(
+            [
+                "export CODEX_HOME={0}".format(old_home),
+                "export HOME=/tmp/personal-slack-agent-smoke",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    history = bob_home / "history.jsonl"
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text(
+        '{"rollout_path":"%s/sessions/2026/04/12/example.jsonl"}\n' % old_home,
+        encoding="utf-8",
+    )
+
+    state_db = bob_home / "state_5.sqlite"
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE agent_jobs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                instruction TEXT NOT NULL,
+                output_schema_json TEXT,
+                input_headers_json TEXT NOT NULL,
+                input_csv_path TEXT NOT NULL,
+                output_csv_path TEXT NOT NULL,
+                auto_export INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                started_at INTEGER,
+                completed_at INTEGER,
+                last_error TEXT,
+                max_runtime_seconds INTEGER
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                old_home + "/sessions/2026/04/12/example.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories"]}' % old_home,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO agent_jobs (
+                id, name, status, instruction, input_headers_json,
+                input_csv_path, output_csv_path, created_at, updated_at
+            ) VALUES (?, 'job', 'queued', 'instruction', '{}', ?, ?, 0, 0)
+            """,
+            (
+                "job-1",
+                old_home + "/tmp/input.csv",
+                old_home + "/tmp/output.csv",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    assert prepared == bob_home
+    expected_home = str(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        rollout_path, sandbox_policy = connection.execute(
+            "SELECT rollout_path, sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()
+        input_csv_path, output_csv_path = connection.execute(
+            "SELECT input_csv_path, output_csv_path FROM agent_jobs WHERE id = 'job-1'"
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert rollout_path == expected_home + "/sessions/2026/04/12/example.jsonl"
+    assert sandbox_policy == (
+        '{"type":"workspace-write","writable_roots":["%s/memories"]}' % expected_home
+    )
+    assert input_csv_path == expected_home + "/tmp/input.csv"
+    assert output_csv_path == expected_home + "/tmp/output.csv"
+    assert shell_snapshot.read_text(encoding="utf-8").splitlines()[0] == (
+        "export CODEX_HOME={0}".format(expected_home)
+    )
+    assert expected_home in history.read_text(encoding="utf-8")
+    assert old_home not in history.read_text(encoding="utf-8")
+
+
+def test_prepare_bob_codex_home_rewrites_threads_when_agent_jobs_table_missing(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    old_home = "/private/tmp/personal-slack-agent/custom-bob-home"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                old_home + "/sessions/2026/04/12/example.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories"]}' % old_home,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        rollout_path, sandbox_policy = connection.execute(
+            "SELECT rollout_path, sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert rollout_path == str(bob_home) + "/sessions/2026/04/12/example.jsonl"
+    assert sandbox_policy == (
+        '{"type":"workspace-write","writable_roots":["%s/memories"]}' % bob_home
+    )
+
+
+def test_prepare_bob_codex_home_rewrites_agent_jobs_when_only_agent_jobs_are_stale(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    old_home = "/private/tmp/personal-slack-agent/custom-bob-home"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE agent_jobs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                instruction TEXT NOT NULL,
+                output_schema_json TEXT,
+                input_headers_json TEXT NOT NULL,
+                input_csv_path TEXT NOT NULL,
+                output_csv_path TEXT NOT NULL,
+                auto_export INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                started_at INTEGER,
+                completed_at INTEGER,
+                last_error TEXT,
+                max_runtime_seconds INTEGER
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                str(bob_home) + "/sessions/2026/04/12/example.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories"]}' % bob_home,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO agent_jobs (
+                id, name, status, instruction, input_headers_json,
+                input_csv_path, output_csv_path, created_at, updated_at
+            ) VALUES (?, 'job', 'queued', 'instruction', '{}', ?, ?, 0, 0)
+            """,
+            (
+                "job-1",
+                old_home + "/tmp/input.csv",
+                old_home + "/tmp/output.csv",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        input_csv_path, output_csv_path = connection.execute(
+            "SELECT input_csv_path, output_csv_path FROM agent_jobs WHERE id = 'job-1'"
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert input_csv_path == str(bob_home) + "/tmp/input.csv"
+    assert output_csv_path == str(bob_home) + "/tmp/output.csv"
+
+
+def test_prepare_bob_codex_home_rewrites_threads_without_sandbox_policy_column(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    old_home = "/private/tmp/personal-slack-agent/custom-bob-home"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                approval_mode TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', 'never')
+            """,
+            (
+                "thread-1",
+                old_home + "/sessions/2026/04/12/example.jsonl",
+                str(tmp_path / "repo"),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        rollout_path = connection.execute(
+            "SELECT rollout_path FROM threads WHERE id = 'thread-1'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert rollout_path == str(bob_home) + "/sessions/2026/04/12/example.jsonl"
+
+
+def test_prepare_bob_codex_home_does_not_rewrite_unrelated_memories_root(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    old_home = "/private/tmp/personal-slack-agent/custom-bob-home"
+    unrelated_memories = "/Users/yifanche/workspace/project/memories"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                old_home + "/sessions/2026/04/12/example.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories","%s"]}'
+                % (old_home, unrelated_memories),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        sandbox_policy = connection.execute(
+            "SELECT sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert '{"type":"workspace-write","writable_roots":["%s/memories","%s"]}' % (
+        bob_home,
+        unrelated_memories,
+    ) == sandbox_policy
+
+
+def test_prepare_bob_codex_home_rewrites_sandbox_policy_when_only_sandbox_policy_is_stale(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    old_home = "/private/tmp/personal-slack-agent/custom-bob-home"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                str(bob_home) + "/sessions/2026/04/12/example.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories"]}' % old_home,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        sandbox_policy = connection.execute(
+            "SELECT sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert sandbox_policy == (
+        '{"type":"workspace-write","writable_roots":["%s/memories"]}' % bob_home
+    )
+
+
+def test_prepare_bob_codex_home_does_not_rewrite_session_transcript_text(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    old_home = "/private/tmp/personal-slack-agent/custom-bob-home"
+    session_file = bob_home / "sessions" / "2026" / "04" / "12" / "rollout.jsonl"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    original_line = (
+        '{"type":"message","payload":{"text":"old path %s should remain as transcript text"}}\n'
+        % old_home
+    )
+    session_file.write_text(original_line, encoding="utf-8")
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    assert prepared == bob_home
+    assert session_file.read_text(encoding="utf-8") == original_line
+
+
+def test_prepare_bob_codex_home_handles_mixed_tmp_aliases_without_corrupting_paths(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    old_private_home = "/private/tmp/personal-slack-agent/custom-bob-home"
+    old_tmp_home = "/tmp/personal-slack-agent/custom-bob-home"
+
+    shell_snapshot = bob_home / "shell_snapshots" / "snapshot.sh"
+    shell_snapshot.parent.mkdir(parents=True, exist_ok=True)
+    shell_snapshot.write_text(
+        "export CODEX_HOME={0}\n".format(old_tmp_home),
+        encoding="utf-8",
+    )
+    history = bob_home / "history.jsonl"
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text(
+        '{"rollout_path":"%s/sessions/2026/04/12/example.jsonl"}\n' % old_tmp_home,
+        encoding="utf-8",
+    )
+
+    state_db = bob_home / "state_5.sqlite"
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                old_private_home + "/sessions/2026/04/12/example.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories"]}'
+                % old_private_home,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        rollout_path, sandbox_policy = connection.execute(
+            "SELECT rollout_path, sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert rollout_path == str(bob_home) + "/sessions/2026/04/12/example.jsonl"
+    assert sandbox_policy == (
+        '{"type":"workspace-write","writable_roots":["%s/memories"]}' % bob_home
+    )
+    assert json.loads(history.read_text(encoding="utf-8")) == {
+        "rollout_path": str(bob_home) + "/sessions/2026/04/12/example.jsonl"
+    }
+    assert shell_snapshot.read_text(encoding="utf-8") == (
+        "export CODEX_HOME={0}\n".format(bob_home)
+    )
+
+
+def test_prepare_bob_codex_home_does_not_double_rewrite_current_paths_on_rename(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    old_home = str(tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home")
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home-v2"
+
+    shell_snapshot = bob_home / "shell_snapshots" / "snapshot.sh"
+    shell_snapshot.parent.mkdir(parents=True, exist_ok=True)
+    shell_snapshot.write_text(
+        "export CODEX_HOME={0}\n".format(str(bob_home)),
+        encoding="utf-8",
+    )
+    history = bob_home / "history.jsonl"
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text(
+        '{"rollout_path":"%s/sessions/2026/04/12/current.jsonl"}\n' % bob_home,
+        encoding="utf-8",
+    )
+
+    state_db = bob_home / "state_5.sqlite"
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                old_home + "/sessions/2026/04/12/stale.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories"]}' % old_home,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-2",
+                str(bob_home) + "/sessions/2026/04/12/current.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories"]}' % bob_home,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        stale_path, current_path = connection.execute(
+            "SELECT rollout_path FROM threads ORDER BY id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert stale_path[0] == str(bob_home) + "/sessions/2026/04/12/stale.jsonl"
+    assert current_path[0] == str(bob_home) + "/sessions/2026/04/12/current.jsonl"
+    assert json.loads(history.read_text(encoding="utf-8")) == {
+        "rollout_path": str(bob_home) + "/sessions/2026/04/12/current.jsonl"
+    }
+    assert shell_snapshot.read_text(encoding="utf-8") == (
+        "export CODEX_HOME={0}\n".format(bob_home)
+    )
+
+
+def test_prepare_bob_codex_home_rewrites_renamed_target_when_only_sandbox_policy_is_stale(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    old_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home-v2"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                str(bob_home) + "/sessions/2026/04/12/current.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories"]}' % old_home,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        sandbox_policy = connection.execute(
+            "SELECT sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert sandbox_policy == (
+        '{"type":"workspace-write","writable_roots":["%s/memories"]}' % bob_home
+    )
+
+
+def test_prepare_bob_codex_home_does_not_rewrite_same_parent_sibling_memories_root(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    old_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home-v2"
+    sibling_home = tmp_path / "workspace" / "personal-slack-agent" / "shared-cache"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                str(bob_home) + "/sessions/2026/04/12/current.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories","%s/memories"]}'
+                % (old_home, sibling_home),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        sandbox_policy = connection.execute(
+            "SELECT sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert sandbox_policy == (
+        '{"type":"workspace-write","writable_roots":["%s/memories","%s/memories"]}'
+        % (bob_home, sibling_home)
+    )
+
+
+def test_prepare_bob_codex_home_does_not_rewrite_same_basename_different_parent_memories_root(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    old_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home-v2"
+    unrelated_same_basename = tmp_path / "other-root" / "custom-bob-home"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                str(bob_home) + "/sessions/2026/04/12/current.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories","%s/memories"]}'
+                % (old_home, unrelated_same_basename),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        sandbox_policy = connection.execute(
+            "SELECT sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert sandbox_policy == (
+        '{"type":"workspace-write","writable_roots":["%s/memories","%s/memories"]}'
+        % (bob_home, unrelated_same_basename)
+    )
+
+
+def test_prepare_bob_codex_home_does_not_rewrite_same_parent_prefix_sibling_memories_root(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    old_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
+    bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home-v2"
+    prefix_sibling = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home-archive"
+    state_db = bob_home / "state_5.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
+                git_branch TEXT,
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled',
+                model TEXT,
+                reasoning_effort TEXT,
+                agent_path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+                title, sandbox_policy, approval_mode
+            ) VALUES (?, ?, 0, 0, 'exec', 'oca', ?, 'title', ?, 'never')
+            """,
+            (
+                "thread-1",
+                str(bob_home) + "/sessions/2026/04/12/current.jsonl",
+                str(tmp_path / "repo"),
+                '{"type":"workspace-write","writable_roots":["%s/memories","%s/memories"]}'
+                % (old_home, prefix_sibling),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    prepared = agent_module._prepare_bob_codex_home(bob_home)
+
+    connection = sqlite3.connect(state_db)
+    try:
+        sandbox_policy = connection.execute(
+            "SELECT sandbox_policy FROM threads WHERE id = 'thread-1'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert prepared == bob_home
+    assert sandbox_policy == (
+        '{"type":"workspace-write","writable_roots":["%s/memories","%s/memories"]}'
+        % (bob_home, prefix_sibling)
+    )
 
 
 def test_run_once_uses_configured_bob_codex_home(tmp_path, monkeypatch):

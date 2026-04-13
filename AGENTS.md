@@ -35,6 +35,16 @@ These instructions apply to the `personal_slack_agent` repository.
   - then treat the failed session as a bad per-session Codex bootstrap rather than evidence that Bob is globally broken.
 - In that case, prefer discarding the bad session and retrying in a fresh Bob session before changing Bob config or runtime state again.
 
+- Distinguish `bob_codex_home` migration breakage from Bob-daemon sandbox inheritance:
+  - If Bob `workspace-write` sessions fail immediately with `sandbox-exec: sandbox_apply: Operation not permitted`,
+  - and Bob was started or restarted from inside an already sandboxed Codex session,
+  - then suspect that `bob-agent` inherited the parent session's sandbox and is trying to launch nested sandboxed Codex children.
+- In that situation:
+  1. Restart `bob-agent` from a normal unsandboxed shell or top-level session first.
+  2. Retry the same Bob Slack prompt before changing `bob_codex_home`, writable roots, or sandbox mode.
+  3. Do not treat `/tmp/.../codex-home` versus `/Users/.../codex-home` as proof of a path-location bug until Bob has been relaunched outside the inherited sandbox.
+- A workspace-backed `bob_codex_home` such as `/Users/yifanche/workspace/personal-slack-agent/codex-home` is valid once `bob-agent` is launched normally.
+
 - Distinguish Jira/browser-path failure from global browser availability:
   - If a Bob session can start normally but Chrome DevTools calls such as `new_page`, `navigate_page`, `evaluate_script`, or `take_snapshot` return `user cancelled MCP tool call`,
   - while the same Chrome DevTools Jira navigation works from a normal top-level Codex session,

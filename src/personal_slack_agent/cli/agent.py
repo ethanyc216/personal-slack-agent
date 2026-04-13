@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import shutil
+import sqlite3
 import sys
 import time
 from logging import Logger
@@ -44,6 +47,7 @@ def _prepare_bob_codex_home(target_home: Path) -> Path:
     bob_home = target_home
     bob_home.mkdir(parents=True, exist_ok=True)
     if not source_home.exists():
+        _normalize_bob_codex_home_runtime_paths(bob_home)
         return bob_home
 
     excluded = {
@@ -85,7 +89,425 @@ def _prepare_bob_codex_home(target_home: Path) -> Path:
     if target_hooks.exists() or target_hooks.is_symlink():
         target_hooks.unlink()
 
+    _normalize_bob_codex_home_runtime_paths(bob_home)
     return bob_home
+
+
+_CODEX_HOME_ENV_RE = re.compile(r"(?m)^export CODEX_HOME=(/.+)$")
+
+
+def _normalize_bob_codex_home_runtime_paths(target_home: Path) -> None:
+    current_home = str(target_home)
+    current_variants = _equivalent_codex_home_paths(current_home)
+    stale_homes = sorted(
+        {
+            old_home
+            for old_home in _discover_runtime_codex_homes(target_home)
+            if old_home not in current_variants
+        },
+        key=len,
+        reverse=True,
+    )
+    replacements = {old_home: current_home for old_home in stale_homes}
+    if not replacements:
+        return
+
+    _rewrite_runtime_state_db_paths(target_home / "state_5.sqlite", replacements)
+
+    _rewrite_history_jsonl_paths(target_home / "history.jsonl", replacements)
+    _rewrite_shell_snapshot_paths(target_home / "shell_snapshots", replacements)
+
+
+def _discover_runtime_codex_homes(target_home: Path) -> set[str]:
+    homes = set()
+    homes.update(
+        _discover_codex_homes_from_state_db(
+            state_db=target_home / "state_5.sqlite",
+            target_home=target_home,
+        )
+    )
+    homes.update(_discover_codex_homes_from_text_tree(target_home / "shell_snapshots", "*.sh"))
+    homes.update(_discover_codex_homes_from_text_file(target_home / "history.jsonl"))
+    return homes
+
+
+def _discover_codex_homes_from_state_db(state_db: Path, target_home: Path) -> set[str]:
+    if not state_db.exists():
+        return set()
+
+    try:
+        connection = sqlite3.connect(str(state_db))
+    except sqlite3.DatabaseError:
+        return set()
+
+    homes: set[str] = set()
+    try:
+        tables = _list_sqlite_tables(connection)
+        if "threads" in tables:
+            thread_columns = _list_sqlite_table_columns(connection, "threads")
+            selected_columns = [
+                column for column in ("rollout_path", "sandbox_policy") if column in thread_columns
+            ]
+            if selected_columns:
+                cursor = connection.execute(
+                    "SELECT {0} FROM threads".format(", ".join(selected_columns))
+                )
+                for row in cursor.fetchall():
+                    for column, value in zip(selected_columns, row):
+                        if column == "sandbox_policy":
+                            homes.update(
+                                _extract_codex_home_paths_from_sandbox_policy(
+                                    value, target_home
+                                )
+                            )
+                            continue
+                        homes.update(_extract_codex_home_paths(value))
+        if "agent_jobs" in tables:
+            agent_job_columns = _list_sqlite_table_columns(connection, "agent_jobs")
+            selected_columns = [
+                column for column in ("input_csv_path", "output_csv_path") if column in agent_job_columns
+            ]
+            if selected_columns:
+                cursor = connection.execute(
+                    "SELECT {0} FROM agent_jobs".format(", ".join(selected_columns))
+                )
+                for row in cursor.fetchall():
+                    for value in row:
+                        homes.update(_extract_codex_home_paths_from_temp_path(value))
+    except sqlite3.DatabaseError:
+        return set()
+    finally:
+        connection.close()
+    return homes
+
+
+def _discover_codex_homes_from_text_tree(root: Path, pattern: str) -> set[str]:
+    if not root.exists():
+        return set()
+
+    homes: set[str] = set()
+    for file_path in root.rglob(pattern):
+        homes.update(_discover_codex_homes_from_text_file(file_path))
+    return homes
+
+
+def _discover_codex_homes_from_text_file(file_path: Path) -> set[str]:
+    if not file_path.exists():
+        return set()
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    return _extract_codex_home_paths(text)
+
+
+def _extract_codex_home_paths(text: str | None) -> set[str]:
+    if not text:
+        return set()
+    homes = {match.group(1).strip() for match in _CODEX_HOME_ENV_RE.finditer(text)}
+    homes.update(_extract_codex_home_path_prefixes(text, "/sessions/"))
+    homes.update(_extract_codex_home_path_prefixes(text, "/shell_snapshots/"))
+    return homes
+
+
+def _extract_codex_home_paths_from_sandbox_policy(
+    sandbox_policy: str | None,
+    target_home: Path,
+) -> set[str]:
+    if not sandbox_policy:
+        return set()
+    try:
+        policy = json.loads(sandbox_policy)
+    except json.JSONDecodeError:
+        return set()
+    writable_roots = policy.get("writable_roots")
+    if not isinstance(writable_roots, list):
+        return set()
+
+    homes = set()
+    for root in writable_roots:
+        if not isinstance(root, str) or not root.endswith("/memories"):
+            continue
+        candidate_path = Path(root[: -len("/memories")])
+        if not _is_same_bob_home_family(candidate_path, target_home):
+            continue
+        homes.add(str(candidate_path))
+    return homes
+
+
+def _is_same_bob_home_family(candidate: Path, target_home: Path) -> bool:
+    if candidate.name == target_home.name and (
+        _is_tmp_like_path(candidate) or _is_tmp_like_path(target_home)
+    ):
+        return True
+    if candidate.parent == target_home.parent and target_home.name.startswith(candidate.name):
+        suffix = target_home.name[len(candidate.name):]
+        if suffix and suffix[0] in "-_0123456789":
+            return True
+    return False
+
+
+def _is_tmp_like_path(path: Path) -> bool:
+    raw = str(path)
+    if raw.startswith("/tmp/"):
+        return True
+    if raw.startswith("/private/tmp/"):
+        return True
+    return False
+
+
+def _extract_codex_home_path_prefixes(text: str, suffix: str) -> set[str]:
+    pattern = re.compile(r"(/[^\"'\s]+?)(?={0})".format(re.escape(suffix)))
+    return {match.group(1) for match in pattern.finditer(text)}
+
+
+def _extract_codex_home_paths_from_temp_path(path: str | None) -> set[str]:
+    if not path:
+        return set()
+    homes = set()
+    for marker in ("/.tmp/", "/tmp/"):
+        if marker not in path:
+            continue
+        prefix = path.rsplit(marker, 1)[0]
+        if prefix.startswith("/"):
+            homes.add(prefix)
+    return homes
+
+
+def _list_sqlite_tables(connection: sqlite3.Connection) -> set[str]:
+    cursor = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'"
+    )
+    return {row[0] for row in cursor.fetchall()}
+
+
+def _list_sqlite_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    cursor = connection.execute("PRAGMA table_info({0})".format(table_name))
+    return {row[1] for row in cursor.fetchall()}
+
+
+def _rewrite_runtime_state_db_paths(state_db: Path, replacements: dict[str, str]) -> None:
+    if not state_db.exists() or not replacements:
+        return
+
+    try:
+        connection = sqlite3.connect(str(state_db))
+    except sqlite3.DatabaseError:
+        return
+
+    try:
+        tables = _list_sqlite_tables(connection)
+        if "threads" in tables:
+            thread_columns = tuple(
+                column
+                for column in ("rollout_path", "sandbox_policy")
+                if column in _list_sqlite_table_columns(connection, "threads")
+            )
+            _rewrite_runtime_state_table_paths(
+                connection=connection,
+                table_name="threads",
+                columns=thread_columns,
+                replacements=replacements,
+            )
+        if "agent_jobs" in tables:
+            agent_job_columns = tuple(
+                column
+                for column in ("input_csv_path", "output_csv_path")
+                if column in _list_sqlite_table_columns(connection, "agent_jobs")
+            )
+            _rewrite_runtime_state_table_paths(
+                connection=connection,
+                table_name="agent_jobs",
+                columns=agent_job_columns,
+                replacements=replacements,
+            )
+    except sqlite3.DatabaseError:
+        return
+    finally:
+        connection.close()
+
+
+def _rewrite_runtime_state_table_paths(
+    connection: sqlite3.Connection,
+    table_name: str,
+    columns: tuple[str, ...],
+    replacements: dict[str, str],
+) -> None:
+    if not columns:
+        return
+    selected_columns = ["rowid", *columns]
+    cursor = connection.execute(
+        "SELECT {0} FROM {1}".format(", ".join(selected_columns), table_name)
+    )
+    for row in cursor.fetchall():
+        rowid = row[0]
+        updated_values = {}
+        for column, value in zip(columns, row[1:]):
+            updated_value = _rewrite_runtime_state_value(
+                column=column,
+                value=value,
+                replacements=replacements,
+            )
+            if updated_value == value:
+                continue
+            updated_values[column] = updated_value
+        if not updated_values:
+            continue
+        assignments = ", ".join("{0} = ?".format(column) for column in updated_values)
+        parameters = [*updated_values.values(), rowid]
+        try:
+            with connection:
+                connection.execute(
+                    "UPDATE {0} SET {1} WHERE rowid = ?".format(table_name, assignments),
+                    parameters,
+                )
+        except sqlite3.DatabaseError:
+            continue
+
+
+def _rewrite_runtime_state_value(
+    column: str,
+    value: str | None,
+    replacements: dict[str, str],
+) -> str | None:
+    if value is None:
+        return None
+    if column == "rollout_path":
+        return _rewrite_path_with_prefix(value, replacements, ("/sessions/",))
+    if column in {"input_csv_path", "output_csv_path"}:
+        return _rewrite_path_with_prefix(value, replacements, ("/tmp/", "/.tmp/"))
+    if column == "sandbox_policy":
+        return _rewrite_sandbox_policy(value, replacements)
+    return value
+
+
+def _rewrite_path_with_prefix(
+    value: str,
+    replacements: dict[str, str],
+    suffixes: tuple[str, ...],
+) -> str:
+    for old_home, new_home in replacements.items():
+        for suffix in suffixes:
+            prefix = old_home + suffix
+            if not value.startswith(prefix):
+                continue
+            return new_home + value[len(old_home):]
+    return value
+
+
+def _rewrite_sandbox_policy(sandbox_policy: str, replacements: dict[str, str]) -> str:
+    try:
+        policy = json.loads(sandbox_policy)
+    except json.JSONDecodeError:
+        return sandbox_policy
+    writable_roots = policy.get("writable_roots")
+    if not isinstance(writable_roots, list):
+        return sandbox_policy
+
+    updated_roots = []
+    changed = False
+    for root in writable_roots:
+        if not isinstance(root, str):
+            updated_roots.append(root)
+            continue
+        updated_root = root
+        for old_home, new_home in replacements.items():
+            if root != old_home + "/memories":
+                continue
+            updated_root = new_home + "/memories"
+            changed = True
+            break
+        updated_roots.append(updated_root)
+    if not changed:
+        return sandbox_policy
+    policy["writable_roots"] = updated_roots
+    return json.dumps(policy, separators=(",", ":"))
+
+
+def _rewrite_history_jsonl_paths(file_path: Path, replacements: dict[str, str]) -> None:
+    if not file_path.exists() or not replacements:
+        return
+    try:
+        original = file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+
+    updated_lines = []
+    changed = False
+    for line in original.splitlines(keepends=True):
+        stripped = line.rstrip("\n")
+        if not stripped:
+            updated_lines.append(line)
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            updated_lines.append(line)
+            continue
+        if isinstance(payload, dict):
+            rollout_path = payload.get("rollout_path")
+            if isinstance(rollout_path, str):
+                new_rollout_path = _rewrite_path_with_prefix(
+                    rollout_path,
+                    replacements,
+                    ("/sessions/",),
+                )
+                if new_rollout_path != rollout_path:
+                    payload["rollout_path"] = new_rollout_path
+                    changed = True
+                    updated_lines.append(json.dumps(payload, separators=(",", ":")) + "\n")
+                    continue
+        updated_lines.append(line)
+
+    if not changed:
+        return
+
+    file_path.write_text("".join(updated_lines), encoding="utf-8")
+
+
+def _rewrite_shell_snapshot_paths(root: Path, replacements: dict[str, str]) -> None:
+    if not root.exists() or not replacements:
+        return
+    for file_path in root.rglob("*.sh"):
+        try:
+            original = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        updated_lines = []
+        changed = False
+        for line in original.splitlines(keepends=True):
+            if line.startswith("export CODEX_HOME="):
+                current_home = line[len("export CODEX_HOME="):].rstrip("\n")
+                updated_home = current_home
+                for old_home, new_home in replacements.items():
+                    if current_home != old_home:
+                        continue
+                    updated_home = new_home
+                    break
+                updated_line = "export CODEX_HOME={0}\n".format(updated_home)
+                if updated_line != line:
+                    changed = True
+                updated_lines.append(updated_line)
+                continue
+            updated_lines.append(line)
+        if not changed:
+            continue
+        file_path.write_text("".join(updated_lines), encoding="utf-8")
+
+
+def _equivalent_codex_home_paths(path: str) -> set[str]:
+    variants = {path}
+    try:
+        resolved = str(Path(path).resolve())
+    except OSError:
+        resolved = path
+    variants.add(resolved)
+    for variant in list(variants):
+        if variant.startswith("/private/tmp/"):
+            variants.add(variant[len("/private"):])
+        if variant.startswith("/tmp/"):
+            variants.add("/private" + variant)
+    return variants
 
 
 def _workspace_team_id(workspace_url: str) -> str | None:
