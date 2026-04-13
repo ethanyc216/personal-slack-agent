@@ -366,7 +366,7 @@ def test_watcher_backs_off_workspace_after_ratelimited_thread_reply_call(tmp_pat
     assert orchestrator.reply_calls == []
 
 
-def test_watcher_skips_stale_closed_threads_during_periodic_reconcile(tmp_path):
+def test_watcher_reconciles_recent_reply_even_when_old_tracked_thread_rate_limits(tmp_path):
     from personal_slack_agent.slack.watcher import SlackWatcher
 
     state = BobStateStore(tmp_path / "bob.sqlite3")
@@ -428,7 +428,10 @@ def test_watcher_skips_stale_closed_threads_during_periodic_reconcile(tmp_path):
 
     watcher.run_cycle()
 
-    assert ("oracle", "yifanche-private", "10.0", None, 200) not in browser.thread_reply_calls
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "11.0", None, 200),
+        ("oracle", "yifanche-private", "10.0", None, 200),
+    ]
     assert orchestrator.reply_calls == [
         {
             "workspace_name": "oracle",
@@ -501,6 +504,171 @@ def test_watcher_spaces_terminal_thread_reconcile_across_cycles(tmp_path):
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
         ("oracle", "yifanche-private", "12.0", None, 200)
+    ]
+
+
+def test_watcher_eventually_reconciles_old_tracked_terminal_threads(tmp_path, monkeypatch):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    now_epoch = 2_000_000
+    monotonic_now = 10_000.0
+    monkeypatch.setattr("personal_slack_agent.slack.watcher.time.time", lambda: now_epoch)
+    monkeypatch.setattr(
+        "personal_slack_agent.slack.watcher.time.monotonic", lambda: monotonic_now
+    )
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    for index, updated_at in (
+        (10, now_epoch - 10),
+        (11, now_epoch - 20),
+        (12, now_epoch - 30),
+        (13, now_epoch - 40),
+        (14, now_epoch - 50),
+        (15, now_epoch - 60),
+        (16, now_epoch - 4_000),
+        (17, now_epoch - 5_000),
+    ):
+        state.upsert_session(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="{0}.0".format(index),
+            root_ts="{0}.0".format(index),
+            codex_session_id="session-{0}".format(index),
+            cwd=str(tmp_path),
+            owner_actor_id="U123",
+            status=SessionStatus.CLOSED_IDLE,
+        )
+        with state._connect() as connection:
+            connection.execute(
+                """
+                UPDATE sessions
+                SET updated_at = ?, created_at = ?
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                """,
+                (
+                    updated_at,
+                    updated_at,
+                    "oracle",
+                    "yifanche-private",
+                    "{0}.0".format(index),
+                ),
+            )
+
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "10.0", None, 200),
+        ("oracle", "yifanche-private", "16.0", None, 200),
+    ]
+
+    browser.thread_reply_calls.clear()
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "11.0", None, 200),
+    ]
+
+    monotonic_now += 60.0
+    browser.thread_reply_calls.clear()
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "12.0", None, 200),
+        ("oracle", "yifanche-private", "17.0", None, 200),
+    ]
+
+
+def test_watcher_historical_sweep_backs_off_after_rate_limit(tmp_path, monkeypatch):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    now_epoch = 2_000_000
+    monotonic_now = 10_000.0
+    monkeypatch.setattr("personal_slack_agent.slack.watcher.time.time", lambda: now_epoch)
+    monkeypatch.setattr(
+        "personal_slack_agent.slack.watcher.time.monotonic", lambda: monotonic_now
+    )
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    for index, updated_at in (
+        (10, now_epoch - 10),
+        (11, now_epoch - 20),
+        (12, now_epoch - 30),
+        (13, now_epoch - 40),
+        (14, now_epoch - 50),
+        (15, now_epoch - 60),
+        (16, now_epoch - 4_000),
+    ):
+        state.upsert_session(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="{0}.0".format(index),
+            root_ts="{0}.0".format(index),
+            codex_session_id="session-{0}".format(index),
+            cwd=str(tmp_path),
+            owner_actor_id="U123",
+            status=SessionStatus.CLOSED_IDLE,
+        )
+        with state._connect() as connection:
+            connection.execute(
+                """
+                UPDATE sessions
+                SET updated_at = ?, created_at = ?
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                """,
+                (
+                    updated_at,
+                    updated_at,
+                    "oracle",
+                    "yifanche-private",
+                    "{0}.0".format(index),
+                ),
+            )
+
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.thread_reply_errors[("oracle", "yifanche-private", "16.0")] = RuntimeError(
+        "Slack API conversations.replies failed: ratelimited"
+    )
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "10.0", None, 200),
+        ("oracle", "yifanche-private", "16.0", None, 200),
+    ]
+
+    monotonic_now += 60.0
+    browser.thread_reply_calls.clear()
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "11.0", None, 200),
+    ]
+
+    monotonic_now += 60.0
+    browser.thread_reply_calls.clear()
+    watcher.run_cycle()
+    assert browser.thread_reply_calls == [
+        ("oracle", "yifanche-private", "12.0", None, 200),
+        ("oracle", "yifanche-private", "16.0", None, 200),
     ]
 
 

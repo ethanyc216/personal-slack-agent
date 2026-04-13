@@ -19,6 +19,8 @@ class SlackWatcher:
     _RECENT_TERMINAL_THREAD_RECONCILE_WINDOW_SECONDS = 60 * 60
     _RECENT_TERMINAL_THREAD_RECONCILE_LIMIT = 6
     _PERIODIC_TERMINAL_THREAD_RECONCILE_BATCH_SIZE = 1
+    _HISTORICAL_TERMINAL_THREAD_RECONCILE_BASE_INTERVAL_SECONDS = 60.0
+    _HISTORICAL_TERMINAL_THREAD_RECONCILE_MAX_INTERVAL_SECONDS = 15 * 60.0
     _TERMINAL_SESSION_STATUSES = frozenset(
         (
             SessionStatus.CLOSED_IDLE,
@@ -49,6 +51,9 @@ class SlackWatcher:
         self._threads_pending_reconcile: Set[Tuple[str, str, str]] = set()
         self._thread_reply_backoff_until: Dict[str, float] = {}
         self._terminal_reconcile_cursor: Dict[Tuple[str, str], int] = {}
+        self._historical_reconcile_cursor: Dict[str, int] = {}
+        self._historical_reconcile_due_at: Dict[str, float] = {}
+        self._historical_reconcile_interval_seconds: Dict[str, float] = {}
 
     def run_cycle(self) -> None:
         if not self._initialized:
@@ -135,6 +140,16 @@ class SlackWatcher:
                         channel_name=channel.name,
                         thread_ts=session.thread_ts,
                     )
+            historical_session = self._historical_session_for_workspace_periodic_reconcile(
+                workspace_name
+            )
+            if historical_session is not None:
+                self.reconcile_thread_since_cursor(
+                    workspace_name=historical_session.workspace_name,
+                    channel_name=historical_session.channel_name,
+                    thread_ts=historical_session.thread_ts,
+                    historical=True,
+                )
         return reconciled_workspaces
 
     def _process_event_queue(self) -> None:
@@ -171,6 +186,16 @@ class SlackWatcher:
                         channel_name=channel.name,
                         thread_ts=session.thread_ts,
                     )
+            historical_session = self._historical_session_for_workspace_periodic_reconcile(
+                workspace.name
+            )
+            if historical_session is not None:
+                self.reconcile_thread_since_cursor(
+                    workspace_name=historical_session.workspace_name,
+                    channel_name=historical_session.channel_name,
+                    thread_ts=historical_session.thread_ts,
+                    historical=True,
+                )
 
     def handle_event(self, workspace_name: str, event: SlackRealtimeEvent) -> None:
         channel_name = self._channel_name_by_id.get((workspace_name, event.channel_id))
@@ -235,6 +260,7 @@ class SlackWatcher:
         workspace_name: str,
         channel_name: str,
         thread_ts: str,
+        historical: bool = False,
     ) -> None:
         if self._thread_reply_backoff_active(workspace_name):
             return
@@ -262,6 +288,8 @@ class SlackWatcher:
             except RuntimeError as exc:
                 if _is_slack_ratelimited_error(exc):
                     self._record_thread_reply_backoff(workspace_name)
+                    if historical:
+                        self._record_historical_sweep_rate_limit(workspace_name)
                     self._log_warning(
                         "slack replies reconcile rate-limited workspace=%s channel=%s thread=%s",
                         workspace_name,
@@ -271,6 +299,8 @@ class SlackWatcher:
                     return
                 raise
             if not replies:
+                if historical:
+                    self._record_historical_sweep_success(workspace_name)
                 return
             for reply in replies:
                 if not _is_newer_timestamp(reply.message_ts, current_cursor):
@@ -296,6 +326,8 @@ class SlackWatcher:
             )
             current_cursor = latest_reply_ts
             if len(replies) < self._THREAD_BATCH_SIZE:
+                if historical:
+                    self._record_historical_sweep_success(workspace_name)
                 return
 
     def _handle_root_event(
@@ -425,24 +457,68 @@ class SlackWatcher:
             return []
 
         active_sessions = []
-        recent_terminal_sessions = []
-        cutoff = int(time.time()) - self._RECENT_TERMINAL_THREAD_RECONCILE_WINDOW_SECONDS
+        recent_terminal_sessions, _historical_terminal_sessions = self._partition_terminal_sessions(
+            sessions
+        )
         for session in sessions:
-            if session.status in self._TERMINAL_SESSION_STATUSES:
-                if session.updated_at >= cutoff:
-                    recent_terminal_sessions.append(session)
-                continue
-            active_sessions.append(session)
+            if session.status not in self._TERMINAL_SESSION_STATUSES:
+                active_sessions.append(session)
 
-        recent_terminal_sessions.sort(key=lambda item: item.updated_at, reverse=True)
-        recent_terminal_sessions = recent_terminal_sessions[
-            : self._RECENT_TERMINAL_THREAD_RECONCILE_LIMIT
-        ]
         return active_sessions + self._rotate_terminal_sessions(
             workspace_name,
             channel_name,
             recent_terminal_sessions,
         )
+
+    def _historical_session_for_workspace_periodic_reconcile(self, workspace_name: str):
+        if not self._historical_sweep_due(workspace_name):
+            return None
+
+        candidates = []
+        workspace = self._workspace_config(workspace_name)
+        if workspace is None:
+            return None
+        for channel in workspace.channels:
+            sessions = self.state_store.list_sessions(workspace_name, channel.name)
+            _recent_sessions, historical_sessions = self._partition_terminal_sessions(sessions)
+            candidates.extend(historical_sessions)
+
+        if not candidates:
+            self._historical_reconcile_cursor.pop(workspace_name, None)
+            return None
+
+        candidates.sort(key=lambda item: item.updated_at, reverse=True)
+        start = self._historical_reconcile_cursor.get(workspace_name, 0) % len(candidates)
+        selected = candidates[start]
+        self._historical_reconcile_cursor[workspace_name] = (start + 1) % len(candidates)
+        self._schedule_next_historical_sweep(workspace_name)
+        return selected
+
+    def _partition_terminal_sessions(self, sessions):
+        cutoff = int(time.time()) - self._RECENT_TERMINAL_THREAD_RECONCILE_WINDOW_SECONDS
+        terminal_sessions = [
+            session
+            for session in sessions
+            if session.status in self._TERMINAL_SESSION_STATUSES
+        ]
+        terminal_sessions.sort(key=lambda item: item.updated_at, reverse=True)
+        recent_candidates = [
+            session for session in terminal_sessions if session.updated_at >= cutoff
+        ]
+        recent_terminal_sessions = recent_candidates[
+            : self._RECENT_TERMINAL_THREAD_RECONCILE_LIMIT
+        ]
+        recent_keys = {
+            (session.workspace_name, session.channel_name, session.thread_ts)
+            for session in recent_terminal_sessions
+        }
+        historical_terminal_sessions = [
+            session
+            for session in terminal_sessions
+            if (session.workspace_name, session.channel_name, session.thread_ts)
+            not in recent_keys
+        ]
+        return recent_terminal_sessions, historical_terminal_sessions
 
     def _rotate_terminal_sessions(
         self,
@@ -465,6 +541,37 @@ class SlackWatcher:
             start + self._PERIODIC_TERMINAL_THREAD_RECONCILE_BATCH_SIZE
         ) % len(sessions)
         return selected
+
+    def _historical_sweep_due(self, workspace_name: str) -> bool:
+        due_at = self._historical_reconcile_due_at.get(workspace_name)
+        if due_at is None:
+            return True
+        return time.monotonic() >= due_at
+
+    def _schedule_next_historical_sweep(self, workspace_name: str) -> None:
+        interval = self._historical_reconcile_interval_seconds.get(
+            workspace_name,
+            self._HISTORICAL_TERMINAL_THREAD_RECONCILE_BASE_INTERVAL_SECONDS,
+        )
+        self._historical_reconcile_due_at[workspace_name] = time.monotonic() + interval
+
+    def _record_historical_sweep_success(self, workspace_name: str) -> None:
+        self._historical_reconcile_interval_seconds[workspace_name] = (
+            self._HISTORICAL_TERMINAL_THREAD_RECONCILE_BASE_INTERVAL_SECONDS
+        )
+        self._schedule_next_historical_sweep(workspace_name)
+
+    def _record_historical_sweep_rate_limit(self, workspace_name: str) -> None:
+        current = self._historical_reconcile_interval_seconds.get(
+            workspace_name,
+            self._HISTORICAL_TERMINAL_THREAD_RECONCILE_BASE_INTERVAL_SECONDS,
+        )
+        next_interval = min(
+            current * 2.0,
+            self._HISTORICAL_TERMINAL_THREAD_RECONCILE_MAX_INTERVAL_SECONDS,
+        )
+        self._historical_reconcile_interval_seconds[workspace_name] = next_interval
+        self._historical_reconcile_due_at[workspace_name] = time.monotonic() + next_interval
 
     def _log_debug(self, message: str, *args) -> None:
         if self.logger is None:
