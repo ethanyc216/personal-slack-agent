@@ -23,6 +23,7 @@ class DefaultSettings:
     allowed_actor_ids: List[str] = field(default_factory=list)
     max_concurrent_tasks: int = 1
     max_concurrent_per_thread: int = 1
+    codex_exec_timeout_seconds: Optional[float] = 600.0
     bob_codex_home: Optional[str] = None
     codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     codex_sandbox_mode: Optional[str] = None

@@ -49,6 +49,7 @@ class BobOrchestrator:
     _LABEL_QUEUED = "_*Bob queued it :hourglass_flowing_sand::*_"
     _LABEL_INPUT = "_*Bob needs input :exclamation::*_"
     _LABEL_APPROVAL = "_*Bob needs approval :exclamation::*_"
+    _LABEL_TIMED_OUT = "_*Bob timed out :hourglass_flowing_sand::*_"
     _LABEL_DONE = "_*codex Bob :white_check_mark::*_"
     _LABEL_ERROR = "_*Bob hit an error :exclamation::*_"
 
@@ -398,19 +399,41 @@ class BobOrchestrator:
             return
 
         if run_result.failure_text:
-            self._deliver_thread_message(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                intent_key="failure-{0}".format(session_id),
-                text="{0} {1}".format(self._LABEL_ERROR, run_result.failure_text),
-            )
-            self.state_store.update_status(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                status=SessionStatus.FAILED,
-            )
+            if self._is_exec_timeout_failure(run_result.failure_text):
+                self._deliver_thread_message(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    intent_key="timeout-{0}".format(session_id),
+                    text=(
+                        "{0} {1} Reply again in this thread to resume.".format(
+                            self._LABEL_TIMED_OUT,
+                            run_result.failure_text,
+                        )
+                    ),
+                )
+                self.state_store.update_status(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    status=SessionStatus.CLOSED_TIMEOUT,
+                    last_error=run_result.failure_text,
+                )
+            else:
+                self._deliver_thread_message(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    intent_key="failure-{0}".format(session_id),
+                    text="{0} {1}".format(self._LABEL_ERROR, run_result.failure_text),
+                )
+                self.state_store.update_status(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    status=SessionStatus.FAILED,
+                    last_error=run_result.failure_text,
+                )
 
     def _deliver_final_output(
         self,
@@ -1082,6 +1105,9 @@ class BobOrchestrator:
             session_id,
             thread_ts,
         )
+
+    def _is_exec_timeout_failure(self, failure_text: str) -> bool:
+        return failure_text.startswith("codex exec timed out")
 
     def _queued_text(self) -> str:
         return "{0} I will run this after the active task in this thread.".format(

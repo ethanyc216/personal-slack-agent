@@ -674,9 +674,12 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                 if config.defaults.bob_codex_home is not None
                 else paths.state_dir / "codex-home"
             )
-            codex_runner = SubprocessCodexRunner()
+            codex_runner = SubprocessCodexRunner(
+                exec_timeout_seconds=config.defaults.codex_exec_timeout_seconds
+            )
             isolated_codex_runner = SubprocessCodexRunner(
-                env_overrides={"CODEX_HOME": str(bob_codex_home)}
+                env_overrides={"CODEX_HOME": str(bob_codex_home)},
+                exec_timeout_seconds=config.defaults.codex_exec_timeout_seconds,
             )
             orchestrator = BobOrchestrator(
                 browser=browser,

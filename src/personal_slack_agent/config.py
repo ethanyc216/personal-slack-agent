@@ -89,6 +89,13 @@ def dump_config(config: AppConfig) -> str:
             config.defaults.max_concurrent_per_thread
         )
     )
+    if config.defaults.codex_exec_timeout_seconds is not None:
+        timeout = config.defaults.codex_exec_timeout_seconds
+        if float(timeout).is_integer():
+            rendered_timeout = str(int(timeout))
+        else:
+            rendered_timeout = str(timeout)
+        lines.append("codex_exec_timeout_seconds = {0}".format(rendered_timeout))
     if config.defaults.bob_codex_home is not None:
         lines.append('bob_codex_home = "{0}"'.format(_toml_escape(config.defaults.bob_codex_home)))
     lines.append('codex_home_mode = "{0}"'.format(_toml_escape(config.defaults.codex_home_mode)))
@@ -224,6 +231,11 @@ def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
             raw_defaults.get("max_concurrent_per_thread"),
             "defaults.max_concurrent_per_thread",
             default=1,
+        ),
+        codex_exec_timeout_seconds=_optional_positive_float(
+            raw_defaults.get("codex_exec_timeout_seconds"),
+            "defaults.codex_exec_timeout_seconds",
+            default=600.0,
         ),
         bob_codex_home=_optional_path(
             raw_defaults.get("bob_codex_home"),
@@ -450,6 +462,18 @@ def _positive_int(value: Any, field_name: str, default: int) -> int:
     if type(value) is not int or value <= 0:
         raise ConfigError("{0} must be a positive integer.".format(field_name))
     return value
+
+
+def _optional_positive_float(
+    value: Any,
+    field_name: str,
+    default: Optional[float] = None,
+) -> Optional[float]:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ConfigError("{0} must be a positive number.".format(field_name))
+    return float(value)
 
 
 def _optional_https_url(

@@ -449,6 +449,7 @@ class BobStateStore:
         thread_ts: str,
         status: SessionStatus,
         clear_waiting_fields: bool = True,
+        last_error: Optional[str] = None,
     ) -> None:
         with self._connect() as connection:
             now = int(time.time())
@@ -462,23 +463,24 @@ class BobStateStore:
                         approval_command_summary = NULL,
                         reminder_due_at = NULL,
                         auto_close_due_at = NULL,
+                        last_error = ?,
                         updated_at = ?
                     WHERE workspace_name = ?
                       AND channel_name = ?
                       AND thread_ts = ?
                     """,
-                    (status.value, now, workspace_name, channel_name, thread_ts),
+                    (status.value, last_error, now, workspace_name, channel_name, thread_ts),
                 )
             else:
                 connection.execute(
                     """
                     UPDATE sessions
-                    SET status = ?, updated_at = ?
+                    SET status = ?, last_error = ?, updated_at = ?
                     WHERE workspace_name = ?
                       AND channel_name = ?
                       AND thread_ts = ?
                     """,
-                    (status.value, now, workspace_name, channel_name, thread_ts),
+                    (status.value, last_error, now, workspace_name, channel_name, thread_ts),
                 )
 
     def set_waiting_state(

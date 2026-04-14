@@ -1402,7 +1402,9 @@ def test_failed_reply_resumes_same_session(fake_environment):
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Recovered answer"
 
 
-def test_closed_idle_reply_failure_text_marks_session_failed_and_posts_error(fake_environment):
+def test_closed_idle_reply_timeout_marks_session_closed_timeout_and_posts_resume_hint(
+    fake_environment,
+):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
         workspace_name="oracle",
@@ -1430,9 +1432,48 @@ def test_closed_idle_reply_failure_text_marks_session_failed_and_posts_error(fak
 
     record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
     assert record is not None
-    assert record.status is SessionStatus.FAILED
+    assert record.status is SessionStatus.CLOSED_TIMEOUT
+    assert record.last_error == "codex exec timed out after 600s"
     assert browser.thread_posts["1743461000.000001"][-1] == (
-        "_*Bob hit an error :exclamation::*_ codex exec timed out after 600s"
+        "_*Bob timed out :hourglass_flowing_sand::*_ "
+        "codex exec timed out after 600s Reply again in this thread to resume."
+    )
+
+
+def test_closed_idle_reply_non_timeout_failure_marks_session_failed_and_posts_error(
+    fake_environment,
+):
+    orchestrator, browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="session-123",
+        failure_text="Command failed with exit code 1",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        message_ts="1743461021.000001",
+        author_actor_id="U123",
+        text="Try again",
+    )
+
+    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.FAILED
+    assert record.last_error == "Command failed with exit code 1"
+    assert browser.thread_posts["1743461000.000001"][-1] == (
+        "_*Bob hit an error :exclamation::*_ Command failed with exit code 1"
     )
 
 

@@ -124,6 +124,26 @@ def test_defaults_include_codex_sandbox_mode_when_configured(tmp_path):
     assert config.defaults.codex_sandbox_mode == "danger-full-access"
 
 
+def test_defaults_include_codex_exec_timeout_seconds_when_configured(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "codex-exec-timeout.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_exec_timeout_seconds = 1200
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.codex_exec_timeout_seconds == 1200.0
+
+
 def test_defaults_include_workspace_write_writable_roots_when_configured(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
@@ -879,3 +899,27 @@ def test_dump_config_round_trips_workspace_api_fields(tmp_path):
 
     assert reloaded.workspaces[0].slack_api_origin == "https://example.enterprise.slack.com"
     assert reloaded.workspaces[0].slack_api_token == "xoxc-demo-token"
+
+
+def test_dump_config_round_trips_codex_exec_timeout_seconds(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "codex-exec-timeout-roundtrip.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        codex_exec_timeout_seconds = 900
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+    rendered = dump_config(loaded)
+    rewritten = tmp_path / "rewritten-timeout.toml"
+    rewritten.write_text(rendered, encoding="utf-8")
+    reloaded = load_config(rewritten)
+
+    assert reloaded.defaults.codex_exec_timeout_seconds == 900.0

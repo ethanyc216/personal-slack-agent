@@ -134,6 +134,89 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
     assert calls["runner_kwargs"]["env_overrides"]["CODEX_HOME"].endswith("/codex-home")
 
 
+def test_run_once_passes_configured_codex_exec_timeout_to_runners(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "bob.toml"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(workspace_root),
+                'allowed_actor_ids = ["U123"]',
+                'browser_mode = "shared_browser"',
+                "codex_exec_timeout_seconds = 1200",
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'allowed_actor_ids = ["U123"]',
+                'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-private"',
+                'persistent_memory_mode = "owner_only"',
+                'persistent_memory_owner = "yifanche"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {"runner_kwargs": []}
+
+    class FakeBrowser:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def set_workspace_urls(self, workspace_urls):
+            return None
+
+        def set_workspace_api_contexts(self, workspace_api_contexts):
+            return None
+
+        def set_channel_urls(self, channel_urls):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            calls["runner_kwargs"].append(kwargs)
+
+    class FakeOrchestrator:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def process_scheduled_actions(self):
+            return None
+
+    class FakeWatcher:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run_cycle(self):
+            return None
+
+    monkeypatch.setattr(agent_module, "PlaywrightSlackAdapter", FakeBrowser)
+    monkeypatch.setattr(agent_module, "SubprocessCodexRunner", FakeRunner)
+    monkeypatch.setattr(agent_module, "BobOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(agent_module, "SlackWatcher", FakeWatcher)
+
+    exit_code = run_once(config_file)
+
+    assert exit_code == 0
+    assert calls["runner_kwargs"] == [
+        {"exec_timeout_seconds": 1200.0},
+        {
+            "env_overrides": {
+                "CODEX_HOME": str((tmp_path / ".local" / "share" / "personal-slack-agent" / "codex-home").resolve())
+            },
+            "exec_timeout_seconds": 1200.0,
+        },
+    ]
+
+
 def test_prepare_bob_codex_home_links_config_without_hooks(tmp_path, monkeypatch):
     home = tmp_path / "home"
     codex_home = home / ".codex"
