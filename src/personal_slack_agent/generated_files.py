@@ -60,8 +60,8 @@ def extract_generated_files(final_output: str) -> Tuple[str, List[GeneratedFile]
     return summary, files
 
 
-_SLACK_CODE_FENCE_LANGUAGE_PATTERN = re.compile(r"(?m)^```[^\n`]+\n")
+_SLACK_CODE_FENCE_LANGUAGE_PATTERN = re.compile(r"(?m)^([ \t]*)```[^\n`]+\n")
 
 
 def normalize_slack_markdown(text: str) -> str:
-    return _SLACK_CODE_FENCE_LANGUAGE_PATTERN.sub("```\n", text)
+    return _SLACK_CODE_FENCE_LANGUAGE_PATTERN.sub(r"\1```\n", text)

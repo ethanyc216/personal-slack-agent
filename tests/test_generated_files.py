@@ -1,4 +1,4 @@
-from personal_slack_agent.generated_files import extract_generated_files
+from personal_slack_agent.generated_files import extract_generated_files, normalize_slack_markdown
 
 
 def test_extract_generated_files_splits_summary_and_files():
@@ -59,3 +59,37 @@ step two
         ("skills/shepherd/SKILL.md", "# Shepherd Deploy\nUse this skill."),
         ("skills/shepherd/checklist.txt", "step one\nstep two"),
     ]
+
+
+def test_normalize_slack_markdown_strips_fence_language():
+    text = """
+Before
+```text
+https://confluence.oraclecorp.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
+```
+After
+""".strip()
+
+    assert normalize_slack_markdown(text) == """
+Before
+```
+https://confluence.oraclecorp.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
+```
+After
+""".strip()
+
+
+def test_normalize_slack_markdown_strips_indented_fence_language():
+    text = """
+Here:
+    ```text
+    https://confluence.oraclecorp.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
+    ```
+""".strip()
+
+    assert normalize_slack_markdown(text) == """
+Here:
+    ```
+    https://confluence.oraclecorp.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
+    ```
+""".strip()
