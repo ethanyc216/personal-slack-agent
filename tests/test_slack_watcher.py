@@ -276,6 +276,56 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
     ]
 
 
+def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    state.upsert_outbound_intent(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="10.0",
+        intent_key="final-session-123",
+        action="post_thread_reply",
+        text="_*codex Bob :white_check_mark::*_ Final answer",
+        delivery_state="pending",
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="10.0",
+            message_ts="9999999999.0",
+            author_actor_id="U123",
+            text="codex Bob :white_check_mark: Final answer",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.reply_calls == []
+    assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") == "9999999999.0"
+
+
 def test_watcher_skips_ratelimited_thread_reconcile_without_aborting_cycle(tmp_path):
     from personal_slack_agent.slack.watcher import SlackWatcher
 

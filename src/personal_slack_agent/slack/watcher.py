@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections import deque
 from logging import Logger
+import re
 import time
 from typing import Deque, Dict, Optional, Set, Tuple
 
+from ..generated_files import normalize_slack_markdown
 from ..models import AppConfig, SessionStatus
 from ..state import BobStateStore
 from .browser import SlackBrowserAdapter, SlackRootMessage, SlackThreadReplyMessage
@@ -275,6 +277,11 @@ class SlackWatcher:
                 thread_ts,
             )
         )
+        pending_outbound_texts = self._pending_outbound_texts_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        )
         current_cursor = cursor
         while True:
             try:
@@ -305,7 +312,12 @@ class SlackWatcher:
             for reply in replies:
                 if not _is_newer_timestamp(reply.message_ts, current_cursor):
                     continue
-                if not _should_route_reply(reply, record.created_at, delivered_timestamps):
+                if not _should_route_reply(
+                    reply,
+                    record.created_at,
+                    delivered_timestamps,
+                    pending_outbound_texts,
+                ):
                     continue
                 self.orchestrator.handle_thread_reply(
                     workspace_name=reply.workspace_name,
@@ -380,7 +392,17 @@ class SlackWatcher:
                 thread_ts,
             )
         )
-        if not _should_route_reply(reply, record.created_at, delivered_timestamps):
+        pending_outbound_texts = self._pending_outbound_texts_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        )
+        if not _should_route_reply(
+            reply,
+            record.created_at,
+            delivered_timestamps,
+            pending_outbound_texts,
+        ):
             self.state_store.upsert_thread_cursor(
                 workspace_name,
                 channel_name,
@@ -440,6 +462,26 @@ class SlackWatcher:
             if reply.message_ts == message_ts:
                 return reply
         return None
+
+    def _pending_outbound_texts_for_thread(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> Set[str]:
+        texts = set()
+        for intent in self.state_store.list_pending_outbound_intents():
+            if (
+                intent.workspace_name != workspace_name
+                or intent.channel_name != channel_name
+                or intent.thread_ts != thread_ts
+                or intent.action != "post_thread_reply"
+            ):
+                continue
+            normalized = _normalize_reply_text(intent.text)
+            if normalized:
+                texts.add(normalized)
+        return texts
 
     def _workspace_config(self, workspace_name: str):
         for workspace in self.config.workspaces:
@@ -616,12 +658,16 @@ def _should_route_reply(
     reply: SlackThreadReplyMessage,
     session_created_at: int,
     delivered_timestamps: Set[str],
+    pending_outbound_texts: Set[str],
 ) -> bool:
-    if not reply.text or not reply.text.strip():
+    normalized_text = _normalize_reply_text(reply.text)
+    if not normalized_text:
         return False
     if reply.message_ts in delivered_timestamps:
         return False
-    if _is_bob_generated_reply_text(reply.text):
+    if normalized_text in pending_outbound_texts:
+        return False
+    if _is_bob_generated_reply_text(normalized_text):
         return False
     if _is_escaped_thread_reply(reply.text):
         return False
@@ -630,10 +676,28 @@ def _should_route_reply(
     except (TypeError, ValueError):
         return False
 
+def _normalize_reply_text(text: str) -> str:
+    normalized = normalize_slack_markdown(text or "").strip()
+    normalized = normalized.lstrip("_*`~> ")
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
 
-def _is_bob_generated_reply_text(text: str) -> bool:
-    normalized = text.strip()
-    return normalized.startswith("_*codex Bob ") or normalized.startswith("_*Bob ")
+
+def _is_bob_generated_reply_text(normalized_text: str) -> bool:
+    lowered = normalized_text.lower()
+    return lowered.startswith(
+        (
+            "codex bob ",
+            "bob is working on it",
+            "bob queued it",
+            "bob needs input",
+            "bob needs approval",
+            "bob timed out",
+            "bob hit an error",
+            "bob denied command request",
+            "bob canceled command request",
+        )
+    )
 
 
 def _is_escaped_thread_reply(text: str) -> bool:

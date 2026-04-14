@@ -1473,7 +1473,7 @@ def test_closed_idle_reply_non_timeout_failure_marks_session_failed_and_posts_er
     assert record.status is SessionStatus.FAILED
     assert record.last_error == "Command failed with exit code 1"
     assert browser.thread_posts["1743461000.000001"][-1] == (
-        "_*Bob hit an error :exclamation::*_ Command failed with exit code 1"
+        "_*Bob hit an error :exclamation::*_ Reply again in this thread to retry."
     )
 
 

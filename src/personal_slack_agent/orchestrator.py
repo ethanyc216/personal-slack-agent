@@ -425,7 +425,7 @@ class BobOrchestrator:
                     channel_name=channel_name,
                     thread_ts=thread_ts,
                     intent_key="failure-{0}".format(session_id),
-                    text="{0} {1}".format(self._LABEL_ERROR, run_result.failure_text),
+                    text=self._failure_text(),
                 )
                 self.state_store.update_status(
                     workspace_name=workspace_name,
@@ -1113,6 +1113,9 @@ class BobOrchestrator:
         return "{0} I will run this after the active task in this thread.".format(
             self._LABEL_QUEUED
         )
+
+    def _failure_text(self) -> str:
+        return "{0} Reply again in this thread to retry.".format(self._LABEL_ERROR)
 
     def _try_ack_message(
         self,
