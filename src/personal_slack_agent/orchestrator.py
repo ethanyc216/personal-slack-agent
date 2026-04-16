@@ -965,8 +965,9 @@ class BobOrchestrator:
         if channel is None:
             return user_text
 
-        owner = channel.persistent_memory_owner or "none"
-        if channel.persistent_memory_mode == "owner_only":
+        effective_mode = channel.effective_persistent_memory_mode or channel.persistent_memory_mode
+        owner = channel.effective_persistent_memory_owner or channel.persistent_memory_owner or "none"
+        if effective_mode == "owner_only":
             memory_rule = (
                 "This Slack channel is allowed to update durable personal preference notes "
                 "for owner `{0}` when the conversation reveals a durable preference or workflow rule."
@@ -1003,7 +1004,7 @@ class BobOrchestrator:
         ).format(
             workspace_name,
             channel_name,
-            channel.persistent_memory_mode,
+            effective_mode,
             owner,
             memory_rule,
             user_text,

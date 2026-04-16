@@ -162,6 +162,46 @@ def test_wrapper_uses_unique_terminal_channel_when_not_explicit(monkeypatch, tmp
     assert wrapper_main(["hello"]) == 0
 
 
+def test_wrapper_uses_workspace_channel_default_terminal_flag_when_not_explicit(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(project_dir),
+                'allowed_actor_ids = ["U123"]',
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                "",
+                "[workspaces.channel_defaults]",
+                "post_terminal_threads_here = true",
+                'persistent_memory_mode = "disabled"',
+                'default_cwd = "{0}"'.format(project_dir),
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-bob"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "personal_slack_agent.cli.wrapper._run_smoke_test",
+        lambda **kwargs: {
+            "thread_ts": "1775718000.000001",
+            "session_id": "session-123",
+            "final_message": "done",
+        },
+    )
+
+    assert wrapper_main(["hello"]) == 0
+
+
 def test_agent_default_config_path_is_expanded(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 

@@ -667,6 +667,35 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
     assert channel.effective_codex_home_mode == "default"
 
 
+def test_channel_memory_policy_can_default_from_workspace_channel_defaults(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "workspace-default-memory-policy.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
+        persistent_memory_mode = "disabled"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    channel = config.workspaces[0].channels[0]
+
+    assert channel.effective_persistent_memory_mode == "disabled"
+
+
 def test_channel_codex_home_mode_override_is_loaded(tmp_path):
     root = tmp_path / "project"
     root.mkdir()

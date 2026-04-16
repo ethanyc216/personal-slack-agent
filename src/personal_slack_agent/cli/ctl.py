@@ -464,11 +464,12 @@ def _build_browser(config: AppConfig) -> PlaywrightSlackAdapter:
         if not team_id:
             continue
         for channel in workspace.channels:
-            if not channel.slack_channel_id:
+            channel_id = channel.effective_slack_channel_id or channel.slack_channel_id
+            if not channel_id:
                 continue
             channel_urls[(workspace.name, channel.name)] = "https://app.slack.com/client/{0}/{1}".format(
                 team_id,
-                channel.slack_channel_id,
+                channel_id,
             )
     browser.set_channel_urls(channel_urls)
     return browser

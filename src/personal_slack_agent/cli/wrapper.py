@@ -64,7 +64,7 @@ def _resolve_terminal_target(config, workspace_name: str | None, channel_name: s
         (workspace.name, channel.name)
         for workspace in config.workspaces
         for channel in workspace.channels
-        if channel.post_terminal_threads_here
+        if channel.effective_post_terminal_threads_here
     ]
     if not candidates:
         raise RuntimeError(

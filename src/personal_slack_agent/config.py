@@ -37,27 +37,60 @@ class ConfigError(ValueError):
 
 
 def apply_channel_defaults(
+    defaults: DefaultSettings,
     channel_defaults: WorkspaceChannelDefaults,
     channel: ChannelConfig,
 ) -> ChannelConfig:
+    channel.effective_allowed_actor_ids = (
+        list(channel.allowed_actor_ids)
+        if channel.allowed_actor_ids is not None
+        else (
+            list(channel_defaults.allowed_actor_ids)
+            if channel_defaults.allowed_actor_ids is not None
+            else list(defaults.allowed_actor_ids)
+        )
+    )
     channel.effective_default_cwd = channel.default_cwd or channel_defaults.default_cwd or ""
     channel.effective_additional_roots = (
         list(channel.additional_roots)
         if channel.additional_roots is not None
-        else list(channel_defaults.additional_roots)
+        else (
+            list(channel_defaults.additional_roots)
+            if channel_defaults.additional_roots is not None
+            else list(defaults.additional_roots)
+        )
     )
     channel.effective_accept_root_bob_requests = (
-        channel_defaults.accept_root_bob_requests
-        if channel.accept_root_bob_requests is None
-        else channel.accept_root_bob_requests
+        channel.accept_root_bob_requests
+        if channel.accept_root_bob_requests is not None
+        else (
+            channel_defaults.accept_root_bob_requests
+            if channel_defaults.accept_root_bob_requests is not None
+            else defaults.accept_root_bob_requests
+        )
+    )
+    channel.effective_post_terminal_threads_here = (
+        channel.post_terminal_threads_here
+        if channel.post_terminal_threads_here is not None
+        else (
+            channel_defaults.post_terminal_threads_here
+            if channel_defaults.post_terminal_threads_here is not None
+            else False
+        )
     )
     channel.effective_codex_home_mode = (
-        channel.codex_home_mode or channel_defaults.codex_home_mode
+        channel.codex_home_mode
+        or channel_defaults.codex_home_mode
+        or defaults.codex_home_mode
     )
     channel.effective_codex_sandbox_mode = (
         channel.codex_sandbox_mode
         if channel.codex_sandbox_mode is not None
-        else channel_defaults.codex_sandbox_mode
+        else (
+            channel_defaults.codex_sandbox_mode
+            if channel_defaults.codex_sandbox_mode is not None
+            else defaults.codex_sandbox_mode
+        )
     )
     channel.effective_codex_workspace_write_writable_roots = (
         list(channel.codex_workspace_write_writable_roots)
@@ -65,8 +98,27 @@ def apply_channel_defaults(
         else (
             list(channel_defaults.codex_workspace_write_writable_roots)
             if channel_defaults.codex_workspace_write_writable_roots is not None
-            else None
+            else (
+                list(defaults.codex_workspace_write_writable_roots)
+                if defaults.codex_workspace_write_writable_roots is not None
+                else None
+            )
         )
+    )
+    channel.effective_persistent_memory_mode = (
+        channel.persistent_memory_mode
+        if channel.persistent_memory_mode is not None
+        else channel_defaults.persistent_memory_mode
+    )
+    channel.effective_persistent_memory_owner = (
+        channel.persistent_memory_owner
+        if channel.persistent_memory_owner is not None
+        else channel_defaults.persistent_memory_owner
+    )
+    channel.effective_slack_channel_id = (
+        channel.slack_channel_id
+        if channel.slack_channel_id is not None
+        else channel_defaults.slack_channel_id
     )
     return channel
 
@@ -279,6 +331,12 @@ def dump_config(config: AppConfig) -> str:
                     "true" if workspace.channel_defaults.accept_root_bob_requests else "false"
                 )
             )
+            if workspace.channel_defaults.post_terminal_threads_here is not None:
+                lines.append(
+                    "post_terminal_threads_here = {0}".format(
+                        "true" if workspace.channel_defaults.post_terminal_threads_here else "false"
+                    )
+                )
             lines.append(
                 'codex_home_mode = "{0}"'.format(
                     _toml_escape(workspace.channel_defaults.codex_home_mode)
@@ -297,6 +355,24 @@ def dump_config(config: AppConfig) -> str:
                             '"{}"'.format(_toml_escape(item))
                             for item in workspace.channel_defaults.codex_workspace_write_writable_roots
                         )
+                    )
+                )
+            if workspace.channel_defaults.persistent_memory_mode is not None:
+                lines.append(
+                    'persistent_memory_mode = "{0}"'.format(
+                        _toml_escape(workspace.channel_defaults.persistent_memory_mode)
+                    )
+                )
+            if workspace.channel_defaults.persistent_memory_owner is not None:
+                lines.append(
+                    'persistent_memory_owner = "{0}"'.format(
+                        _toml_escape(workspace.channel_defaults.persistent_memory_owner)
+                    )
+                )
+            if workspace.channel_defaults.slack_channel_id is not None:
+                lines.append(
+                    'slack_channel_id = "{0}"'.format(
+                        _toml_escape(workspace.channel_defaults.slack_channel_id)
                     )
                 )
         for channel in workspace.channels:
@@ -327,6 +403,12 @@ def dump_config(config: AppConfig) -> str:
                         "true" if channel.accept_root_bob_requests else "false"
                     )
                 )
+            if channel.post_terminal_threads_here is not None:
+                lines.append(
+                    "post_terminal_threads_here = {0}".format(
+                        "true" if channel.post_terminal_threads_here else "false"
+                    )
+                )
             if channel.codex_home_mode is not None:
                 lines.append(
                     'codex_home_mode = "{0}"'.format(_toml_escape(channel.codex_home_mode))
@@ -346,11 +428,12 @@ def dump_config(config: AppConfig) -> str:
                         )
                     )
                 )
-            lines.append(
-                'persistent_memory_mode = "{0}"'.format(
-                    _toml_escape(channel.persistent_memory_mode)
+            if channel.persistent_memory_mode is not None:
+                lines.append(
+                    'persistent_memory_mode = "{0}"'.format(
+                        _toml_escape(channel.persistent_memory_mode)
+                    )
                 )
-            )
             if channel.persistent_memory_owner is not None:
                 lines.append(
                     'persistent_memory_owner = "{0}"'.format(
@@ -361,8 +444,6 @@ def dump_config(config: AppConfig) -> str:
                 lines.append(
                     'slack_channel_id = "{0}"'.format(_toml_escape(channel.slack_channel_id))
                 )
-            if channel.post_terminal_threads_here:
-                lines.append("post_terminal_threads_here = true")
     lines.append("")
     return "\n".join(lines)
 
@@ -619,6 +700,7 @@ def _parse_workspaces(raw_workspaces: Any, defaults: DefaultSettings, base_dir: 
         )
         channels = _parse_channels(
             raw_workspace.get("channels"),
+            defaults=defaults,
             channel_defaults=channel_defaults,
             workspace_index=index,
             base_dir=base_dir,
@@ -648,6 +730,7 @@ def _parse_workspaces(raw_workspaces: Any, defaults: DefaultSettings, base_dir: 
 
 def _parse_channels(
     raw_channels: Any,
+    defaults: DefaultSettings,
     channel_defaults: WorkspaceChannelDefaults,
     workspace_index: int,
     base_dir: Path,
@@ -694,10 +777,13 @@ def _parse_channels(
                 raw_channel.get("accept_root_bob_requests"),
                 "channel.accept_root_bob_requests",
             ),
-            post_terminal_threads_here=_optional_bool(
-                raw_channel.get("post_terminal_threads_here"),
-                "channel.post_terminal_threads_here",
-                default=False,
+            post_terminal_threads_here=(
+                _optional_bool(
+                    raw_channel.get("post_terminal_threads_here"),
+                    "channel.post_terminal_threads_here",
+                )
+                if "post_terminal_threads_here" in raw_channel
+                else None
             ),
             codex_home_mode=_optional_codex_home_mode(
                 raw_channel.get("codex_home_mode"),
@@ -712,20 +798,32 @@ def _parse_channels(
                 "channel.codex_workspace_write_writable_roots",
                 base_dir,
             ),
-            persistent_memory_mode=_persistent_memory_mode(
-                raw_channel.get("persistent_memory_mode"),
-                "channel.persistent_memory_mode",
+            persistent_memory_mode=(
+                _persistent_memory_mode(
+                    raw_channel.get("persistent_memory_mode"),
+                    "channel.persistent_memory_mode",
+                )
+                if "persistent_memory_mode" in raw_channel
+                else None
             ),
-            persistent_memory_owner=_optional_string(
-                raw_channel.get("persistent_memory_owner"),
-                "channel.persistent_memory_owner",
+            persistent_memory_owner=(
+                _optional_string(
+                    raw_channel.get("persistent_memory_owner"),
+                    "channel.persistent_memory_owner",
+                )
+                if "persistent_memory_owner" in raw_channel
+                else None
             ),
-            slack_channel_id=_optional_string(
-                raw_channel.get("slack_channel_id"),
-                "channel.slack_channel_id",
+            slack_channel_id=(
+                _optional_string(
+                    raw_channel.get("slack_channel_id"),
+                    "channel.slack_channel_id",
+                )
+                if "slack_channel_id" in raw_channel
+                else None
             ),
         )
-        resolved = apply_channel_defaults(channel_defaults, channel)
+        resolved = apply_channel_defaults(defaults, channel_defaults, channel)
         if not resolved.effective_default_cwd:
             raise ConfigError(
                 "workspaces[{0}].channels[{1}] must define default_cwd directly or via workspaces.channel_defaults.".format(
@@ -802,6 +900,38 @@ def _parse_workspace_channel_defaults(
                 else None
             )
         ),
+        post_terminal_threads_here=(
+            _optional_bool(
+                raw_channel_defaults.get("post_terminal_threads_here"),
+                "workspaces.channel_defaults.post_terminal_threads_here",
+            )
+            if "post_terminal_threads_here" in raw_channel_defaults
+            else None
+        ),
+        persistent_memory_mode=(
+            _persistent_memory_mode(
+                raw_channel_defaults.get("persistent_memory_mode"),
+                "workspaces.channel_defaults.persistent_memory_mode",
+            )
+            if "persistent_memory_mode" in raw_channel_defaults
+            else None
+        ),
+        persistent_memory_owner=(
+            _optional_string(
+                raw_channel_defaults.get("persistent_memory_owner"),
+                "workspaces.channel_defaults.persistent_memory_owner",
+            )
+            if "persistent_memory_owner" in raw_channel_defaults
+            else None
+        ),
+        slack_channel_id=(
+            _optional_string(
+                raw_channel_defaults.get("slack_channel_id"),
+                "workspaces.channel_defaults.slack_channel_id",
+            )
+            if "slack_channel_id" in raw_channel_defaults
+            else None
+        ),
     )
 
 
@@ -810,11 +940,15 @@ def _has_workspace_channel_defaults(channel_defaults: WorkspaceChannelDefaults) 
         (
             channel_defaults.allowed_actor_ids is not None,
             channel_defaults.default_cwd is not None,
-            bool(channel_defaults.additional_roots),
-            channel_defaults.accept_root_bob_requests is not True,
+            channel_defaults.additional_roots is not None,
+            channel_defaults.accept_root_bob_requests is not None,
+            channel_defaults.post_terminal_threads_here is not None,
             channel_defaults.codex_home_mode != CODEX_HOME_MODE_DEFAULT,
             channel_defaults.codex_sandbox_mode is not None,
             channel_defaults.codex_workspace_write_writable_roots is not None,
+            channel_defaults.persistent_memory_mode is not None,
+            channel_defaults.persistent_memory_owner is not None,
+            channel_defaults.slack_channel_id is not None,
         )
     )
 
@@ -997,15 +1131,17 @@ def _optional_codex_sandbox_mode(value: Any, field_name: str) -> Optional[str]:
 
 
 def _validate_channel_memory_policy(channel: ChannelConfig) -> ChannelConfig:
-    if channel.persistent_memory_mode == PERSISTENT_MEMORY_MODE_OWNER_ONLY:
-        if channel.persistent_memory_owner is None:
+    effective_mode = channel.effective_persistent_memory_mode
+    effective_owner = channel.effective_persistent_memory_owner
+    if effective_mode == PERSISTENT_MEMORY_MODE_OWNER_ONLY:
+        if effective_owner is None:
             raise ConfigError(
                 "channel.persistent_memory_owner is required when "
                 "channel.persistent_memory_mode is owner_only."
             )
         return channel
 
-    if channel.persistent_memory_owner is not None:
+    if effective_owner is not None:
         raise ConfigError(
             "channel.persistent_memory_owner is only allowed when "
             "channel.persistent_memory_mode is owner_only."

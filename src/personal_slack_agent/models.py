@@ -69,11 +69,15 @@ class WatcherSettings:
 class WorkspaceChannelDefaults:
     allowed_actor_ids: Optional[List[str]] = None
     default_cwd: Optional[str] = None
-    additional_roots: List[str] = field(default_factory=list)
-    accept_root_bob_requests: bool = True
+    additional_roots: Optional[List[str]] = None
+    accept_root_bob_requests: Optional[bool] = None
+    post_terminal_threads_here: Optional[bool] = None
     codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     codex_sandbox_mode: Optional[str] = None
     codex_workspace_write_writable_roots: Optional[List[str]] = None
+    persistent_memory_mode: Optional[str] = None
+    persistent_memory_owner: Optional[str] = None
+    slack_channel_id: Optional[str] = None
 
 
 @dataclass
@@ -83,19 +87,24 @@ class ChannelConfig:
     default_cwd: Optional[str] = None
     additional_roots: Optional[List[str]] = None
     accept_root_bob_requests: Optional[bool] = None
-    post_terminal_threads_here: bool = False
+    post_terminal_threads_here: Optional[bool] = None
     codex_home_mode: Optional[str] = None
     codex_sandbox_mode: Optional[str] = None
     codex_workspace_write_writable_roots: Optional[List[str]] = None
-    persistent_memory_mode: str = ""
+    persistent_memory_mode: Optional[str] = None
     persistent_memory_owner: Optional[str] = None
     slack_channel_id: Optional[str] = None
+    effective_allowed_actor_ids: List[str] = field(default_factory=list)
     effective_default_cwd: str = ""
     effective_additional_roots: List[str] = field(default_factory=list)
     effective_accept_root_bob_requests: bool = True
+    effective_post_terminal_threads_here: bool = False
     effective_codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     effective_codex_sandbox_mode: Optional[str] = None
     effective_codex_workspace_write_writable_roots: Optional[List[str]] = None
+    effective_persistent_memory_mode: Optional[str] = None
+    effective_persistent_memory_owner: Optional[str] = None
+    effective_slack_channel_id: Optional[str] = None
 
 
 @dataclass
