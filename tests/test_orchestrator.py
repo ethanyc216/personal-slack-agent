@@ -10,6 +10,7 @@ from personal_slack_agent.models import (
     AppConfig,
     ChannelConfig,
     DefaultSettings,
+    OrchestratorSettings,
     SessionStatus,
     TaskStatus,
     WorkspaceConfig,
@@ -192,7 +193,6 @@ def fake_environment(tmp_path):
         workspaces=[
             WorkspaceConfig(
                 name="oracle",
-                allowed_actor_ids=["U123"],
                 channels=[
                     ChannelConfig(
                         name="yifanche-private",
@@ -494,8 +494,8 @@ def test_waiting_for_input_posts_wait_message_and_saves_wait_state(fake_environm
 
 def test_waiting_for_input_schedules_reminder_and_auto_close(fake_environment):
     orchestrator, _browser, store, runner = fake_environment
-    orchestrator.config.defaults.reminder_minutes = [30]
-    orchestrator.config.defaults.auto_close_minutes = 120
+    orchestrator.config.lifecycle.reminder_minutes = [30]
+    orchestrator.config.lifecycle.auto_close_minutes = 120
     runner.next_result = CodexRunResult(
         session_id="session-123",
         wait_kind="input",
@@ -539,7 +539,7 @@ def test_unauthorized_actor_is_ignored(fake_environment):
 def test_empty_allowed_actor_ids_allows_any_actor(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.defaults.allowed_actor_ids = []
-    orchestrator.config.workspaces[0].allowed_actor_ids = []
+    orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = []
 
     orchestrator.handle_new_root_message(
         workspace_name="oracle",
@@ -552,6 +552,57 @@ def test_empty_allowed_actor_ids_allows_any_actor(fake_environment):
     assert len(runner.new_session_calls) == 1
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
     assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is not None
+
+
+def test_channel_allowed_actor_ids_override_workspace_channel_default_allowed_actor_ids(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = ["U123"]
+    orchestrator.config.workspaces[0].channels[0].allowed_actor_ids = ["U999"]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, hi there",
+    )
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461001.000001",
+        author_actor_id="U999",
+        text="Bob, hi there",
+    )
+
+    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+    assert store.get_by_thread("oracle", "yifanche-private", "1743461001.000001") is not None
+    assert len(runner.new_session_calls) == 1
+    assert browser.thread_posts["1743461001.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
+
+
+def test_workspace_channel_default_allowed_actor_ids_are_used_when_channel_override_missing(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = ["U123"]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461000.000001",
+        author_actor_id="U999",
+        text="Bob, hi there",
+    )
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1743461001.000001",
+        author_actor_id="U123",
+        text="Bob, hi there",
+    )
+
+    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+    assert store.get_by_thread("oracle", "yifanche-private", "1743461001.000001") is not None
+    assert len(runner.new_session_calls) == 1
+    assert browser.thread_posts["1743461001.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
 
 
 def test_duplicate_root_message_is_not_processed_twice(fake_environment):
@@ -793,13 +844,14 @@ def test_process_scheduled_actions_runs_up_to_global_concurrency_limit(tmp_path)
             default_cwd=str(tmp_path),
             additional_roots=[str(tmp_path / "roots")],
             allowed_actor_ids=["U123"],
+        ),
+        orchestrator=OrchestratorSettings(
             max_concurrent_tasks=5,
             max_concurrent_per_thread=1,
         ),
         workspaces=[
             WorkspaceConfig(
                 name="oracle",
-                allowed_actor_ids=["U123"],
                 channels=[
                     ChannelConfig(
                         name="yifanche-private",
@@ -897,13 +949,14 @@ def test_same_thread_tasks_do_not_overlap(tmp_path):
             default_cwd=str(tmp_path),
             additional_roots=[str(tmp_path / "roots")],
             allowed_actor_ids=["U123"],
+        ),
+        orchestrator=OrchestratorSettings(
             max_concurrent_tasks=5,
             max_concurrent_per_thread=1,
         ),
         workspaces=[
             WorkspaceConfig(
                 name="oracle",
-                allowed_actor_ids=["U123"],
                 channels=[
                     ChannelConfig(
                         name="yifanche-private",
@@ -1227,7 +1280,7 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
 def test_closed_idle_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.defaults.allowed_actor_ids = []
-    orchestrator.config.workspaces[0].allowed_actor_ids = []
+    orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = []
     store.upsert_session(
         workspace_name="oracle",
         channel_name="yifanche-private",
@@ -1290,7 +1343,7 @@ def test_waiting_reply_deletes_previous_wait_prompt_before_resuming(fake_environ
 def test_waiting_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.defaults.allowed_actor_ids = []
-    orchestrator.config.workspaces[0].allowed_actor_ids = []
+    orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = []
     store.upsert_session(
         workspace_name="oracle",
         channel_name="yifanche-private",
@@ -1322,7 +1375,7 @@ def test_waiting_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fak
 
 def test_process_due_reminders_posts_reminder_and_schedules_next_one(fake_environment):
     orchestrator, browser, store, _runner = fake_environment
-    orchestrator.config.defaults.reminder_minutes = [30, 60]
+    orchestrator.config.lifecycle.reminder_minutes = [30, 60]
     store.upsert_session(
         workspace_name="oracle",
         channel_name="yifanche-private",

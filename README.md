@@ -83,43 +83,68 @@ docs/setup.md
 
 ```toml
 [defaults]
-default_cwd = "/Users/you/Code"
-additional_roots = ["/Users/you/Code"]
-allowed_actor_ids = ["U12345678"]
-accept_root_bob_requests = true
+
+[browser]
 slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
 browser_mode = "shared_browser"
 browser_url = "http://127.0.0.1:9222"
 cdp_url = "http://127.0.0.1:9222"
 browser_user_data_dir = "/Users/you/.cache/personal-slack-agent/chrome-profile"
+
+[runner]
+codex_exec_timeout_seconds = 600
+
+[lifecycle]
 reminder_minutes = [30]
 auto_close_minutes = 120
 
+[orchestrator]
+max_concurrent_tasks = 1
+max_concurrent_per_thread = 1
+
+[watcher]
+root_batch_size = 50
+thread_batch_size = 200
+thread_reply_rate_limit_backoff_seconds = 60
+recent_terminal_thread_reconcile_limit = 6
+periodic_terminal_thread_reconcile_batch_size = 1
+historical_terminal_thread_reconcile_base_interval_seconds = 60
+historical_terminal_thread_reconcile_max_interval_seconds = 900
+
 [[workspaces]]
 name = "my-workspace"
-allowed_actor_ids = ["U12345678"]
 slack_url = "https://app.slack.com/client/T12345678/C12345678"
 slack_api_origin = "https://example.enterprise.slack.com"
 slack_api_token = "xoxc-..."
 
+[workspaces.channel_defaults]
+allowed_actor_ids = ["U12345678"]
+default_cwd = "/Users/you/Code"
+additional_roots = ["/Users/you/Code"]
+accept_root_bob_requests = true
+codex_home_mode = "default"
+
 [[workspaces.channels]]
 name = "my-private-channel"
-default_cwd = "/Users/you/Code"
-accept_root_bob_requests = true
+allowed_actor_ids = ["U12345678"]
 persistent_memory_mode = "owner_only"
 persistent_memory_owner = "yifanche"
 
 [[workspaces.channels]]
 name = "my-shared-bob-channel"
-default_cwd = "/Users/you/Code"
-accept_root_bob_requests = true
+codex_sandbox_mode = "workspace-write"
 persistent_memory_mode = "disabled"
 ```
 
 ### Important config notes
 
 - `allowed_actor_ids`
-  Only these Slack user IDs may trigger or resume Bob work.
+  At `[workspaces.channel_defaults]`, this defines who may trigger or resume Bob work in that workspace's channels by default.
+  Optionally set it again on `[[workspaces.channels]]` to override that workspace default for one channel.
+
+- `workspaces.channel_defaults`
+  Use this to define the default cwd, roots, Bob acceptance policy, and Codex sandbox/home behavior
+  that should apply to channels in one workspace unless a channel overrides them directly.
 
 - `slack_url`
   This should point to any Slack client URL inside the target workspace.

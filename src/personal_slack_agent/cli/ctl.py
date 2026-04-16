@@ -312,8 +312,8 @@ def main(argv: list[str] | None = None) -> int:
             print("config_error: {0}".format(exc))
             return 0
         print("config_loaded: True")
-        print("cdp_url: {0}".format(config.defaults.cdp_url))
-        print("cdp_reachable: {0}".format(_is_cdp_reachable(config.defaults.cdp_url)))
+        print("cdp_url: {0}".format(config.browser.cdp_url))
+        print("cdp_reachable: {0}".format(_is_cdp_reachable(config.browser.cdp_url)))
         print("workspace_count: {0}".format(len(config.workspaces)))
         channel_names = [
             "{0}:{1}".format(workspace.name, channel.name)
@@ -442,11 +442,11 @@ def _resolve_smoke_target(
 
 def _build_browser(config: AppConfig) -> PlaywrightSlackAdapter:
     browser = PlaywrightSlackAdapter(
-        browser_mode=config.defaults.browser_mode,
-        cdp_url=config.defaults.cdp_url,
-        slack_signin_url=config.defaults.slack_signin_url,
-        chrome_executable_path=config.defaults.chrome_executable_path,
-        browser_user_data_dir=config.defaults.browser_user_data_dir,
+        browser_mode=config.browser.browser_mode,
+        cdp_url=config.browser.cdp_url,
+        slack_signin_url=config.browser.slack_signin_url,
+        chrome_executable_path=config.browser.chrome_executable_path,
+        browser_user_data_dir=config.browser.browser_user_data_dir,
     )
     browser.set_workspace_urls(
         {workspace.name: workspace.slack_url for workspace in config.workspaces if workspace.slack_url}

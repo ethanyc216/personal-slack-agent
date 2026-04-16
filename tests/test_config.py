@@ -4,7 +4,17 @@ from pathlib import Path
 from personal_slack_agent.config import ConfigError, dump_config, load_config
 
 
-def test_defaults_include_slack_signin_url_when_omitted(tmp_path):
+def test_repo_sample_config_loads_successfully():
+    sample_path = Path(__file__).resolve().parents[1] / "config" / "bob.sample.toml"
+
+    config = load_config(sample_path)
+
+    assert config.workspaces
+    assert config.workspaces[0].channel_defaults.default_cwd
+    assert config.workspaces[0].channels
+
+
+def test_browser_settings_use_defaults_when_omitted(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
 
@@ -21,17 +31,17 @@ def test_defaults_include_slack_signin_url_when_omitted(tmp_path):
     config = load_config(config_path)
 
     assert (
-        config.defaults.slack_signin_url
+        config.browser.slack_signin_url
         == "https://slack.com/signin?entry_point=nav_menu#/signin"
     )
-    assert config.defaults.browser_mode == "dedicated_browser"
-    assert config.defaults.browser_url == "http://127.0.0.1:9222"
-    assert config.defaults.cdp_url == "http://127.0.0.1:9222"
-    assert config.defaults.chrome_executable_path is None
-    assert config.defaults.browser_user_data_dir is None
+    assert config.browser.browser_mode == "dedicated_browser"
+    assert config.browser.browser_url == "http://127.0.0.1:9222"
+    assert config.browser.cdp_url == "http://127.0.0.1:9222"
+    assert config.browser.chrome_executable_path is None
+    assert config.browser.browser_user_data_dir is None
 
 
-def test_defaults_include_browser_fields_when_configured(tmp_path):
+def test_browser_settings_load_from_browser_section(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
     user_data_dir = tmp_path / "chrome-profile"
@@ -39,6 +49,39 @@ def test_defaults_include_browser_fields_when_configured(tmp_path):
     chrome_bin.write_text("", encoding="utf-8")
 
     config_path = tmp_path / "browser-config.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [browser]
+        browser_mode = "shared_browser"
+        browser_url = "http://127.0.0.1:9222"
+        cdp_url = "http://127.0.0.1:9223"
+        chrome_executable_path = "{chrome_bin}"
+        browser_user_data_dir = "{user_data_dir}"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.browser.browser_mode == "shared_browser"
+    assert config.browser.browser_url == "http://127.0.0.1:9222"
+    assert config.browser.cdp_url == "http://127.0.0.1:9223"
+    assert config.browser.chrome_executable_path == str(chrome_bin.resolve())
+    assert config.browser.browser_user_data_dir == str(user_data_dir.resolve())
+
+
+def test_browser_settings_fallback_to_legacy_defaults_keys(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    user_data_dir = tmp_path / "chrome-profile"
+    chrome_bin = tmp_path / "chrome"
+    chrome_bin.write_text("", encoding="utf-8")
+
+    config_path = tmp_path / "legacy-browser-config.toml"
     config_path.write_text(
         f"""
         [defaults]
@@ -55,14 +98,14 @@ def test_defaults_include_browser_fields_when_configured(tmp_path):
 
     config = load_config(config_path)
 
-    assert config.defaults.browser_mode == "shared_browser"
-    assert config.defaults.browser_url == "http://127.0.0.1:9222"
-    assert config.defaults.cdp_url == "http://127.0.0.1:9223"
-    assert config.defaults.chrome_executable_path == str(chrome_bin.resolve())
-    assert config.defaults.browser_user_data_dir == str(user_data_dir.resolve())
+    assert config.browser.browser_mode == "shared_browser"
+    assert config.browser.browser_url == "http://127.0.0.1:9222"
+    assert config.browser.cdp_url == "http://127.0.0.1:9223"
+    assert config.browser.chrome_executable_path == str(chrome_bin.resolve())
+    assert config.browser.browser_user_data_dir == str(user_data_dir.resolve())
 
 
-def test_defaults_include_bob_codex_home_when_configured(tmp_path):
+def test_runner_settings_include_bob_codex_home_when_configured(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
     bob_codex_home = tmp_path / "bob-codex-home"
@@ -73,6 +116,8 @@ def test_defaults_include_bob_codex_home_when_configured(tmp_path):
         [defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
+
+        [runner]
         bob_codex_home = "{bob_codex_home}"
         """,
         encoding="utf-8",
@@ -80,7 +125,7 @@ def test_defaults_include_bob_codex_home_when_configured(tmp_path):
 
     config = load_config(config_path)
 
-    assert config.defaults.bob_codex_home == str(bob_codex_home.resolve())
+    assert config.runner.bob_codex_home == str(bob_codex_home.resolve())
     assert config.defaults.codex_home_mode == "default"
 
 
@@ -124,7 +169,7 @@ def test_defaults_include_codex_sandbox_mode_when_configured(tmp_path):
     assert config.defaults.codex_sandbox_mode == "danger-full-access"
 
 
-def test_defaults_include_codex_exec_timeout_seconds_when_configured(tmp_path):
+def test_runner_settings_include_codex_exec_timeout_seconds_when_configured(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
 
@@ -134,6 +179,8 @@ def test_defaults_include_codex_exec_timeout_seconds_when_configured(tmp_path):
         [defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
+
+        [runner]
         codex_exec_timeout_seconds = 1200
         """,
         encoding="utf-8",
@@ -141,7 +188,30 @@ def test_defaults_include_codex_exec_timeout_seconds_when_configured(tmp_path):
 
     config = load_config(config_path)
 
-    assert config.defaults.codex_exec_timeout_seconds == 1200.0
+    assert config.runner.codex_exec_timeout_seconds == 1200.0
+
+
+def test_runner_settings_fallback_to_legacy_defaults_keys(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    bob_codex_home = tmp_path / "bob-codex-home"
+
+    config_path = tmp_path / "legacy-runner.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        bob_codex_home = "{bob_codex_home}"
+        codex_exec_timeout_seconds = 1200
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.runner.bob_codex_home == str(bob_codex_home.resolve())
+    assert config.runner.codex_exec_timeout_seconds == 1200.0
 
 
 def test_defaults_include_workspace_write_writable_roots_when_configured(tmp_path):
@@ -172,7 +242,7 @@ def test_defaults_include_workspace_write_writable_roots_when_configured(tmp_pat
     ]
 
 
-def test_defaults_include_concurrency_settings_when_omitted(tmp_path):
+def test_orchestrator_settings_use_defaults_when_omitted(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
 
@@ -188,11 +258,11 @@ def test_defaults_include_concurrency_settings_when_omitted(tmp_path):
 
     config = load_config(config_path)
 
-    assert config.defaults.max_concurrent_tasks == 1
-    assert config.defaults.max_concurrent_per_thread == 1
+    assert config.orchestrator.max_concurrent_tasks == 1
+    assert config.orchestrator.max_concurrent_per_thread == 1
 
 
-def test_defaults_include_concurrency_settings_when_configured(tmp_path):
+def test_orchestrator_settings_load_from_orchestrator_section(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
 
@@ -202,16 +272,182 @@ def test_defaults_include_concurrency_settings_when_configured(tmp_path):
         [defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
+
+        [orchestrator]
         max_concurrent_tasks = 5
-        max_concurrent_per_thread = 1
+        max_concurrent_per_thread = 2
         """,
         encoding="utf-8",
     )
 
     config = load_config(config_path)
 
-    assert config.defaults.max_concurrent_tasks == 5
-    assert config.defaults.max_concurrent_per_thread == 1
+    assert config.orchestrator.max_concurrent_tasks == 5
+    assert config.orchestrator.max_concurrent_per_thread == 2
+
+
+def test_orchestrator_settings_fallback_to_legacy_defaults_keys(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "legacy-concurrency-values.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        max_concurrent_tasks = 4
+        max_concurrent_per_thread = 2
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.orchestrator.max_concurrent_tasks == 4
+    assert config.orchestrator.max_concurrent_per_thread == 2
+
+
+def test_watcher_settings_load_from_watcher_section(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "watcher-values.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [watcher]
+        root_batch_size = 25
+        thread_batch_size = 125
+        thread_reply_rate_limit_backoff_seconds = 45
+        recent_terminal_thread_reconcile_limit = 8
+        periodic_terminal_thread_reconcile_batch_size = 3
+        historical_terminal_thread_reconcile_base_interval_seconds = 90
+        historical_terminal_thread_reconcile_max_interval_seconds = 1200
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.watcher.root_batch_size == 25
+    assert config.watcher.thread_batch_size == 125
+    assert config.watcher.thread_reply_rate_limit_backoff_seconds == 45.0
+    assert config.watcher.recent_terminal_thread_reconcile_limit == 8
+    assert config.watcher.periodic_terminal_thread_reconcile_batch_size == 3
+    assert config.watcher.historical_terminal_thread_reconcile_base_interval_seconds == 90.0
+    assert config.watcher.historical_terminal_thread_reconcile_max_interval_seconds == 1200.0
+
+
+def test_watcher_settings_fallback_to_legacy_defaults_keys(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "legacy-watcher-values.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        root_batch_size = 40
+        thread_batch_size = 180
+        thread_reply_rate_limit_backoff_seconds = 30
+        recent_terminal_thread_reconcile_limit = 5
+        periodic_terminal_thread_reconcile_batch_size = 2
+        historical_terminal_thread_reconcile_base_interval_seconds = 75
+        historical_terminal_thread_reconcile_max_interval_seconds = 600
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.watcher.root_batch_size == 40
+    assert config.watcher.thread_batch_size == 180
+    assert config.watcher.thread_reply_rate_limit_backoff_seconds == 30.0
+    assert config.watcher.recent_terminal_thread_reconcile_limit == 5
+    assert config.watcher.periodic_terminal_thread_reconcile_batch_size == 2
+    assert config.watcher.historical_terminal_thread_reconcile_base_interval_seconds == 75.0
+    assert config.watcher.historical_terminal_thread_reconcile_max_interval_seconds == 600.0
+
+
+def test_dump_config_emits_orchestrator_and_watcher_sections(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "legacy-layout.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        max_concurrent_tasks = 4
+        max_concurrent_per_thread = 2
+        root_batch_size = 40
+        thread_batch_size = 180
+        thread_reply_rate_limit_backoff_seconds = 30
+        recent_terminal_thread_reconcile_limit = 5
+        periodic_terminal_thread_reconcile_batch_size = 2
+        historical_terminal_thread_reconcile_base_interval_seconds = 75
+        historical_terminal_thread_reconcile_max_interval_seconds = 600
+        """,
+        encoding="utf-8",
+    )
+
+    rendered = dump_config(load_config(config_path))
+
+    assert "[orchestrator]" in rendered
+    assert "max_concurrent_tasks = 4" in rendered
+    assert "max_concurrent_per_thread = 2" in rendered
+    assert "[watcher]" in rendered
+    assert "root_batch_size = 40" in rendered
+    assert "thread_batch_size = 180" in rendered
+    assert "thread_reply_rate_limit_backoff_seconds = 30" in rendered
+    assert "recent_terminal_thread_reconcile_limit = 5" in rendered
+    assert "periodic_terminal_thread_reconcile_batch_size = 2" in rendered
+    assert "historical_terminal_thread_reconcile_base_interval_seconds = 75" in rendered
+    assert "historical_terminal_thread_reconcile_max_interval_seconds = 600" in rendered
+
+
+def test_dump_config_emits_browser_runner_and_lifecycle_sections(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    bob_codex_home = tmp_path / "bob-codex-home"
+
+    config_path = tmp_path / "legacy-layout-sections.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        browser_mode = "shared_browser"
+        browser_url = "http://127.0.0.1:9222"
+        cdp_url = "http://127.0.0.1:9223"
+        slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+        browser_user_data_dir = "{tmp_path / "chrome-profile"}"
+        bob_codex_home = "{bob_codex_home}"
+        codex_exec_timeout_seconds = 1200
+        reminder_minutes = [30, 60]
+        auto_close_minutes = 180
+        """,
+        encoding="utf-8",
+    )
+
+    rendered = dump_config(load_config(config_path))
+
+    assert "[browser]" in rendered
+    assert 'browser_mode = "shared_browser"' in rendered
+    assert 'browser_url = "http://127.0.0.1:9222"' in rendered
+    assert 'cdp_url = "http://127.0.0.1:9223"' in rendered
+    assert "[runner]" in rendered
+    assert 'bob_codex_home = "{0}"'.format(str(bob_codex_home.resolve())) in rendered
+    assert "codex_exec_timeout_seconds = 1200" in rendered
+    assert "[lifecycle]" in rendered
+    assert "reminder_minutes = [30, 60]" in rendered
+    assert "auto_close_minutes = 180" in rendered
 
 
 def test_workspace_slack_url_accepts_enterprise_domain(tmp_path):
@@ -286,7 +522,7 @@ def test_workspace_slack_url_must_use_https(tmp_path):
         load_config(config_path)
 
 
-def test_defaults_slack_signin_url_must_use_https(tmp_path):
+def test_browser_slack_signin_url_must_use_https(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
 
@@ -296,6 +532,8 @@ def test_defaults_slack_signin_url_must_use_https(tmp_path):
         [defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
+
+        [browser]
         slack_signin_url = "http://slack.com/signin"
         """,
         encoding="utf-8",
@@ -305,7 +543,7 @@ def test_defaults_slack_signin_url_must_use_https(tmp_path):
         load_config(config_path)
 
 
-def test_defaults_browser_mode_must_be_known_value(tmp_path):
+def test_browser_mode_must_be_known_value(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
 
@@ -315,6 +553,8 @@ def test_defaults_browser_mode_must_be_known_value(tmp_path):
         [defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
+
+        [browser]
         browser_mode = "unsupported"
         """,
         encoding="utf-8",
@@ -324,7 +564,7 @@ def test_defaults_browser_mode_must_be_known_value(tmp_path):
         load_config(config_path)
 
 
-def test_channel_override_wins_over_global_default(tmp_path):
+def test_channel_override_wins_over_workspace_channel_defaults(tmp_path):
     default_root = tmp_path / "Code"
     channel_root = default_root / "OHAI" / "ctdm"
     default_root.mkdir()
@@ -334,12 +574,14 @@ def test_channel_override_wins_over_global_default(tmp_path):
     config_path.write_text(
         f"""
         [defaults]
-        default_cwd = "{default_root}"
-        accept_root_bob_requests = true
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
         name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{default_root}"
+        accept_root_bob_requests = true
 
         [[workspaces.channels]]
         name = "yifanche-private"
@@ -356,7 +598,7 @@ def test_channel_override_wins_over_global_default(tmp_path):
 
     assert channel.effective_default_cwd == str(channel_root.resolve())
     assert channel.effective_accept_root_bob_requests is False
-    assert config.workspaces[0].allowed_actor_ids == ["U123"]
+    assert config.workspaces[0].channel_defaults.allowed_actor_ids == ["U123"]
 
 
 def test_channel_additional_roots_override_can_be_empty(tmp_path):
@@ -369,12 +611,14 @@ def test_channel_additional_roots_override_can_be_empty(tmp_path):
     config_path.write_text(
         f"""
         [defaults]
-        default_cwd = "{default_root}"
-        additional_roots = ["{extra_root}"]
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
         name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{default_root}"
+        additional_roots = ["{extra_root}"]
 
         [[workspaces.channels]]
         name = "yifanche-bob"
@@ -399,11 +643,13 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
     config_path.write_text(
         f"""
         [defaults]
-        default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
         name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
 
         [[workspaces.channels]]
         name = "yifanche-private"
@@ -429,12 +675,14 @@ def test_channel_codex_home_mode_override_is_loaded(tmp_path):
     config_path.write_text(
         f"""
         [defaults]
-        default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
-        codex_home_mode = "default"
 
         [[workspaces]]
         name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
+        codex_home_mode = "default"
 
         [[workspaces.channels]]
         name = "yifanche-bob"
@@ -459,12 +707,14 @@ def test_channel_codex_sandbox_mode_override_is_loaded(tmp_path):
     config_path.write_text(
         f"""
         [defaults]
-        default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
-        codex_sandbox_mode = "workspace-write"
 
         [[workspaces]]
         name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
+        codex_sandbox_mode = "workspace-write"
 
         [[workspaces.channels]]
         name = "yifanche-bob-test"
@@ -481,6 +731,96 @@ def test_channel_codex_sandbox_mode_override_is_loaded(tmp_path):
     assert channel.effective_codex_sandbox_mode == "danger-full-access"
 
 
+def test_channel_allowed_actor_ids_override_is_loaded_and_dumped(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "channel-allowed-actors.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces.channels]]
+        name = "yifanche-bob-test"
+        allowed_actor_ids = ["U999"]
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+    rendered = dump_config(loaded)
+    rewritten = tmp_path / "rewritten-channel-allowed-actors.toml"
+    rewritten.write_text(rendered, encoding="utf-8")
+    reloaded = load_config(rewritten)
+
+    assert reloaded.workspaces[0].channels[0].allowed_actor_ids == ["U999"]
+    assert 'allowed_actor_ids = ["U999"]' in rendered
+
+
+def test_workspace_channel_defaults_allowed_actor_ids_is_loaded(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "workspace-channel-default-actors.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+
+        [[workspaces]]
+        name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [[workspaces.channels]]
+        name = "yifanche-bob-test"
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+
+    assert loaded.workspaces[0].channel_defaults.allowed_actor_ids == ["U123"]
+
+
+def test_workspace_allowed_actor_ids_is_rejected(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "legacy-workspace-actors.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        allowed_actor_ids = []
+
+        [[workspaces]]
+        name = "oracle"
+        allowed_actor_ids = ["U123"]
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob-test"
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="workspaces.allowed_actor_ids"):
+        load_config(config_path)
+
+
 def test_channel_workspace_write_writable_roots_override_is_loaded(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
@@ -493,12 +833,14 @@ def test_channel_workspace_write_writable_roots_override_is_loaded(tmp_path):
     config_path.write_text(
         f"""
         [defaults]
-        default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
-        codex_workspace_write_writable_roots = ["{root}"]
 
         [[workspaces]]
         name = "oracle"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
+        codex_workspace_write_writable_roots = ["{root}"]
 
         [[workspaces.channels]]
         name = "yifanche-bob-test"
@@ -521,6 +863,43 @@ def test_channel_workspace_write_writable_roots_override_is_loaded(tmp_path):
         str(scratch_root.resolve()),
         str(Path("/tmp").resolve()),
     ]
+
+
+def test_dump_config_emits_workspace_channel_defaults_from_legacy_defaults(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    extra_root = tmp_path / "extra"
+    extra_root.mkdir()
+
+    config_path = tmp_path / "workspace-channel-defaults-dump.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        additional_roots = ["{extra_root}"]
+        accept_root_bob_requests = true
+        allowed_actor_ids = ["U123"]
+        codex_home_mode = "isolated"
+        codex_sandbox_mode = "workspace-write"
+
+        [[workspaces]]
+        name = "oracle"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob"
+        persistent_memory_mode = "disabled"
+        """,
+        encoding="utf-8",
+    )
+
+    rendered = dump_config(load_config(config_path))
+
+    assert "[workspaces.channel_defaults]" in rendered
+    assert 'default_cwd = "{0}"'.format(str(root.resolve())) in rendered
+    assert 'additional_roots = ["{0}"]'.format(str(extra_root.resolve())) in rendered
+    assert "accept_root_bob_requests = true" in rendered
+    assert 'codex_home_mode = "isolated"' in rendered
+    assert 'codex_sandbox_mode = "workspace-write"' in rendered
 
 
 def test_channel_slack_channel_id_is_loaded_and_dumped(tmp_path):
@@ -771,7 +1150,7 @@ def test_workspace_without_allowed_actor_ids_defaults_to_unrestricted_access(tmp
     config = load_config(config_path)
 
     assert config.defaults.allowed_actor_ids == []
-    assert config.workspaces[0].allowed_actor_ids == []
+    assert config.workspaces[0].channel_defaults.allowed_actor_ids == []
 
 
 def test_workspace_with_empty_allowed_actor_ids_allows_unrestricted_access(tmp_path):
@@ -787,7 +1166,10 @@ def test_workspace_with_empty_allowed_actor_ids_allows_unrestricted_access(tmp_p
 
         [[workspaces]]
         name = "oracle"
+
+        [workspaces.channel_defaults]
         allowed_actor_ids = []
+        default_cwd = "{default_root}"
         """,
         encoding="utf-8",
     )
@@ -795,7 +1177,7 @@ def test_workspace_with_empty_allowed_actor_ids_allows_unrestricted_access(tmp_p
     config = load_config(config_path)
 
     assert config.defaults.allowed_actor_ids == []
-    assert config.workspaces[0].allowed_actor_ids == []
+    assert config.workspaces[0].channel_defaults.allowed_actor_ids == []
 
 
 def test_duplicate_workspace_and_channel_names_raise(tmp_path):
@@ -836,6 +1218,8 @@ def test_bool_values_are_rejected_for_integer_timer_fields(tmp_path):
         [defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
+
+        [lifecycle]
         reminder_minutes = [true]
         auto_close_minutes = false
         """,
@@ -883,7 +1267,6 @@ def test_dump_config_round_trips_workspace_api_fields(tmp_path):
 
         [[workspaces]]
         name = "workspace"
-        allowed_actor_ids = ["U123"]
         slack_url = "https://app.slack.com/client/T12345678/C12345678"
         slack_api_origin = "https://example.enterprise.slack.com"
         slack_api_token = "xoxc-demo-token"
@@ -901,7 +1284,7 @@ def test_dump_config_round_trips_workspace_api_fields(tmp_path):
     assert reloaded.workspaces[0].slack_api_token == "xoxc-demo-token"
 
 
-def test_dump_config_round_trips_codex_exec_timeout_seconds(tmp_path):
+def test_dump_config_round_trips_runner_codex_exec_timeout_seconds(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
 
@@ -911,6 +1294,8 @@ def test_dump_config_round_trips_codex_exec_timeout_seconds(tmp_path):
         [defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
+
+        [runner]
         codex_exec_timeout_seconds = 900
         """,
         encoding="utf-8",
@@ -922,4 +1307,4 @@ def test_dump_config_round_trips_codex_exec_timeout_seconds(tmp_path):
     rewritten.write_text(rendered, encoding="utf-8")
     reloaded = load_config(rewritten)
 
-    assert reloaded.defaults.codex_exec_timeout_seconds == 900.0
+    assert reloaded.runner.codex_exec_timeout_seconds == 900.0

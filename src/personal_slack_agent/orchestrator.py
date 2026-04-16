@@ -66,9 +66,9 @@ class BobOrchestrator:
         self.codex_runner = codex_runner
         self.config = config
         self.isolated_codex_runner = isolated_codex_runner
-        self._max_concurrent_tasks = max(1, int(self.config.defaults.max_concurrent_tasks))
+        self._max_concurrent_tasks = max(1, int(self.config.orchestrator.max_concurrent_tasks))
         self._max_concurrent_per_thread = max(
-            1, int(self.config.defaults.max_concurrent_per_thread)
+            1, int(self.config.orchestrator.max_concurrent_per_thread)
         )
         self._worker_pool = ThreadPoolExecutor(
             max_workers=self._max_concurrent_tasks,
@@ -96,7 +96,7 @@ class BobOrchestrator:
             return
         if not self._is_bob_root_message(text):
             return
-        if not self._is_actor_allowed(workspace_name, author_actor_id):
+        if not self._is_actor_allowed(workspace_name, channel_name, author_actor_id):
             return
 
         claimed = self.state_store.claim_processed_message(
@@ -199,7 +199,7 @@ class BobOrchestrator:
         record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
         if record is None:
             return
-        if not self._is_actor_allowed(workspace_name, author_actor_id):
+        if not self._is_actor_allowed(workspace_name, channel_name, author_actor_id):
             return
 
         claimed = self.state_store.claim_processed_message(
@@ -253,6 +253,7 @@ class BobOrchestrator:
     ) -> None:
         if author_actor_id != record.owner_actor_id and not self._is_actor_allowed(
             workspace_name,
+            channel_name,
             author_actor_id,
         ):
             return
@@ -908,7 +909,9 @@ class BobOrchestrator:
         channel = self._find_channel(workspace, channel_name) if workspace else None
         if channel is not None and channel.effective_default_cwd:
             return channel.effective_default_cwd
-        return self.config.defaults.default_cwd
+        if workspace is not None and workspace.channel_defaults.default_cwd:
+            return workspace.channel_defaults.default_cwd
+        return self.config.defaults.default_cwd or ""
 
     def _cwd_for_thread(self, workspace_name: str, channel_name: str, thread_ts: str) -> str:
         record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
@@ -925,12 +928,21 @@ class BobOrchestrator:
             and self.isolated_codex_runner is not None
         ):
             return self.isolated_codex_runner
+        if (
+            channel is None
+            and workspace is not None
+            and workspace.channel_defaults.codex_home_mode == "isolated"
+            and self.isolated_codex_runner is not None
+        ):
+            return self.isolated_codex_runner
         return self.codex_runner
 
     def _sandbox_mode_for_channel(self, workspace_name: str, channel_name: str) -> Optional[str]:
         workspace = self._find_workspace(workspace_name)
         channel = self._find_channel(workspace, channel_name)
         if channel is None:
+            if workspace is not None:
+                return workspace.channel_defaults.codex_sandbox_mode
             return self.config.defaults.codex_sandbox_mode
         return channel.effective_codex_sandbox_mode
 
@@ -942,6 +954,8 @@ class BobOrchestrator:
         workspace = self._find_workspace(workspace_name)
         channel = self._find_channel(workspace, channel_name)
         if channel is None:
+            if workspace is not None:
+                return workspace.channel_defaults.codex_workspace_write_writable_roots
             return self.config.defaults.codex_workspace_write_writable_roots
         return channel.effective_codex_workspace_write_writable_roots
 
@@ -995,11 +1009,17 @@ class BobOrchestrator:
             user_text,
         )
 
-    def _is_actor_allowed(self, workspace_name: str, actor_id: str) -> bool:
+    def _is_actor_allowed(self, workspace_name: str, channel_name: str, actor_id: str) -> bool:
         workspace = self._find_workspace(workspace_name)
         if workspace is None:
             return False
-        allowed = workspace.allowed_actor_ids
+        channel = self._find_channel(workspace, channel_name)
+        if channel is not None and channel.allowed_actor_ids is not None:
+            allowed = channel.allowed_actor_ids
+        elif workspace.channel_defaults.allowed_actor_ids is not None:
+            allowed = workspace.channel_defaults.allowed_actor_ids
+        else:
+            allowed = self.config.defaults.allowed_actor_ids
         if not allowed:
             return True
         return actor_id in allowed
@@ -1181,9 +1201,9 @@ class BobOrchestrator:
 
     def _next_reminder_due_at(self, reminder_count: int, now_epoch: int) -> Optional[int]:
         next_index = reminder_count + 1
-        if next_index >= len(self.config.defaults.reminder_minutes):
+        if next_index >= len(self.config.lifecycle.reminder_minutes):
             return None
-        return now_epoch + int(self.config.defaults.reminder_minutes[next_index]) * 60
+        return now_epoch + int(self.config.lifecycle.reminder_minutes[next_index]) * 60
 
     def _clear_waiting_message(self, record: SessionRecord) -> None:
         if not record.waiting_message_ts:
@@ -1200,11 +1220,11 @@ class BobOrchestrator:
     def _waiting_deadlines(self) -> Tuple[Optional[int], Optional[int]]:
         now = int(time.time())
         reminder_due_at = None
-        if self.config.defaults.reminder_minutes:
-            reminder_due_at = now + int(self.config.defaults.reminder_minutes[0]) * 60
+        if self.config.lifecycle.reminder_minutes:
+            reminder_due_at = now + int(self.config.lifecycle.reminder_minutes[0]) * 60
 
         auto_close_due_at = None
-        if self.config.defaults.auto_close_minutes is not None:
-            auto_close_due_at = now + int(self.config.defaults.auto_close_minutes) * 60
+        if self.config.lifecycle.auto_close_minutes is not None:
+            auto_close_due_at = now + int(self.config.lifecycle.auto_close_minutes) * 60
 
         return reminder_due_at, auto_close_due_at

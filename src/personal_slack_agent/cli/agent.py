@@ -648,11 +648,11 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
             state_store = BobStateStore(paths.state_dir / "bob.sqlite3")
             state_store.initialize()
             browser = PlaywrightSlackAdapter(
-                browser_mode=config.defaults.browser_mode,
-                cdp_url=config.defaults.cdp_url,
-                slack_signin_url=config.defaults.slack_signin_url,
-                chrome_executable_path=config.defaults.chrome_executable_path,
-                browser_user_data_dir=config.defaults.browser_user_data_dir,
+                browser_mode=config.browser.browser_mode,
+                cdp_url=config.browser.cdp_url,
+                slack_signin_url=config.browser.slack_signin_url,
+                chrome_executable_path=config.browser.chrome_executable_path,
+                browser_user_data_dir=config.browser.browser_user_data_dir,
             )
             browser.set_workspace_urls(
                 {
@@ -670,16 +670,16 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
             )
             _seed_channel_urls(browser, config)
             bob_codex_home = _prepare_bob_codex_home(
-                Path(config.defaults.bob_codex_home)
-                if config.defaults.bob_codex_home is not None
+                Path(config.runner.bob_codex_home)
+                if config.runner.bob_codex_home is not None
                 else paths.state_dir / "codex-home"
             )
             codex_runner = SubprocessCodexRunner(
-                exec_timeout_seconds=config.defaults.codex_exec_timeout_seconds
+                exec_timeout_seconds=config.runner.codex_exec_timeout_seconds
             )
             isolated_codex_runner = SubprocessCodexRunner(
                 env_overrides={"CODEX_HOME": str(bob_codex_home)},
-                exec_timeout_seconds=config.defaults.codex_exec_timeout_seconds,
+                exec_timeout_seconds=config.runner.codex_exec_timeout_seconds,
             )
             orchestrator = BobOrchestrator(
                 browser=browser,

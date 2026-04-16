@@ -17,30 +17,69 @@ CODEX_SANDBOX_MODE_DANGER_FULL_ACCESS = "danger-full-access"
 
 @dataclass
 class DefaultSettings:
-    default_cwd: str
+    default_cwd: Optional[str] = None
     additional_roots: List[str] = field(default_factory=list)
     accept_root_bob_requests: bool = True
     allowed_actor_ids: List[str] = field(default_factory=list)
-    max_concurrent_tasks: int = 1
-    max_concurrent_per_thread: int = 1
-    codex_exec_timeout_seconds: Optional[float] = 600.0
-    bob_codex_home: Optional[str] = None
     codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     codex_sandbox_mode: Optional[str] = None
     codex_workspace_write_writable_roots: Optional[List[str]] = None
+
+
+@dataclass
+class BrowserSettings:
     slack_signin_url: str = DEFAULT_SLACK_SIGNIN_URL
     browser_mode: str = DEDICATED_BROWSER_MODE
     browser_url: str = DEFAULT_BROWSER_CDP_URL
     cdp_url: str = DEFAULT_BROWSER_CDP_URL
     chrome_executable_path: Optional[str] = None
     browser_user_data_dir: Optional[str] = None
+
+
+@dataclass
+class RunnerSettings:
+    codex_exec_timeout_seconds: Optional[float] = 600.0
+    bob_codex_home: Optional[str] = None
+
+
+@dataclass
+class LifecycleSettings:
     reminder_minutes: List[int] = field(default_factory=list)
     auto_close_minutes: Optional[int] = None
 
 
 @dataclass
+class OrchestratorSettings:
+    max_concurrent_tasks: int = 1
+    max_concurrent_per_thread: int = 1
+
+
+@dataclass
+class WatcherSettings:
+    root_batch_size: int = 50
+    thread_batch_size: int = 200
+    thread_reply_rate_limit_backoff_seconds: float = 60.0
+    recent_terminal_thread_reconcile_limit: int = 6
+    periodic_terminal_thread_reconcile_batch_size: int = 1
+    historical_terminal_thread_reconcile_base_interval_seconds: float = 60.0
+    historical_terminal_thread_reconcile_max_interval_seconds: float = 15 * 60.0
+
+
+@dataclass
+class WorkspaceChannelDefaults:
+    allowed_actor_ids: Optional[List[str]] = None
+    default_cwd: Optional[str] = None
+    additional_roots: List[str] = field(default_factory=list)
+    accept_root_bob_requests: bool = True
+    codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
+    codex_sandbox_mode: Optional[str] = None
+    codex_workspace_write_writable_roots: Optional[List[str]] = None
+
+
+@dataclass
 class ChannelConfig:
     name: str
+    allowed_actor_ids: Optional[List[str]] = None
     default_cwd: Optional[str] = None
     additional_roots: Optional[List[str]] = None
     accept_root_bob_requests: Optional[bool] = None
@@ -63,7 +102,7 @@ class ChannelConfig:
 class WorkspaceConfig:
     name: str
     channels: List[ChannelConfig] = field(default_factory=list)
-    allowed_actor_ids: List[str] = field(default_factory=list)
+    channel_defaults: WorkspaceChannelDefaults = field(default_factory=WorkspaceChannelDefaults)
     slack_url: Optional[str] = None
     slack_api_origin: Optional[str] = None
     slack_api_token: Optional[str] = None
@@ -72,6 +111,11 @@ class WorkspaceConfig:
 @dataclass
 class AppConfig:
     defaults: DefaultSettings
+    browser: BrowserSettings = field(default_factory=BrowserSettings)
+    runner: RunnerSettings = field(default_factory=RunnerSettings)
+    lifecycle: LifecycleSettings = field(default_factory=LifecycleSettings)
+    orchestrator: OrchestratorSettings = field(default_factory=OrchestratorSettings)
+    watcher: WatcherSettings = field(default_factory=WatcherSettings)
     workspaces: List[WorkspaceConfig] = field(default_factory=list)
 
 

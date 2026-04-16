@@ -75,7 +75,6 @@ def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
                 "",
                 "[[workspaces]]",
                 'name = "oracle"',
-                'allowed_actor_ids = ["U123"]',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
                 "",
                 "[[workspaces.channels]]",

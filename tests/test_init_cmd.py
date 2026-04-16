@@ -15,17 +15,30 @@ def test_init_creates_config_directory_and_starter_toml(tmp_path, monkeypatch):
 
     contents = config_file.read_text(encoding="utf-8")
     assert "[defaults]" in contents
+    assert "[browser]" in contents
+    assert "[runner]" in contents
+    assert "[lifecycle]" in contents
+    assert "[orchestrator]" in contents
+    assert "[watcher]" in contents
+    assert "[workspaces.channel_defaults]" in contents
     assert "default_cwd" in contents
     assert "allowed_actor_ids" in contents
+    assert "max_concurrent_tasks" in contents
+    assert "root_batch_size" in contents
     assert "slack_signin_url" in contents
     assert "browser_mode" in contents
     assert "browser_url" in contents
     assert "cdp_url" in contents
     assert "chrome_executable_path" in contents
     assert "browser_user_data_dir" in contents
+    assert "bob_codex_home" in contents
+    assert "codex_exec_timeout_seconds" in contents
+    assert "reminder_minutes" in contents
+    assert "auto_close_minutes" in contents
+    assert '# allowed_actor_ids = ["U01234567"]' in contents
     assert '# slack_url = "https://app.slack.com/client/T12345678/C12345678"' in contents
     assert '# name = "your-private-channel"' in contents
-    assert load_config(config_file).defaults.allowed_actor_ids
+    assert load_config(config_file).workspaces == []
 
 
 def test_init_refuses_to_overwrite_existing_file_without_force(tmp_path, monkeypatch, capsys):
@@ -66,7 +79,6 @@ def test_discover_slack_auth_updates_workspace_config(tmp_path, monkeypatch):
                 "",
                 "[[workspaces]]",
                 'name = "oracle"',
-                'allowed_actor_ids = ["U123"]',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
             ]
         ),
