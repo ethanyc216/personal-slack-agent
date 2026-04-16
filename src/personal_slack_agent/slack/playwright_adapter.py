@@ -28,6 +28,7 @@ def _load_sync_playwright():
 
 class PlaywrightSlackAdapter:
     _SLACK_API_TIMEOUT_MS = 15000
+    _CDP_CONNECT_TIMEOUT_MS = 10000
 
     def __init__(
         self,
@@ -79,7 +80,10 @@ class PlaywrightSlackAdapter:
             sync_playwright = self._playwright_loader()
             self._playwright = sync_playwright().start()
             if self.browser_mode == SHARED_BROWSER_MODE:
-                self._browser = self._playwright.chromium.connect_over_cdp(self.cdp_url)
+                self._browser = self._playwright.chromium.connect_over_cdp(
+                    self.cdp_url,
+                    timeout=self._CDP_CONNECT_TIMEOUT_MS,
+                )
                 return self._browser
 
             launch_kwargs = {"headless": False}
@@ -633,6 +637,12 @@ class PlaywrightSlackAdapter:
             return self._run_on_io_thread(lambda: self.discover_api_session(workspace_name))
         with self._io_lock:
             return self._discover_api_session(workspace_name)
+
+    def api_test(self, workspace_name: str) -> Dict[str, Any]:
+        if not self._on_io_thread():
+            return self._run_on_io_thread(lambda: self.api_test(workspace_name))
+        with self._io_lock:
+            return self._api_client(workspace_name).api_test()
 
     def _api_client(self, workspace_name: str) -> SlackApiClient:
         token, origin = self._discover_api_session(workspace_name)

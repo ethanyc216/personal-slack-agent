@@ -449,8 +449,10 @@ def dump_config(config: AppConfig) -> str:
 
 
 def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
+    if raw_defaults is None:
+        raw_defaults = {}
     if not isinstance(raw_defaults, Mapping):
-        raise ConfigError("Missing required [defaults] table.")
+        raise ConfigError("defaults must be a table.")
 
     return DefaultSettings(
         default_cwd=_optional_directory_path(

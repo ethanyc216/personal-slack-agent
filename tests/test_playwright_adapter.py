@@ -92,8 +92,8 @@ class FakeChromium:
         self.connect_over_cdp_calls = []
         self.launch_persistent_context_calls = []
 
-    def connect_over_cdp(self, cdp_url: str):
-        self.connect_over_cdp_calls.append(cdp_url)
+    def connect_over_cdp(self, cdp_url: str, **kwargs):
+        self.connect_over_cdp_calls.append((cdp_url, kwargs))
         return self.browser
 
     def launch_persistent_context(self, user_data_dir, **kwargs):
@@ -145,7 +145,9 @@ def test_shared_browser_connects_over_cdp_and_reuses_matching_tab():
     page = adapter.select_bob_tab("https://example.enterprise.slack.com/")
 
     assert page is matching_page
-    assert chromium.connect_over_cdp_calls == ["http://127.0.0.1:9222"]
+    assert chromium.connect_over_cdp_calls == [
+        ("http://127.0.0.1:9222", {"timeout": 10000})
+    ]
     assert shared_context.new_page_calls == 0
 
 

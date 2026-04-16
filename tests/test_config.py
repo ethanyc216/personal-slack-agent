@@ -14,6 +14,40 @@ def test_repo_sample_config_loads_successfully():
     assert config.workspaces[0].channels
 
 
+def test_config_loads_without_defaults_when_workspace_channel_defaults_provide_required_fields(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "no-defaults.toml"
+    config_path.write_text(
+        f"""
+        [browser]
+        slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+        browser_mode = "shared_browser"
+        browser_url = "http://127.0.0.1:9222"
+        cdp_url = "http://127.0.0.1:9222"
+
+        [[workspaces]]
+        name = "oracle"
+        slack_url = "https://app.slack.com/client/T12345678/C12345678"
+
+        [workspaces.channel_defaults]
+        default_cwd = "{root}"
+        persistent_memory_mode = "disabled"
+
+        [[workspaces.channels]]
+        name = "yifanche-bob"
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.default_cwd is None
+    assert config.workspaces[0].channels[0].effective_default_cwd == str(root.resolve())
+    assert config.workspaces[0].channels[0].effective_persistent_memory_mode == "disabled"
+
+
 def test_browser_settings_use_defaults_when_omitted(tmp_path):
     root = tmp_path / "project"
     root.mkdir()

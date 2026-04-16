@@ -98,6 +98,148 @@ def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
     assert "oracle:yifanche-bob" in captured.out
 
 
+def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    workspace_root = tmp_path / "work"
+    workspace_root.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[browser]",
+                'cdp_url = "http://127.0.0.1:9222"',
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
+                "",
+                "[workspaces.channel_defaults]",
+                'default_cwd = "{0}"'.format(workspace_root),
+                'persistent_memory_mode = "disabled"',
+                "post_terminal_threads_here = true",
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-bob"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(ctl_module, "_is_cdp_reachable", lambda url: url == "http://127.0.0.1:9222")
+
+    class FakePage:
+        url = "https://app.slack.com/client/T12345678/C12345678"
+
+    class FakeBrowser:
+        def set_workspace_urls(self, workspace_urls):
+            self.workspace_urls = dict(workspace_urls)
+
+        def set_workspace_api_contexts(self, workspace_api_contexts):
+            self.workspace_api_contexts = dict(workspace_api_contexts)
+
+        def set_channel_urls(self, channel_urls):
+            self.channel_urls = dict(channel_urls)
+
+        def connect(self):
+            return object()
+
+        def select_bob_tab(self, workspace_url_prefix):
+            self.workspace_url_prefix = workspace_url_prefix
+            return FakePage()
+
+        def discover_api_session(self, workspace_name):
+            assert workspace_name == "oracle"
+            return ("xoxc-demo-token", "https://example.enterprise.slack.com")
+
+        def api_test(self, workspace_name):
+            assert workspace_name == "oracle"
+            return {"ok": True}
+
+        def get_channel_id(self, workspace_name, channel_name):
+            assert workspace_name == "oracle"
+            assert channel_name == "yifanche-bob"
+            return "C123"
+
+        def subscribe_to_realtime_frames(self, workspace_name, on_frame, on_disconnect):
+            assert workspace_name == "oracle"
+            on_frame('{"type":"hello"}')
+            self.on_disconnect = on_disconnect
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(ctl_module, "_build_browser", lambda config: FakeBrowser())
+
+    exit_code = ctl_main(["doctor"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "db_ready: True" in captured.out
+    assert "terminal_default_target: oracle:yifanche-bob" in captured.out
+    assert "browser_attach: True" in captured.out
+    assert "workspace[oracle].slack_tab: True" in captured.out
+    assert "workspace[oracle].api_session: True" in captured.out
+    assert "workspace[oracle].api_test: True" in captured.out
+    assert "channel[oracle:yifanche-bob].channel_id: C123" in captured.out
+    assert "workspace[oracle].socket_subscribe: True" in captured.out
+
+
+def test_doctor_reports_browser_probe_failure_without_crashing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    workspace_root = tmp_path / "work"
+    workspace_root.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[browser]",
+                'cdp_url = "http://127.0.0.1:9222"',
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
+                "",
+                "[workspaces.channel_defaults]",
+                'default_cwd = "{0}"'.format(workspace_root),
+                'persistent_memory_mode = "disabled"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-bob"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(ctl_module, "_is_cdp_reachable", lambda url: True)
+
+    class BrokenBrowser:
+        def set_workspace_urls(self, workspace_urls):
+            return None
+
+        def set_workspace_api_contexts(self, workspace_api_contexts):
+            return None
+
+        def set_channel_urls(self, channel_urls):
+            return None
+
+        def connect(self):
+            raise RuntimeError("cdp attach failed")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(ctl_module, "_build_browser", lambda config: BrokenBrowser())
+
+    exit_code = ctl_main(["doctor"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "browser_attach: False" in captured.out
+    assert "browser_attach_error: cdp attach failed" in captured.out
+
+
 def test_smoke_test_reports_success(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"

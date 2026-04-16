@@ -85,6 +85,9 @@ class SlackApiClient:
             },
         )
 
+    def api_test(self) -> Dict[str, Any]:
+        return self._call_api("api.test", {})
+
     def chat_post_message(
         self,
         channel_id: str,

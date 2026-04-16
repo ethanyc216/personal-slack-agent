@@ -323,6 +323,9 @@ def main(argv: list[str] | None = None) -> int:
         print("channel_count: {0}".format(len(channel_names)))
         for item in channel_names:
             print("channel: {0}".format(item))
+        _print_doctor_probe_results(
+            _collect_doctor_probe_results(paths=paths, config=config)
+        )
         return 0
 
     if args.command == "smoke-test":
@@ -473,6 +476,113 @@ def _build_browser(config: AppConfig) -> PlaywrightSlackAdapter:
             )
     browser.set_channel_urls(channel_urls)
     return browser
+
+
+def _doctor_probe(label: str, ok: bool, detail: Optional[str] = None) -> list[tuple[str, str]]:
+    rows = [(label, "True" if ok else "False")]
+    if detail:
+        rows.append((label + "_error", detail))
+    return rows
+
+
+def _print_doctor_probe_results(rows: list[tuple[str, str]]) -> None:
+    for key, value in rows:
+        print("{0}: {1}".format(key, value))
+
+
+def _collect_doctor_probe_results(*, paths: RuntimePaths, config: AppConfig) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    db_path = paths.state_dir / "bob.sqlite3"
+    rows.append(("db_path", str(db_path)))
+    try:
+        store = BobStateStore(db_path)
+        store.initialize()
+    except Exception as exc:
+        rows.extend(_doctor_probe("db_ready", False, str(exc)))
+        return rows
+    rows.extend(_doctor_probe("db_ready", True))
+
+    try:
+        workspace_name, channel_name = _resolve_doctor_terminal_target(config)
+        rows.append(("terminal_default_target", "{0}:{1}".format(workspace_name, channel_name)))
+    except Exception as exc:
+        rows.append(("terminal_default_target", "False"))
+        rows.append(("terminal_default_target_error", str(exc)))
+
+    if not _is_cdp_reachable(config.browser.cdp_url):
+        return rows
+
+    browser = _build_browser(config)
+    try:
+        try:
+            browser.connect()
+        except Exception as exc:
+            rows.extend(_doctor_probe("browser_attach", False, str(exc)))
+            return rows
+        rows.extend(_doctor_probe("browser_attach", True))
+
+        for workspace in config.workspaces:
+            workspace_label = "workspace[{0}]".format(workspace.name)
+            tab_ok = False
+            try:
+                page = browser.select_bob_tab(workspace.slack_url)
+                tab_ok = True
+                rows.extend(_doctor_probe(workspace_label + ".slack_tab", True))
+                rows.append((workspace_label + ".slack_tab_url", str(getattr(page, "url", ""))))
+            except Exception as exc:
+                rows.extend(_doctor_probe(workspace_label + ".slack_tab", False, str(exc)))
+
+            if tab_ok:
+                try:
+                    _token, origin = browser.discover_api_session(workspace.name)
+                    rows.extend(_doctor_probe(workspace_label + ".api_session", True))
+                    rows.append((workspace_label + ".api_origin", origin))
+                except Exception as exc:
+                    rows.extend(_doctor_probe(workspace_label + ".api_session", False, str(exc)))
+
+                try:
+                    payload = browser.api_test(workspace.name)
+                    ok = bool(payload.get("ok"))
+                    detail = None if ok else str(payload.get("error") or "api.test failed")
+                    rows.extend(_doctor_probe(workspace_label + ".api_test", ok, detail))
+                except Exception as exc:
+                    rows.extend(_doctor_probe(workspace_label + ".api_test", False, str(exc)))
+
+                try:
+                    browser.subscribe_to_realtime_frames(workspace.name, lambda _frame: None, lambda: None)
+                    rows.extend(_doctor_probe(workspace_label + ".socket_subscribe", True))
+                except Exception as exc:
+                    rows.extend(_doctor_probe(workspace_label + ".socket_subscribe", False, str(exc)))
+
+            for channel in workspace.channels:
+                channel_label = "channel[{0}:{1}].channel_id".format(workspace.name, channel.name)
+                try:
+                    channel_id = browser.get_channel_id(workspace.name, channel.name)
+                    rows.append((channel_label, channel_id))
+                except Exception as exc:
+                    rows.append((channel_label, "False"))
+                    rows.append((channel_label + "_error", str(exc)))
+    finally:
+        browser.close()
+    return rows
+
+
+def _resolve_doctor_terminal_target(config: AppConfig) -> tuple[str, str]:
+    candidates = [
+        (workspace.name, channel.name)
+        for workspace in config.workspaces
+        for channel in workspace.channels
+        if channel.effective_post_terminal_threads_here
+    ]
+    if not candidates:
+        raise RuntimeError(
+            "No channel is configured for terminal Bob requests. Set post_terminal_threads_here = true."
+        )
+    if len(candidates) > 1:
+        raise RuntimeError(
+            "Multiple terminal Bob channels are configured. Specify --workspace and --channel."
+        )
+    return candidates[0]
 
 
 def _workspace_team_id(workspace_url: Optional[str]) -> Optional[str]:
