@@ -79,21 +79,25 @@ class PlaywrightSlackAdapter:
 
             sync_playwright = self._playwright_loader()
             self._playwright = sync_playwright().start()
-            if self.browser_mode == SHARED_BROWSER_MODE:
-                self._browser = self._playwright.chromium.connect_over_cdp(
-                    self.cdp_url,
-                    timeout=self._CDP_CONNECT_TIMEOUT_MS,
-                )
-                return self._browser
+            try:
+                if self.browser_mode == SHARED_BROWSER_MODE:
+                    self._browser = self._playwright.chromium.connect_over_cdp(
+                        self.cdp_url,
+                        timeout=self._CDP_CONNECT_TIMEOUT_MS,
+                    )
+                    return self._browser
 
-            launch_kwargs = {"headless": False}
-            if self.chrome_executable_path:
-                launch_kwargs["executable_path"] = self.chrome_executable_path
-            self._context = self._playwright.chromium.launch_persistent_context(
-                self.browser_user_data_dir,
-                **launch_kwargs,
-            )
-            return self._context
+                launch_kwargs = {"headless": False}
+                if self.chrome_executable_path:
+                    launch_kwargs["executable_path"] = self.chrome_executable_path
+                self._context = self._playwright.chromium.launch_persistent_context(
+                    self.browser_user_data_dir,
+                    **launch_kwargs,
+                )
+                return self._context
+            except Exception:
+                self.close()
+                raise
 
     def close(self) -> None:
         if not self._on_io_thread():

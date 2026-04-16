@@ -127,6 +127,60 @@ def _loader_for(chromium: FakeChromium):
     return _load, sync_obj
 
 
+def test_connect_cleans_up_failed_shared_browser_attach_before_retry():
+    first_playwright = FakePlaywright(
+        FakeChromium(
+            browser=FakeBrowser([FakeContext([])]),
+            dedicated_context=FakeContext([]),
+        )
+    )
+
+    def fail_connect_over_cdp(cdp_url: str, **kwargs):
+        first_attempts.append((cdp_url, kwargs))
+        raise PlaywrightError("cdp attach failed")
+
+    first_attempts = []
+    first_playwright.chromium.connect_over_cdp = fail_connect_over_cdp  # type: ignore[method-assign]
+
+    second_playwright = FakePlaywright(
+        FakeChromium(
+            browser=FakeBrowser([FakeContext([])]),
+            dedicated_context=FakeContext([]),
+        )
+    )
+
+    sync_objs = [
+        FakeSyncPlaywright(first_playwright),
+        FakeSyncPlaywright(second_playwright),
+    ]
+
+    def loader():
+        return lambda: sync_objs.pop(0)
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+        playwright_loader=loader,
+    )
+
+    try:
+        adapter.connect()
+    except PlaywrightError as exc:
+        assert str(exc) == "cdp attach failed"
+    else:
+        raise AssertionError("Expected PlaywrightError on first connect")
+
+    assert first_attempts == [("http://127.0.0.1:9222", {"timeout": 10000})]
+    assert first_playwright.stopped is True
+    assert adapter._playwright is None
+    assert adapter._browser is None
+
+    browser = adapter.connect()
+
+    assert browser is second_playwright.chromium.browser
+
+
 def test_shared_browser_connects_over_cdp_and_reuses_matching_tab():
     matching_page = FakePage("https://example.enterprise.slack.com/client/T1/C1")
     shared_context = FakeContext([matching_page])

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..codex_runner import SubprocessCodexRunner
 from ..config import load_config
 from ..models import AppConfig, SessionStatus, WorkspaceConfig, ChannelConfig
 from ..paths import default_config_file, default_log_file, default_state_dir
@@ -505,6 +506,14 @@ def _collect_doctor_probe_results(*, paths: RuntimePaths, config: AppConfig) -> 
     try:
         workspace_name, channel_name = _resolve_doctor_terminal_target(config)
         rows.append(("terminal_default_target", "{0}:{1}".format(workspace_name, channel_name)))
+        _workspace, channel = _resolve_smoke_target(config, workspace_name, channel_name)
+        rows.extend(
+            _collect_doctor_codex_exec_probe_results(
+                paths=paths,
+                config=config,
+                channel=channel,
+            )
+        )
     except Exception as exc:
         rows.append(("terminal_default_target", "False"))
         rows.append(("terminal_default_target_error", str(exc)))
@@ -564,6 +573,79 @@ def _collect_doctor_probe_results(*, paths: RuntimePaths, config: AppConfig) -> 
                     rows.append((channel_label + "_error", str(exc)))
     finally:
         browser.close()
+    return rows
+
+
+def _doctor_codex_probe_prompt() -> str:
+    return (
+        "Doctor probe: use the shell tool to run the command `pwd` exactly once. "
+        "If the command succeeds, reply with exactly `doctor exec ok` and nothing else. "
+        "If the command fails, reply with the exact failure text only."
+    )
+
+
+def _doctor_exec_timeout_seconds(config: AppConfig) -> float:
+    configured = config.runner.codex_exec_timeout_seconds
+    if configured is None:
+        return 45.0
+    return min(float(configured), 45.0)
+
+
+def _doctor_codex_exec_command(base_runner: SubprocessCodexRunner):
+    def _run(command: list[str], cwd: Optional[str] = None) -> str:
+        adjusted_command = list(command[:2]) + ["-c", 'model_reasoning_effort="low"'] + list(command[2:])
+        return base_runner._default_exec_command(adjusted_command, cwd)
+
+    return _run
+
+
+def _build_doctor_codex_runner(
+    *,
+    paths: RuntimePaths,
+    config: AppConfig,
+    channel: ChannelConfig,
+) -> SubprocessCodexRunner:
+    kwargs = {"exec_timeout_seconds": _doctor_exec_timeout_seconds(config)}
+    if channel.effective_codex_home_mode == "isolated":
+        bob_codex_home = (
+            Path(config.runner.bob_codex_home)
+            if config.runner.bob_codex_home is not None
+            else paths.state_dir / "codex-home"
+        )
+        kwargs["env_overrides"] = {"CODEX_HOME": str(bob_codex_home)}
+    base_runner = SubprocessCodexRunner(**kwargs)
+    return SubprocessCodexRunner(exec_command=_doctor_codex_exec_command(base_runner))
+
+
+def _collect_doctor_codex_exec_probe_results(
+    *,
+    paths: RuntimePaths,
+    config: AppConfig,
+    channel: ChannelConfig,
+) -> list[tuple[str, str]]:
+    runner = _build_doctor_codex_runner(paths=paths, config=config, channel=channel)
+    run_result = runner.run_new_session(
+        prompt=_doctor_codex_probe_prompt(),
+        cwd=channel.effective_default_cwd or config.defaults.default_cwd or "",
+        additional_roots=list(channel.effective_additional_roots),
+        sandbox_mode=channel.effective_codex_sandbox_mode,
+        workspace_write_writable_roots=channel.effective_codex_workspace_write_writable_roots,
+    )
+    if run_result.final_output == "doctor exec ok":
+        rows = _doctor_probe("terminal_codex_exec", True)
+        if run_result.session_id:
+            rows.append(("terminal_codex_exec_session", run_result.session_id))
+        return rows
+
+    detail = (
+        run_result.failure_text
+        or run_result.final_output
+        or run_result.wait_message
+        or "unexpected doctor codex execution result"
+    )
+    rows = _doctor_probe("terminal_codex_exec", False, detail)
+    if run_result.session_id:
+        rows.append(("terminal_codex_exec_session", run_result.session_id))
     return rows
 
 

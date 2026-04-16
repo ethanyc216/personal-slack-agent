@@ -169,7 +169,37 @@ def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, c
         def close(self):
             return None
 
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run_new_session(
+            self,
+            prompt,
+            cwd,
+            additional_roots,
+            sandbox_mode=None,
+            workspace_write_writable_roots=None,
+            on_session_started=None,
+        ):
+            del prompt
+            del cwd
+            del additional_roots
+            del sandbox_mode
+            del workspace_write_writable_roots
+            del on_session_started
+
+            class Result:
+                session_id = "doctor-session-123"
+                final_output = "doctor exec ok"
+                wait_kind = None
+                wait_message = None
+                failure_text = None
+
+            return Result()
+
     monkeypatch.setattr(ctl_module, "_build_browser", lambda config: FakeBrowser())
+    monkeypatch.setattr(ctl_module, "SubprocessCodexRunner", FakeRunner)
 
     exit_code = ctl_main(["doctor"])
     captured = capsys.readouterr()
@@ -183,6 +213,114 @@ def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, c
     assert "workspace[oracle].api_test: True" in captured.out
     assert "channel[oracle:yifanche-bob].channel_id: C123" in captured.out
     assert "workspace[oracle].socket_subscribe: True" in captured.out
+    assert "terminal_codex_exec: True" in captured.out
+
+
+def test_doctor_reports_terminal_codex_exec_failure_without_crashing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    workspace_root = tmp_path / "work"
+    workspace_root.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[browser]",
+                'cdp_url = "http://127.0.0.1:9222"',
+                "",
+                "[runner]",
+                "codex_exec_timeout_seconds = 1200",
+                "",
+                "[[workspaces]]",
+                'name = "oracle"',
+                'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
+                "",
+                "[workspaces.channel_defaults]",
+                'default_cwd = "{0}"'.format(workspace_root),
+                'persistent_memory_mode = "disabled"',
+                "post_terminal_threads_here = true",
+                "",
+                "[[workspaces.channels]]",
+                'name = "yifanche-bob"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(ctl_module, "_is_cdp_reachable", lambda url: True)
+
+    class FakeBrowser:
+        def set_workspace_urls(self, workspace_urls):
+            return None
+
+        def set_workspace_api_contexts(self, workspace_api_contexts):
+            return None
+
+        def set_channel_urls(self, channel_urls):
+            return None
+
+        def connect(self):
+            return object()
+
+        def select_bob_tab(self, workspace_url_prefix):
+            class FakePage:
+                url = workspace_url_prefix
+
+            return FakePage()
+
+        def discover_api_session(self, workspace_name):
+            return ("xoxc-demo-token", "https://example.enterprise.slack.com")
+
+        def api_test(self, workspace_name):
+            return {"ok": True}
+
+        def get_channel_id(self, workspace_name, channel_name):
+            return "C123"
+
+        def subscribe_to_realtime_frames(self, workspace_name, on_frame, on_disconnect):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run_new_session(
+            self,
+            prompt,
+            cwd,
+            additional_roots,
+            sandbox_mode=None,
+            workspace_write_writable_roots=None,
+            on_session_started=None,
+        ):
+            del prompt
+            del cwd
+            del additional_roots
+            del sandbox_mode
+            del workspace_write_writable_roots
+            del on_session_started
+
+            class Result:
+                session_id = "doctor-session-123"
+                final_output = None
+                wait_kind = None
+                wait_message = None
+                failure_text = "sandbox-exec: sandbox_apply: Operation not permitted"
+
+            return Result()
+
+    monkeypatch.setattr(ctl_module, "_build_browser", lambda config: FakeBrowser())
+    monkeypatch.setattr(ctl_module, "SubprocessCodexRunner", FakeRunner)
+
+    exit_code = ctl_main(["doctor"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "terminal_codex_exec: False" in captured.out
+    assert "terminal_codex_exec_error: sandbox-exec: sandbox_apply: Operation not permitted" in captured.out
 
 
 def test_doctor_reports_browser_probe_failure_without_crashing(tmp_path, monkeypatch, capsys):
