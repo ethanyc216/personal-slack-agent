@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 from pathlib import PurePosixPath
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 from urllib.parse import urlparse
+import uuid
 
 from playwright.sync_api import Error as PlaywrightError
 
@@ -29,6 +33,12 @@ def _load_sync_playwright():
 class PlaywrightSlackAdapter:
     _SLACK_API_TIMEOUT_MS = 15000
     _CDP_CONNECT_TIMEOUT_MS = 10000
+    _CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 2.0
+    _HTTP_USER_AGENT = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/146.0.0.0 Safari/537.36"
+    )
 
     def __init__(
         self,
@@ -130,6 +140,11 @@ class PlaywrightSlackAdapter:
                 for page in context.pages:
                     if page.url.startswith(target_url):
                         return page
+
+            if self.browser_mode == SHARED_BROWSER_MODE:
+                helper_page = self._create_non_focused_target(runtime, target_url)
+                if helper_page is not None:
+                    return helper_page
 
             if contexts:
                 page = contexts[0].new_page()
@@ -571,7 +586,15 @@ class PlaywrightSlackAdapter:
         for context in contexts:
             for page in context.pages:
                 if page.url.startswith(origin):
+                    if page.url.startswith(api_test_url):
+                        setattr(page, "_bob_should_close_after_use", True)
                     return page
+
+        if self.browser_mode == SHARED_BROWSER_MODE:
+            helper_page = self._create_background_helper_page(runtime, api_test_url)
+            if helper_page is not None:
+                setattr(helper_page, "_bob_should_close_after_use", True)
+                return helper_page
 
         if contexts:
             page = contexts[0].new_page()
@@ -580,7 +603,43 @@ class PlaywrightSlackAdapter:
         else:
             page = runtime.new_page()
         page.goto(api_test_url, wait_until="commit", timeout=15000)
+        setattr(page, "_bob_should_close_after_use", True)
         return page
+
+    def _create_background_helper_page(self, runtime: Any, api_test_url: str) -> Optional[Any]:
+        return self._create_non_focused_target(runtime, api_test_url)
+
+    def _create_non_focused_target(self, runtime: Any, target_url: str) -> Optional[Any]:
+        new_browser_cdp_session = getattr(runtime, "new_browser_cdp_session", None)
+        if not callable(new_browser_cdp_session):
+            return None
+
+        try:
+            session = new_browser_cdp_session()
+        except Exception:
+            return None
+        try:
+            session.send(
+                "Target.createTarget",
+                {
+                    "url": target_url,
+                    "background": False,
+                    "focus": False,
+                },
+            )
+        finally:
+            detach = getattr(session, "detach", None)
+            if callable(detach):
+                detach()
+
+        deadline = time.monotonic() + self._CDP_TARGET_APPEAR_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            for context in self._contexts(runtime):
+                for page in context.pages:
+                    if page.url.startswith(target_url):
+                        return page
+            time.sleep(0.05)
+        return None
 
     def _upload_external_bytes(self, upload_url: str, content: bytes) -> None:
         request = urllib.request.Request(
@@ -681,72 +740,12 @@ class PlaywrightSlackAdapter:
             )
         with self._io_lock:
             token, origin = self._discover_api_session(workspace_name)
-            page = self._api_page(origin)
-            try:
-                payload = page.evaluate(
-                """
-async ({origin, methodName, token, params, timeoutMs}) => {
-  const form = new FormData();
-  form.append('token', token);
-  for (const [key, value] of Object.entries(params)) {
-    if (value === null || value === undefined) continue;
-    form.append(key, String(value));
-  }
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  let resp;
-  let text;
-  try {
-    resp = await fetch(origin + '/api/' + methodName, {
-      method: 'POST',
-      body: form,
-      credentials: 'include',
-      signal: controller.signal,
-    });
-    text = await resp.text();
-  } catch (err) {
-    if (err && err.name === 'AbortError') {
-      return { status: 408, body: { ok: false, error: 'request_timeout' } };
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch (err) {
-    json = { ok: false, error: 'non_json_response', raw: text };
-  }
-  return { status: resp.status, body: json };
-}
-                """,
-                {
-                    "origin": origin,
-                    "methodName": method_name,
-                    "token": token,
-                    "params": params,
-                    "timeoutMs": self._SLACK_API_TIMEOUT_MS,
-                },
-                )
-            except PlaywrightError as exc:
-                if retry_on_closed_page_error and _is_closed_page_error(exc):
-                    self.close()
-                    return self._call_slack_api(
-                        workspace_name=workspace_name,
-                        method_name=method_name,
-                        params=params,
-                        retry_on_auth_error=retry_on_auth_error,
-                        retry_on_closed_page_error=False,
-                    )
-                raise
-            body = payload.get("body") if isinstance(payload, dict) else None
+            body = self._post_slack_api_form(origin, method_name, token, params)
             if (
                 retry_on_closed_page_error
                 and isinstance(body, dict)
                 and body.get("error") == "request_timeout"
             ):
-                self.close()
                 return self._call_slack_api(
                     workspace_name=workspace_name,
                     method_name=method_name,
@@ -771,6 +770,85 @@ async ({origin, methodName, token, params, timeoutMs}) => {
             if not isinstance(body, dict):
                 raise RuntimeError("Slack API call returned an unexpected payload shape.")
             return body
+
+    def _origin_cookie_header(self, origin: str) -> str:
+        runtime = self.connect()
+        cookies: list[dict[str, Any]] = []
+        for context in self._contexts(runtime):
+            cookies.extend(context.cookies([origin]))
+        if not cookies:
+            return ""
+        seen: Dict[Tuple[str, str, str], str] = {}
+        for cookie in cookies:
+            name = str(cookie.get("name") or "")
+            value = str(cookie.get("value") or "")
+            domain = str(cookie.get("domain") or "")
+            path = str(cookie.get("path") or "")
+            if not name:
+                continue
+            seen[(name, domain, path)] = value
+        return "; ".join(
+            "{0}={1}".format(name, value)
+            for (name, _domain, _path), value in seen.items()
+        )
+
+    def _multipart_form_request_body(self, token: str, params: Dict[str, Any]) -> Tuple[str, bytes]:
+        boundary = "----BobBoundary{0}".format(uuid.uuid4().hex)
+        parts: list[str] = []
+        fields = {"token": token}
+        for key, value in params.items():
+            if value is None:
+                continue
+            fields[key] = str(value)
+        for key, value in fields.items():
+            parts.append(
+                "--{0}\r\nContent-Disposition: form-data; name=\"{1}\"\r\n\r\n{2}\r\n".format(
+                    boundary,
+                    key,
+                    value,
+                )
+            )
+        parts.append("--{0}--\r\n".format(boundary))
+        return boundary, "".join(parts).encode("utf-8")
+
+    def _post_slack_api_form(
+        self,
+        origin: str,
+        method_name: str,
+        token: str,
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        boundary, body = self._multipart_form_request_body(token, params)
+        headers = {
+            "Accept": "*/*",
+            "Content-Type": "multipart/form-data; boundary={0}".format(boundary),
+            "Origin": origin,
+            "Referer": origin.rstrip("/") + "/api/api.test",
+            "User-Agent": self._HTTP_USER_AGENT,
+        }
+        cookie_header = self._origin_cookie_header(origin)
+        if cookie_header:
+            headers["Cookie"] = cookie_header
+        request = urllib.request.Request(
+            origin.rstrip("/") + "/api/" + quote(method_name, safe="."),
+            data=body,
+            method="POST",
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._SLACK_API_TIMEOUT_MS / 1000.0) as response:
+                text = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            text = exc.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, TimeoutError):
+            return {"ok": False, "error": "request_timeout"}
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = {"ok": False, "error": "non_json_response", "raw": text}
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "non_json_response", "raw": text}
+        return payload
 
     def _on_io_thread(self) -> bool:
         return self._io_thread_id == threading.get_ident()

@@ -27,6 +27,7 @@ class FakePage:
         self.goto_calls = []
         self.reload_calls = []
         self.handlers = {}
+        self.closed = False
 
     def goto(self, url: str, **kwargs) -> None:
         del kwargs
@@ -52,6 +53,9 @@ class FakePage:
             return None
         raise AssertionError("Unexpected selector: {0}".format(selector))
 
+    def close(self):
+        self.closed = True
+
 
 class FakeContext:
     def __init__(self, pages=None):
@@ -74,6 +78,7 @@ class FakeBrowser:
         self.contexts = contexts or []
         self.new_context_calls = 0
         self.closed = False
+        self.browser_cdp_session = None
 
     def new_context(self):
         self.new_context_calls += 1
@@ -81,8 +86,34 @@ class FakeBrowser:
         self.contexts.append(context)
         return context
 
+    def new_browser_cdp_session(self):
+        if self.browser_cdp_session is None:
+            raise AssertionError("No browser CDP session configured")
+        return self.browser_cdp_session
+
     def close(self):
         self.closed = True
+
+
+class FakeBrowserCDPSession:
+    def __init__(self, on_create_target=None):
+        self.calls = []
+        self.detached = False
+        self._on_create_target = on_create_target
+
+    def send(self, method, params=None):
+        params = params or {}
+        self.calls.append((method, params))
+        if method == "Target.createTarget":
+            if self._on_create_target is not None:
+                self._on_create_target(params)
+            return {"targetId": "target-123"}
+        if method == "Target.closeTarget":
+            return {"success": True}
+        raise AssertionError("Unexpected CDP method: {0}".format(method))
+
+    def detach(self):
+        self.detached = True
 
 
 class FakeChromium:
@@ -203,6 +234,43 @@ def test_shared_browser_connects_over_cdp_and_reuses_matching_tab():
         ("http://127.0.0.1:9222", {"timeout": 10000})
     ]
     assert shared_context.new_page_calls == 0
+
+
+def test_shared_browser_creates_non_focused_workspace_target_when_missing():
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        shared_context.pages.append(FakePage(params["url"]))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+        playwright_loader=loader,
+    )
+
+    page = adapter.select_bob_tab("https://app.slack.com/client/T123/C123")
+
+    assert page.url == "https://app.slack.com/client/T123/C123"
+    assert shared_context.new_page_calls == 0
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": "https://app.slack.com/client/T123/C123",
+                "background": False,
+                "focus": False,
+            },
+        )
+    ]
+    assert browser.browser_cdp_session.detached is True
 
 
 def test_dedicated_browser_launches_persistent_context_and_uses_workspace_tab():
@@ -551,7 +619,7 @@ def test_post_root_message_uses_api_client_path_only():
 
 
 def test_post_root_message_serializes_concurrent_browser_api_calls():
-    class SlowApiPage:
+    class SlowTransport:
         def __init__(self):
             self._lock = threading.Lock()
             self.inflight = 0
@@ -559,24 +627,23 @@ def test_post_root_message_serializes_concurrent_browser_api_calls():
             self.texts = []
             self.counter = 0
 
-        def evaluate(self, script, payload):
-            del script
+        def __call__(self, origin, method_name, token, params):
+            del origin
+            del method_name
+            del token
             with self._lock:
                 self.inflight += 1
                 self.max_inflight = max(self.max_inflight, self.inflight)
             try:
                 time.sleep(0.05)
                 with self._lock:
-                    self.texts.append(payload["params"]["text"])
+                    self.texts.append(params["text"])
                     self.counter += 1
                     counter = self.counter
                 return {
-                    "status": 200,
-                    "body": {
-                        "ok": True,
-                        "ts": "1775717794.{0:06d}".format(counter),
-                        "message": {"ts": "1775717794.{0:06d}".format(counter)},
-                    },
+                    "ok": True,
+                    "ts": "1775717794.{0:06d}".format(counter),
+                    "message": {"ts": "1775717794.{0:06d}".format(counter)},
                 }
             finally:
                 with self._lock:
@@ -593,8 +660,8 @@ def test_post_root_message_serializes_concurrent_browser_api_calls():
     adapter.set_channel_urls(
         {("oracle", "yifanche-bob-test"): "https://app.slack.com/client/T123/C0AS82WLCBU"}
     )
-    slow_page = SlowApiPage()
-    adapter._api_page = lambda origin: slow_page  # type: ignore[method-assign]
+    slow_transport = SlowTransport()
+    adapter._post_slack_api_form = slow_transport  # type: ignore[method-assign]
 
     start = threading.Event()
     errors = []
@@ -621,8 +688,8 @@ def test_post_root_message_serializes_concurrent_browser_api_calls():
 
     assert errors == []
     assert len(results) == 2
-    assert slow_page.max_inflight == 1
-    assert sorted(slow_page.texts) == ["Bob, wrap-1", "Bob, wrap-2"]
+    assert slow_transport.max_inflight == 1
+    assert sorted(slow_transport.texts) == ["Bob, wrap-1", "Bob, wrap-2"]
 
 
 def test_upload_text_snippet_uses_external_file_upload_flow():
@@ -705,17 +772,6 @@ def test_call_slack_api_rediscovers_when_seeded_workspace_auth_is_invalid():
             handlers = self.handlers.get(event, [])
             self.handlers[event] = [item for item in handlers if item is not handler]
 
-    class ApiPage:
-        def __init__(self):
-            self.tokens = []
-
-        def evaluate(self, script, payload):
-            del script
-            self.tokens.append(payload["token"])
-            if payload["token"] == "stale-token":
-                return {"status": 200, "body": {"ok": False, "error": "invalid_auth"}}
-            return {"status": 200, "body": {"ok": True, "messages": []}}
-
     adapter = PlaywrightSlackAdapter(
         browser_mode="shared_browser",
         cdp_url="http://127.0.0.1:9222",
@@ -725,32 +781,23 @@ def test_call_slack_api_rediscovers_when_seeded_workspace_auth_is_invalid():
         {"oracle": ("stale-token", "https://oracle.enterprise.slack.com")}
     )
     discovery_page = DiscoveryPage()
-    api_page = ApiPage()
+    tokens = []
     adapter._workspace_page = lambda workspace_name: discovery_page  # type: ignore[method-assign]
-    adapter._api_page = lambda origin: api_page  # type: ignore[method-assign]
+    adapter._post_slack_api_form = lambda origin, method_name, token, params: (  # type: ignore[method-assign]
+        tokens.append(token) or (
+            {"ok": False, "error": "invalid_auth"}
+            if token == "stale-token"
+            else {"ok": True, "messages": []}
+        )
+    )
 
     payload = adapter._call_slack_api("oracle", "conversations.history", {})
 
     assert payload["ok"] is True
-    assert api_page.tokens == ["stale-token", "fresh-token"]
+    assert tokens == ["stale-token", "fresh-token"]
 
 
-def test_call_slack_api_retries_once_when_api_page_is_closed():
-    class ClosedPage:
-        def evaluate(self, script, payload):
-            del script
-            del payload
-            raise PlaywrightError("Page.evaluate: Target page, context or browser has been closed")
-
-    class HealthyPage:
-        def __init__(self):
-            self.calls = []
-
-        def evaluate(self, script, payload):
-            del script
-            self.calls.append(payload["token"])
-            return {"status": 200, "body": {"ok": True, "messages": []}}
-
+def test_call_slack_api_uses_direct_http_transport_without_api_page():
     adapter = PlaywrightSlackAdapter(
         browser_mode="shared_browser",
         cdp_url="http://127.0.0.1:9222",
@@ -759,66 +806,26 @@ def test_call_slack_api_retries_once_when_api_page_is_closed():
     adapter.set_workspace_api_contexts(
         {"oracle": ("fresh-token", "https://oracle.enterprise.slack.com")}
     )
-    healthy_page = HealthyPage()
-    pages = [ClosedPage(), healthy_page]
-    close_calls = []
-
-    adapter._api_page = lambda origin: pages.pop(0)  # type: ignore[method-assign]
-    adapter.close = lambda: close_calls.append("closed")  # type: ignore[method-assign]
+    calls = []
+    adapter._api_page = lambda origin: (_ for _ in ()).throw(AssertionError("helper page should not be used"))  # type: ignore[method-assign]
+    adapter._post_slack_api_form = lambda origin, method_name, token, params: (  # type: ignore[method-assign]
+        calls.append((origin, method_name, token, params)) or {"ok": True, "messages": []}
+    )
 
     payload = adapter._call_slack_api("oracle", "conversations.history", {})
 
     assert payload["ok"] is True
-    assert close_calls == ["closed"]
-    assert healthy_page.calls == ["fresh-token"]
+    assert calls == [
+        (
+            "https://oracle.enterprise.slack.com",
+            "conversations.history",
+            "fresh-token",
+            {},
+        )
+    ]
 
 
-def test_call_slack_api_retries_once_when_api_page_closes_mid_call():
-    class ApiPage:
-        def __init__(self, should_close: bool):
-            self.should_close = should_close
-            self.tokens = []
-
-        def evaluate(self, script, payload):
-            del script
-            self.tokens.append(payload["token"])
-            if self.should_close:
-                raise TargetClosedError("Target page, context or browser has been closed")
-            return {"status": 200, "body": {"ok": True, "messages": []}}
-
-    adapter = PlaywrightSlackAdapter(
-        browser_mode="shared_browser",
-        cdp_url="http://127.0.0.1:9222",
-        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
-    )
-    adapter.set_workspace_api_contexts(
-        {"oracle": ("token-1", "https://oracle.enterprise.slack.com")}
-    )
-    pages = [ApiPage(should_close=True), ApiPage(should_close=False)]
-    adapter._api_page = lambda origin: pages.pop(0)  # type: ignore[method-assign]
-
-    payload = adapter._call_slack_api("oracle", "conversations.history", {})
-
-    assert payload["ok"] is True
-    assert len(pages) == 0
-
-
-def test_call_slack_api_retries_once_when_api_request_times_out():
-    class TimeoutPage:
-        def evaluate(self, script, payload):
-            del script
-            del payload
-            return {"status": 200, "body": {"ok": False, "error": "request_timeout"}}
-
-    class HealthyPage:
-        def __init__(self):
-            self.calls = []
-
-        def evaluate(self, script, payload):
-            del script
-            self.calls.append(payload["token"])
-            return {"status": 200, "body": {"ok": True, "messages": []}}
-
+def test_call_slack_api_retries_once_when_direct_http_request_times_out():
     adapter = PlaywrightSlackAdapter(
         browser_mode="shared_browser",
         cdp_url="http://127.0.0.1:9222",
@@ -827,15 +834,127 @@ def test_call_slack_api_retries_once_when_api_request_times_out():
     adapter.set_workspace_api_contexts(
         {"oracle": ("fresh-token", "https://oracle.enterprise.slack.com")}
     )
-    healthy_page = HealthyPage()
-    pages = [TimeoutPage(), healthy_page]
-    close_calls = []
-
-    adapter._api_page = lambda origin: pages.pop(0)  # type: ignore[method-assign]
-    adapter.close = lambda: close_calls.append("closed")  # type: ignore[method-assign]
+    calls = []
+    responses = [
+        {"ok": False, "error": "request_timeout"},
+        {"ok": True, "messages": []},
+    ]
+    adapter._post_slack_api_form = lambda origin, method_name, token, params: (  # type: ignore[method-assign]
+        calls.append((origin, method_name, token, params)) or responses.pop(0)
+    )
 
     payload = adapter._call_slack_api("oracle", "conversations.history", {})
 
     assert payload["ok"] is True
-    assert close_calls == ["closed"]
-    assert healthy_page.calls == ["fresh-token"]
+    assert calls == [
+        (
+            "https://oracle.enterprise.slack.com",
+            "conversations.history",
+            "fresh-token",
+            {},
+        ),
+        (
+            "https://oracle.enterprise.slack.com",
+            "conversations.history",
+            "fresh-token",
+            {},
+        ),
+    ]
+
+def test_api_page_marks_new_helper_page_for_cleanup():
+    shared_context = FakeContext([FakePage("https://app.slack.com/client/T123/C123")])
+    chromium = FakeChromium(
+        browser=FakeBrowser([shared_context]),
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+        playwright_loader=loader,
+    )
+
+    page = adapter._api_page("https://oracle.enterprise.slack.com")
+
+    assert page.url == "https://oracle.enterprise.slack.com/api/api.test"
+    assert getattr(page, "_bob_should_close_after_use", False) is True
+
+
+def test_api_page_marks_existing_helper_page_for_cleanup():
+    helper_page = FakePage("https://oracle.enterprise.slack.com/api/api.test")
+    shared_context = FakeContext([helper_page])
+    chromium = FakeChromium(
+        browser=FakeBrowser([shared_context]),
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+        playwright_loader=loader,
+    )
+
+    page = adapter._api_page("https://oracle.enterprise.slack.com")
+
+    assert page is helper_page
+    assert getattr(page, "_bob_should_close_after_use", False) is True
+
+
+def test_api_page_creates_non_focused_helper_target_in_shared_browser():
+    shared_context = FakeContext([FakePage("https://app.slack.com/client/T123/C123")])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        shared_context.pages.append(FakePage(params["url"]))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+        playwright_loader=loader,
+    )
+
+    page = adapter._api_page("https://oracle.enterprise.slack.com")
+
+    assert page.url == "https://oracle.enterprise.slack.com/api/api.test"
+    assert shared_context.new_page_calls == 0
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": "https://oracle.enterprise.slack.com/api/api.test",
+                "background": False,
+                "focus": False,
+            },
+        )
+    ]
+    assert browser.browser_cdp_session.detached is True
+
+
+def test_api_page_does_not_mark_existing_non_helper_same_origin_page_for_cleanup():
+    workspace_page = FakePage("https://oracle.enterprise.slack.com/messages")
+    shared_context = FakeContext([workspace_page])
+    chromium = FakeChromium(
+        browser=FakeBrowser([shared_context]),
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+        playwright_loader=loader,
+    )
+
+    page = adapter._api_page("https://oracle.enterprise.slack.com")
+
+    assert page is workspace_page
+    assert getattr(page, "_bob_should_close_after_use", False) is False
