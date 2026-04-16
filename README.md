@@ -77,6 +77,7 @@ Also included in the repo:
 ```text
 config/bob.sample.toml
 docs/setup.md
+docs/bob-config-setup.md
 ```
 
 ### Example config
@@ -137,6 +138,12 @@ persistent_memory_mode = "disabled"
 ```
 
 ### Important config notes
+
+For a field-by-field explanation of `bob.toml`, see:
+
+```text
+docs/bob-config-setup.md
+```
 
 - `allowed_actor_ids`
   At `[workspaces.channel_defaults]`, this defines who may trigger or resume Bob work in that workspace's channels by default.

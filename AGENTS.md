@@ -57,6 +57,19 @@ These instructions apply to the `personal_slack_agent` repository.
 - If `restart` reports that Bob is still running on the same pid, check `bobctl status`, wait for at least one poll tick, and only then retry.
 - If the old pid remains stuck and the user wants Bob restarted immediately, stop the stale process explicitly, then start Bob again.
 
+## Bob Doctor
+
+- `bobctl doctor` now checks both the browser path and a lightweight Bob-style child Codex execution probe.
+- Interpret `terminal_codex_exec` as a child-session sanity check, not just a static config check.
+- Run `bobctl doctor` from a normal unsandboxed shell for operator truth.
+- If `bobctl doctor` is run from inside an already sandboxed Codex session, `terminal_codex_exec` may fail with nested-sandbox errors even while Bob itself is healthy.
+
+## Bob Browser Usage
+
+- Normal Bob operation should no longer require a persistent visible `https://oracle.enterprise.slack.com/api/api.test` helper tab for Slack API calls.
+- Bob still needs a real Slack workspace tab such as `https://app.slack.com/client/...` for websocket-driven detection, channel-id discovery, and browser-auth bootstrap.
+- If the required Slack workspace tab is missing, Bob now prefers non-focusing Chromium target creation instead of foreground `new_page()` tab creation, but real focus behavior is still browser-dependent and should be validated from the live operator shell when it matters.
+
 ## Verification
 
 - After Bob runtime changes, verify all of the following:

@@ -28,6 +28,12 @@ You can also start from the committed sample template:
 config/bob.sample.toml
 ```
 
+For a field-by-field explanation of the Bob config file, see:
+
+```text
+docs/bob-config-setup.md
+```
+
 ## 3. Start Chrome for Bob
 
 ```bash
