@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..chrome_launcher import default_launcher_app_path, install_chrome_launcher
 from ..codex_runner import SubprocessCodexRunner
 from ..config import load_config
 from ..models import AppConfig, SessionStatus, WorkspaceConfig, ChannelConfig
@@ -154,6 +155,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("stop", help="Stop Bob.")
     subparsers.add_parser("status", help="Show Bob status.")
+    install_launcher_parser = subparsers.add_parser(
+        "install-chrome-launcher",
+        help="Install the Bob Chrome Dock launcher app.",
+    )
+    install_launcher_parser.add_argument(
+        "--output-app",
+        default=str(default_launcher_app_path()),
+        help="Where to write the compiled Bob Chrome.app bundle.",
+    )
+    install_launcher_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing launcher app at the output path.",
+    )
     tail_parser = subparsers.add_parser("tail-log", help="Tail Bob logs.")
     tail_parser.add_argument(
         "--lines",
@@ -291,6 +306,18 @@ def main(argv: list[str] | None = None) -> int:
             print("bob-agent is not running (no lock file).")
             return 0
         print("bob-agent is not running (stale lock pid {0}).".format(pid))
+        return 0
+
+    if args.command == "install-chrome-launcher":
+        try:
+            installed_path = install_chrome_launcher(
+                output_app=Path(args.output_app),
+                force=bool(args.force),
+            )
+        except (RuntimeError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print("Installed Bob Chrome launcher at {0}.".format(installed_path))
         return 0
 
     if args.command == "doctor":

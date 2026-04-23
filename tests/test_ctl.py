@@ -45,6 +45,53 @@ def test_status_reports_running_from_pid_file_when_lock_is_missing(tmp_path, mon
     assert "running" in captured.out.lower()
 
 
+def test_install_chrome_launcher_command_prints_installed_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    installed_path = tmp_path / "Applications" / "Bob Chrome.app"
+
+    monkeypatch.setattr(
+        ctl_module,
+        "install_chrome_launcher",
+        lambda output_app=None, force=False: installed_path,
+    )
+
+    exit_code = ctl_main(["install-chrome-launcher"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert str(installed_path) in captured.out
+
+
+def test_install_chrome_launcher_command_reports_install_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def fail_install(output_app=None, force=False):
+        raise RuntimeError("compile failed")
+
+    monkeypatch.setattr(ctl_module, "install_chrome_launcher", fail_install)
+
+    exit_code = ctl_main(["install-chrome-launcher"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "compile failed" in captured.err
+
+
+def test_install_chrome_launcher_command_reports_oserror(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def fail_install(output_app=None, force=False):
+        raise OSError("osacompile missing")
+
+    monkeypatch.setattr(ctl_module, "install_chrome_launcher", fail_install)
+
+    exit_code = ctl_main(["install-chrome-launcher"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "osacompile missing" in captured.err
+
+
 def test_doctor_prints_runtime_paths(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
 
