@@ -52,6 +52,24 @@ In that Chrome instance:
 3. log into Slack
 4. open the workspace/channel page you want Bob to use
 
+### Optional Dock Launcher
+
+If you want a reusable Dock app for the debug browser:
+
+```bash
+.venv/bin/bobctl install-chrome-launcher --force
+```
+
+That command compiles `~/Applications/Bob Chrome.app`.
+
+When clicked:
+
+- if `127.0.0.1:9222` is already reachable, it foregrounds Chrome
+- otherwise it launches a fresh debug-enabled Chrome with the dedicated profile at `~/.cache/personal-slack-agent/chrome-profile`
+- it does not open Slack or any other URL automatically
+
+This launcher is for the browser only. Bob itself still must be started or restarted from a normal unsandboxed shell.
+
 ## 4. Fill in your config
 
 At minimum:

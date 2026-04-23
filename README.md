@@ -218,6 +218,26 @@ In that Chrome instance:
 3. log into Slack
 4. open any page inside the workspace you configured
 
+## Bob Chrome Dock Launcher
+
+Install the reusable debug-browser app:
+
+```bash
+.venv/bin/bobctl install-chrome-launcher --force
+```
+
+This writes `~/Applications/Bob Chrome.app`.
+
+Behavior:
+
+- if `127.0.0.1:9222` is already live, it just foregrounds Chrome
+- otherwise it launches a fresh Chrome instance with the dedicated debug profile at `~/.cache/personal-slack-agent/chrome-profile`
+- it does not open Slack or any other URL automatically
+
+`Bob Chrome.app` is safe to pin to the macOS Dock.
+
+This launcher is for the browser only. Bob itself still must be started or restarted from a normal unsandboxed shell.
+
 ## Usage
 
 ### Start Bob in background
