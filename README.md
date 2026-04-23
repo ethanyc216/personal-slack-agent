@@ -228,13 +228,26 @@ Install the reusable debug-browser app:
 
 This writes `~/Applications/Bob Chrome.app`.
 
+At install time, Bob renders that launcher from the current `[browser]` config in `bob.toml`:
+
+- `browser.cdp_url`
+- `browser.browser_user_data_dir`
+- `browser.chrome_executable_path` when set
+
+If you use a non-default config file, pass it when installing:
+
+```bash
+.venv/bin/bobctl install-chrome-launcher --config ~/.config/personal-slack-agent/bob.toml --force
+```
+
 Behavior:
 
-- if `127.0.0.1:9222` is already live, it just foregrounds Chrome
-- otherwise it launches a fresh Chrome instance with the dedicated debug profile at `~/.cache/personal-slack-agent/chrome-profile`
+- if the configured `browser.cdp_url` is already live, it just foregrounds the configured Chrome app
+- otherwise it launches a fresh debug-enabled Chrome instance using the configured app/profile settings
 - it does not open Slack or any other URL automatically
 
 `Bob Chrome.app` is safe to pin to the macOS Dock.
+If you later change the `[browser]` settings, rerun the same install command to refresh the installed app, including `--config ...` when you use a non-default config file.
 
 This launcher is for the browser only. Bob itself still must be started or restarted from a normal unsandboxed shell.
 

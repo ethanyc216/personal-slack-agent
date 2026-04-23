@@ -7,6 +7,7 @@ from personal_slack_agent.cli.agent import main as agent_main
 from personal_slack_agent.cli import ctl as ctl_module
 from personal_slack_agent.cli.ctl import build_runtime_paths
 from personal_slack_agent.cli.ctl import main as ctl_main
+from personal_slack_agent.chrome_launcher import LauncherSettings
 from personal_slack_agent.lock import SingleInstanceLockError
 from personal_slack_agent.lock import acquire_single_instance_lock
 
@@ -48,11 +49,12 @@ def test_status_reports_running_from_pid_file_when_lock_is_missing(tmp_path, mon
 def test_install_chrome_launcher_command_prints_installed_path(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     installed_path = tmp_path / "Applications" / "Bob Chrome.app"
+    monkeypatch.setattr(ctl_module, "load_config", lambda path: None)
 
     monkeypatch.setattr(
         ctl_module,
         "install_chrome_launcher",
-        lambda output_app=None, force=False: installed_path,
+        lambda output_app=None, force=False, launcher_settings=None: installed_path,
     )
 
     exit_code = ctl_main(["install-chrome-launcher"])
@@ -64,8 +66,9 @@ def test_install_chrome_launcher_command_prints_installed_path(tmp_path, monkeyp
 
 def test_install_chrome_launcher_command_reports_install_failure(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(ctl_module, "load_config", lambda path: None)
 
-    def fail_install(output_app=None, force=False):
+    def fail_install(output_app=None, force=False, launcher_settings=None):
         raise RuntimeError("compile failed")
 
     monkeypatch.setattr(ctl_module, "install_chrome_launcher", fail_install)
@@ -79,8 +82,9 @@ def test_install_chrome_launcher_command_reports_install_failure(tmp_path, monke
 
 def test_install_chrome_launcher_command_reports_oserror(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(ctl_module, "load_config", lambda path: None)
 
-    def fail_install(output_app=None, force=False):
+    def fail_install(output_app=None, force=False, launcher_settings=None):
         raise OSError("osacompile missing")
 
     monkeypatch.setattr(ctl_module, "install_chrome_launcher", fail_install)
@@ -90,6 +94,70 @@ def test_install_chrome_launcher_command_reports_oserror(tmp_path, monkeypatch, 
 
     assert exit_code == 1
     assert "osacompile missing" in captured.err
+
+
+def test_install_chrome_launcher_command_loads_config_and_passes_launcher_settings(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "bob.toml"
+    profile_dir = tmp_path / "chrome-profile"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[browser]",
+                'cdp_url = "http://127.0.0.1:9555"',
+                'chrome_executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"',
+                'browser_user_data_dir = "{0}"'.format(profile_dir),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    captured_call = {}
+    installed_path = tmp_path / "Applications" / "Bob Chrome.app"
+
+    def fake_install(output_app=None, force=False, launcher_settings=None):
+        captured_call["output_app"] = output_app
+        captured_call["force"] = force
+        captured_call["launcher_settings"] = launcher_settings
+        return installed_path
+
+    monkeypatch.setattr(ctl_module, "install_chrome_launcher", fake_install)
+
+    exit_code = ctl_main(["install-chrome-launcher", "--config", str(config_file), "--force"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert str(installed_path) in captured.out
+    assert captured_call["force"] is True
+    assert captured_call["launcher_settings"] == LauncherSettings(
+        chrome_application="/Applications/Google Chrome.app",
+        debug_probe_url="http://127.0.0.1:9555/json/version",
+        debug_port=9555,
+        profile_dir=str(profile_dir.resolve()),
+    )
+
+
+def test_install_chrome_launcher_command_reports_invalid_chrome_executable_path(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "bob.toml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[browser]",
+                'chrome_executable_path = "/usr/local/bin/google-chrome"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = ctl_main(["install-chrome-launcher", "--config", str(config_file)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "macOS app bundle path" in captured.err
 
 
 def test_doctor_prints_runtime_paths(tmp_path, monkeypatch, capsys):

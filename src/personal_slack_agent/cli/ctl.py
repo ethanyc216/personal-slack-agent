@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from ..chrome_launcher import default_launcher_app_path, install_chrome_launcher
+from ..chrome_launcher import (
+    default_launcher_app_path,
+    install_chrome_launcher,
+    launcher_settings_from_config,
+)
 from ..codex_runner import SubprocessCodexRunner
 from ..config import load_config
 from ..models import AppConfig, SessionStatus, WorkspaceConfig, ChannelConfig
@@ -165,6 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Where to write the compiled Bob Chrome.app bundle.",
     )
     install_launcher_parser.add_argument(
+        "--config",
+        default=str(default_config_file()),
+        help="Path to the Bob configuration file used to render the launcher browser settings.",
+    )
+    install_launcher_parser.add_argument(
         "--force",
         action="store_true",
         help="Replace an existing launcher app at the output path.",
@@ -310,11 +319,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "install-chrome-launcher":
         try:
+            config = load_config(paths.config_file)
             installed_path = install_chrome_launcher(
                 output_app=Path(args.output_app),
                 force=bool(args.force),
+                launcher_settings=launcher_settings_from_config(config),
             )
-        except (RuntimeError, OSError) as exc:
+        except (RuntimeError, OSError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 1
         print("Installed Bob Chrome launcher at {0}.".format(installed_path))

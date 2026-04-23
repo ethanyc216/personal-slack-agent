@@ -62,11 +62,25 @@ If you want a reusable Dock app for the debug browser:
 
 That command compiles `~/Applications/Bob Chrome.app`.
 
+At install time, Bob renders that launcher from the current `[browser]` config in `bob.toml`:
+
+- `browser.cdp_url`
+- `browser.browser_user_data_dir`
+- `browser.chrome_executable_path` when set
+
+If you use a non-default config file, pass it here too:
+
+```bash
+.venv/bin/bobctl install-chrome-launcher --config ~/.config/personal-slack-agent/bob.toml --force
+```
+
 When clicked:
 
-- if `127.0.0.1:9222` is already reachable, it foregrounds Chrome
-- otherwise it launches a fresh debug-enabled Chrome with the dedicated profile at `~/.cache/personal-slack-agent/chrome-profile`
+- if the configured `browser.cdp_url` is already reachable, it foregrounds the configured Chrome app
+- otherwise it launches a fresh debug-enabled Chrome using the configured app/profile settings
 - it does not open Slack or any other URL automatically
+
+If you later change the `[browser]` settings, rerun the same install command to refresh the installed app, including `--config ...` when you use a non-default config file.
 
 This launcher is for the browser only. Bob itself still must be started or restarted from a normal unsandboxed shell.
 
