@@ -312,6 +312,12 @@ def dump_config(config: AppConfig) -> str:
             ),
         ]
     )
+    if config.watcher.bob_ultimate_mode_codex_home_mode is not None:
+        lines.append(
+            'bob_ultimate_mode_codex_home_mode = "{0}"'.format(
+                _toml_escape(config.watcher.bob_ultimate_mode_codex_home_mode)
+            )
+        )
 
     for workspace in config.workspaces:
         lines.extend(
@@ -709,6 +715,13 @@ def _parse_watcher(
             default=False,
         )
         or False,
+        bob_ultimate_mode_codex_home_mode=_optional_codex_home_mode(
+            raw_watcher.get(
+                "bob_ultimate_mode_codex_home_mode",
+                legacy_defaults.get("bob_ultimate_mode_codex_home_mode"),
+            ),
+            "watcher.bob_ultimate_mode_codex_home_mode",
+        ),
     )
 
 

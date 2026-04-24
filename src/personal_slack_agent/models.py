@@ -64,6 +64,7 @@ class WatcherSettings:
     historical_terminal_thread_reconcile_base_interval_seconds: float = 60.0
     historical_terminal_thread_reconcile_max_interval_seconds: float = 15 * 60.0
     bob_ultimate_mode: bool = False
+    bob_ultimate_mode_codex_home_mode: Optional[str] = None
 
 
 @dataclass

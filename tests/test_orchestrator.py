@@ -1200,6 +1200,87 @@ def test_configured_channel_thread_reply_without_existing_session_can_use_ultima
     assert len(runner.new_session_calls) == 1
 
 
+def test_ultimate_invocation_uses_default_runner_when_ultimate_codex_home_mode_is_default(
+    fake_environment,
+):
+    orchestrator, browser, store, runner = fake_environment
+    isolated_runner = FakeCodexRunner(
+        next_result=CodexRunResult(session_id="isolated-session", final_output="Isolated answer")
+    )
+    orchestrator.isolated_codex_runner = isolated_runner
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    orchestrator.config.watcher.bob_ultimate_mode_codex_home_mode = "default"
+    browser.thread_messages[("oracle", "slack:C999", "1776912200.000001")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776912200.000001",
+            message_ts="1776912200.000001",
+            author_actor_id="U123",
+            text="bob use default home",
+        )
+    ]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        message_ts="1776912200.000001",
+        author_actor_id="U123",
+        text="bob use default home",
+    )
+
+    assert len(runner.new_session_calls) == 1
+    assert isolated_runner.new_session_calls == []
+    record = store.get_by_thread("oracle", "slack:C999", "1776912200.000001")
+    assert record is not None
+    assert record.codex_session_id == "session-123"
+
+
+def test_ultimate_invocation_uses_isolated_runner_when_ultimate_codex_home_mode_is_isolated(
+    fake_environment,
+):
+    orchestrator, browser, store, runner = fake_environment
+    isolated_runner = FakeCodexRunner(
+        next_result=CodexRunResult(session_id="isolated-session", final_output="Isolated answer")
+    )
+    orchestrator.isolated_codex_runner = isolated_runner
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    orchestrator.config.watcher.bob_ultimate_mode_codex_home_mode = "isolated"
+    browser.thread_messages[("oracle", "yifanche-private", "1776912300.000001")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1776912300.000001",
+            message_ts="1776912300.000001",
+            author_actor_id="U999",
+            text="hello there",
+        ),
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1776912300.000001",
+            message_ts="1776912305.000001",
+            author_actor_id="U123",
+            text="bob use isolated home",
+        ),
+    ]
+
+    orchestrator.handle_ultimate_invocation(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1776912300.000001",
+        message_ts="1776912305.000001",
+        author_actor_id="U123",
+        text="bob use isolated home",
+    )
+
+    assert runner.new_session_calls == []
+    assert len(isolated_runner.new_session_calls) == 1
+    record = store.get_by_thread("oracle", "yifanche-private", "1776912300.000001")
+    assert record is not None
+    assert record.codex_session_id == "isolated-session"
+
+
 def test_ultimate_waiting_approval_accepts_bob_prefixed_approve(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True

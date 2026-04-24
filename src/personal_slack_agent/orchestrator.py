@@ -416,7 +416,10 @@ class BobOrchestrator:
                 approval_request_id = "APR-{0}".format(thread_ts.replace(".", "")[-6:])
             approval_summary = run_result.wait_message or "Command requires approval"
             if self._should_auto_approve(approval_summary, approval_request_id):
-                auto_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
+                auto_result = self._runner_for_ultimate_invocation(
+                    workspace_name,
+                    channel_name,
+                ).resume_session(
                     session_id,
                     "approve {0}".format(approval_request_id),
                     self._cwd_for_thread(workspace_name, channel_name, thread_ts),
@@ -614,7 +617,10 @@ class BobOrchestrator:
                 approval_request_id = "APR-{0}".format(thread_ts.replace(".", "")[-6:])
             approval_summary = run_result.wait_message or "Command requires approval"
             if self._should_auto_approve(approval_summary, approval_request_id):
-                auto_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
+                auto_result = self._runner_for_ultimate_invocation(
+                    workspace_name,
+                    channel_name,
+                ).resume_session(
                     session_id,
                     "approve {0}".format(approval_request_id),
                     self._cwd_for_thread(workspace_name, channel_name, thread_ts),
@@ -1124,7 +1130,10 @@ class BobOrchestrator:
             session_id=record.codex_session_id,
         )
         try:
-            run_result = self._runner_for_channel(task.workspace_name, task.channel_name).resume_session(
+            run_result = self._runner_for_ultimate_invocation(
+                task.workspace_name,
+                task.channel_name,
+            ).resume_session(
                 record.codex_session_id,
                 approval_text,
                 record.cwd,
@@ -1190,7 +1199,10 @@ class BobOrchestrator:
             )
 
         try:
-            run_result = self._runner_for_channel(task.workspace_name, task.channel_name).run_new_session(
+            run_result = self._runner_for_ultimate_invocation(
+                task.workspace_name,
+                task.channel_name,
+            ).run_new_session(
                 prompt=prompt,
                 cwd=cwd,
                 additional_roots=list(
@@ -1282,7 +1294,10 @@ class BobOrchestrator:
             redeliver_existing=True,
         )
         try:
-            run_result = self._runner_for_channel(task.workspace_name, task.channel_name).resume_session(
+            run_result = self._runner_for_ultimate_invocation(
+                task.workspace_name,
+                task.channel_name,
+            ).resume_session(
                 record.codex_session_id,
                 prompt,
                 record.cwd,
@@ -1685,6 +1700,18 @@ class BobOrchestrator:
         ):
             return self.isolated_codex_runner
         return self.codex_runner
+
+    def _runner_for_ultimate_invocation(
+        self,
+        workspace_name: str,
+        channel_name: str,
+    ) -> CodexRunner:
+        mode = self.config.watcher.bob_ultimate_mode_codex_home_mode
+        if mode == "isolated" and self.isolated_codex_runner is not None:
+            return self.isolated_codex_runner
+        if mode == "default":
+            return self.codex_runner
+        return self._runner_for_channel(workspace_name, channel_name)
 
     def _sandbox_mode_for_channel(self, workspace_name: str, channel_name: str) -> Optional[str]:
         workspace = self._find_workspace(workspace_name)
