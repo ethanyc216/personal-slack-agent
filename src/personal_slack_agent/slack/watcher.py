@@ -72,6 +72,9 @@ class SlackWatcher:
         self._reconcile_all_workspaces(skip_workspaces=reconciled_workspaces)
         if self._stop_requested():
             return
+        self._reconcile_recent_ultimate_invocations()
+        if self._stop_requested():
+            return
         self._reconcile_pending_threads()
 
     def request_workspace_reconcile(self, workspace_name: str) -> None:

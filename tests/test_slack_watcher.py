@@ -22,6 +22,7 @@ class RecordingOrchestrator:
         self.root_calls = []
         self.reply_calls = []
         self.ultimate_calls = []
+        self._ultimate_seen = set()
 
     def handle_new_root_message(
         self,
@@ -82,6 +83,10 @@ class RecordingOrchestrator:
         author_actor_id: str,
         text: str,
     ) -> None:
+        key = (workspace_name, channel_name, thread_ts, message_ts)
+        if key in self._ultimate_seen:
+            return
+        self._ultimate_seen.add(key)
         self.ultimate_calls.append(
             {
                 "workspace_name": workspace_name,
@@ -693,6 +698,97 @@ def test_watcher_search_fallback_recovers_late_indexed_reply_after_newer_hit(tmp
             "message_ts": "1777007561.000001",
             "author_actor_id": "U123",
             "text": "bob late indexed older hit",
+        }
+    ]
+
+
+def test_watcher_search_fallback_runs_again_after_reconcile_work(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "first-channel")] = "C111"
+    browser.root_messages[("oracle", "first-channel")] = [
+        SlackRootMessage(
+            workspace_name="oracle",
+            channel_name="first-channel",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="hello",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    config = AppConfig(
+        defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
+        watcher=WatcherSettings(bob_ultimate_mode=True),
+        workspaces=[
+            WorkspaceConfig(
+                name="oracle",
+                channels=[ChannelConfig(name="first-channel")],
+            )
+        ],
+    )
+
+    class LateSearchBrowser(FakeBrowser):
+        def __init__(self):
+            super().__init__()
+            self.root_calls = 0
+
+        def list_root_messages(
+            self,
+            workspace_name: str,
+            channel_name: str,
+            oldest: str = None,
+            latest: str = None,
+            limit: int = 50,
+            ):
+                messages = super().list_root_messages(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    oldest=oldest,
+                    latest=latest,
+                    limit=limit,
+                )
+                self.root_calls += 1
+                if self.root_calls >= 1:
+                    self.search_results["oracle"] = [
+                        SlackSearchMessage(
+                            workspace_name="oracle",
+                            channel_id="C111",
+                            message_ts="1777011778.087299",
+                            thread_ts="1776987128.600299",
+                            author_actor_id="U123",
+                            text="bob late in cycle",
+                        )
+                    ]
+                return messages
+
+    late_browser = LateSearchBrowser()
+    late_browser.channel_ids = browser.channel_ids
+    late_browser.root_messages = browser.root_messages
+
+    watcher = SlackWatcher(
+        browser=late_browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=config,
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("oracle", "C111")] = "first-channel"
+    watcher._ultimate_search_cursor["oracle"] = 1777011700.0
+
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "first-channel",
+            "thread_ts": "1776987128.600299",
+            "message_ts": "1777011778.087299",
+            "author_actor_id": "U123",
+            "text": "bob late in cycle",
         }
     ]
 

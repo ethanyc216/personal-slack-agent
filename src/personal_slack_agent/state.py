@@ -248,6 +248,23 @@ class BobStateStore:
             ).fetchall()
         return [self._session_record_from_row(row) for row in rows]
 
+    def delete_session(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM sessions
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                """,
+                (workspace_name, channel_name, thread_ts),
+            )
+
     def enqueue_task(
         self,
         workspace_name: str,

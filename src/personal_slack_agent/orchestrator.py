@@ -1264,15 +1264,6 @@ class BobOrchestrator:
             status=SessionStatus.RUNNING,
             clear_waiting_fields=False,
         )
-        self._try_append_working_message(
-            workspace_name=task.workspace_name,
-            channel_name=task.channel_name,
-            thread_ts=task.thread_ts,
-            message_ts=task.message_ts,
-            original_text=task.prompt_text,
-            intent_key="ultimate-start-status-{0}".format(task.message_ts),
-            session_id=record.codex_session_id,
-        )
         try:
             run_result = self._runner_for_channel(task.workspace_name, task.channel_name).resume_session(
                 record.codex_session_id,
@@ -1300,6 +1291,32 @@ class BobOrchestrator:
                 clear_waiting_fields=False,
             )
             raise
+        if (
+            previous_status in (
+                SessionStatus.CLOSED_IDLE,
+                SessionStatus.CLOSED_TIMEOUT,
+                SessionStatus.CLOSED_MANUAL,
+                SessionStatus.FAILED,
+            )
+            and run_result.failure_text
+            and self._is_missing_rollout_failure(run_result.failure_text)
+        ):
+            self.state_store.delete_session(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+            )
+            self._execute_new_ultimate_session(task, prompt)
+            return
+        self._try_append_working_message(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            message_ts=task.message_ts,
+            original_text=task.prompt_text,
+            intent_key="ultimate-start-status-{0}".format(task.message_ts),
+            session_id=record.codex_session_id,
+        )
         self._process_ultimate_run_result(
             workspace_name=task.workspace_name,
             channel_name=task.channel_name,
@@ -1866,6 +1883,9 @@ class BobOrchestrator:
 
     def _is_exec_timeout_failure(self, failure_text: str) -> bool:
         return failure_text.startswith("codex exec timed out")
+
+    def _is_missing_rollout_failure(self, failure_text: str) -> bool:
+        return "no rollout found" in failure_text.lower()
 
     def _queued_text(self) -> str:
         return "{0} I will run this after the active task in this thread.".format(

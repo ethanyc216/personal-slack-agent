@@ -1098,6 +1098,66 @@ def test_ultimate_waiting_approval_accepts_bob_prefixed_approve(fake_environment
     )
 
 
+def test_ultimate_invocation_restarts_with_new_session_when_resume_rollout_is_missing(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776914000.000001",
+        root_ts="1776914000.000001",
+        codex_session_id="stale-session",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="stale-session",
+        failure_text="Error: thread/resume: thread/resume failed: no rollout found for thread id stale-session",
+    )
+    runner.next_result = CodexRunResult(
+        session_id="fresh-session",
+        final_output="recovered",
+    )
+    browser.thread_messages[("oracle", "slack:C999", "1776914000.000001")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776914000.000001",
+            message_ts="1776914000.000001",
+            author_actor_id="U999",
+            text="old context",
+        ),
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776914000.000001",
+            message_ts="1776914001.000001",
+            author_actor_id="U123",
+            text="bob try again",
+        ),
+    ]
+
+    orchestrator.handle_ultimate_invocation(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776914000.000001",
+        message_ts="1776914001.000001",
+        author_actor_id="U123",
+        text="bob try again",
+    )
+
+    assert len(runner.resume_calls) == 1
+    assert len(runner.new_session_calls) == 1
+    record = store.get_by_thread("oracle", "slack:C999", "1776914000.000001")
+    assert record is not None
+    assert record.codex_session_id == "fresh-session"
+    assert record.status is SessionStatus.CLOSED_IDLE
+    assert browser.updated_messages["1776914001.000001"][-1].endswith(
+        "_*codex Bob :white_check_mark::*_ recovered"
+    )
+
+
 def test_process_scheduled_actions_runs_up_to_global_concurrency_limit(tmp_path):
     store = BobStateStore(tmp_path / "bob.sqlite3")
     store.initialize()

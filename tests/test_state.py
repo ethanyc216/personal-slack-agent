@@ -565,6 +565,30 @@ def test_upsert_session_rejects_rebinding_existing_thread(tmp_path):
     assert record.status is SessionStatus.RUNNING
 
 
+def test_delete_session_removes_existing_thread_mapping(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project-a",
+        owner_actor_id="U123",
+        status=SessionStatus.RUNNING,
+    )
+
+    store.delete_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1743461000.000001",
+    )
+
+    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+
+
 def test_set_waiting_state_updates_wait_fields_safely(tmp_path):
     db_path = tmp_path / "bob.sqlite3"
     store = BobStateStore(db_path)
