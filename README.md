@@ -111,6 +111,7 @@ recent_terminal_thread_reconcile_limit = 6
 periodic_terminal_thread_reconcile_batch_size = 1
 historical_terminal_thread_reconcile_base_interval_seconds = 60
 historical_terminal_thread_reconcile_max_interval_seconds = 900
+bob_ultimate_mode = false
 
 [[workspaces]]
 name = "my-workspace"
@@ -136,6 +137,8 @@ name = "my-shared-bob-channel"
 codex_sandbox_mode = "workspace-write"
 persistent_memory_mode = "disabled"
 ```
+
+`watcher.bob_ultimate_mode = false` preserves the current configured-channel Bob behavior. Set `watcher.bob_ultimate_mode = true` to allow explicit `bob ...` invocation from any accessible public/private channel, DM, or group DM, still restricted by `allowed_actor_ids`; in that mode Bob appends working and final status into the invoking message instead of posting a separate Bob reply for that invocation.
 
 ### Important config notes
 

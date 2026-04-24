@@ -126,8 +126,11 @@ Useful fields:
 - `periodic_terminal_thread_reconcile_batch_size`
 - `historical_terminal_thread_reconcile_base_interval_seconds`
 - `historical_terminal_thread_reconcile_max_interval_seconds`
+- `bob_ultimate_mode`
 
 You usually do not need to change these unless you are tuning performance or investigating Slack reconciliation behavior.
+
+`bob_ultimate_mode = false` preserves the current configured-channel Bob behavior. `bob_ultimate_mode = true` enables explicit `bob ...` invocation from any accessible public/private channel, DM, or group DM, still gated by `allowed_actor_ids`, and appends Bob status/output into the invoking message.
 
 ## `[[workspaces]]`
 

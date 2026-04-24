@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import urllib.error
 import urllib.request
 from urllib.parse import quote
+from urllib.parse import parse_qs
 from urllib.parse import urlparse
 import uuid
 
@@ -21,7 +22,7 @@ from ..models import (
 )
 from .api_client import SlackApiClient
 from .auth import SlackApiSession, extract_api_session_from_request
-from .browser import SlackRootMessage, SlackThreadReplyMessage
+from .browser import SlackRootMessage, SlackSearchMessage, SlackThreadMessage, SlackThreadReplyMessage
 
 
 def _load_sync_playwright():
@@ -159,6 +160,8 @@ class PlaywrightSlackAdapter:
         if not self._on_io_thread():
             return self._run_on_io_thread(lambda: self.get_channel_id(workspace_name, channel_name))
         with self._io_lock:
+            if channel_name.startswith("slack:"):
+                return channel_name.split(":", 1)[1]
             _team_id, channel_id = self._parse_workspace_target(
                 self._channel_url(workspace_name, channel_name)
             )
@@ -359,6 +362,69 @@ class PlaywrightSlackAdapter:
                 payload=payload,
             )
 
+    def list_accessible_conversation_ids(
+        self,
+        workspace_name: str,
+    ) -> list[str]:
+        if not self._on_io_thread():
+            return self._run_on_io_thread(
+                lambda: self.list_accessible_conversation_ids(workspace_name)
+            )
+        with self._io_lock:
+            payload = self._api_client(workspace_name).users_conversations(
+                limit=999,
+                types="public_channel,private_channel,im,mpim",
+            )
+            if not payload.get("ok"):
+                raise RuntimeError(
+                    "Slack API users.conversations failed: {0}".format(payload.get("error"))
+                )
+            conversation_ids: list[str] = []
+            for item in payload.get("channels", []):
+                if not isinstance(item, dict):
+                    continue
+                conversation_id = str(item.get("id") or "").strip()
+                if conversation_id:
+                    conversation_ids.append(conversation_id)
+            return conversation_ids
+
+    def search_messages(
+        self,
+        workspace_name: str,
+        query: str,
+        count: int = 20,
+        page: int = 1,
+        sort: str | None = None,
+        sort_dir: str | None = None,
+    ) -> list[SlackSearchMessage]:
+        if not self._on_io_thread():
+            return self._run_on_io_thread(
+                lambda: self.search_messages(
+                    workspace_name=workspace_name,
+                    query=query,
+                    count=count,
+                    page=page,
+                    sort=sort,
+                    sort_dir=sort_dir,
+                )
+            )
+        with self._io_lock:
+            payload = self._api_client(workspace_name).search_messages(
+                query=query,
+                count=count,
+                page=page,
+                sort=sort,
+                sort_dir=sort_dir,
+            )
+            if not payload.get("ok"):
+                raise RuntimeError(
+                    "Slack API search.messages failed: {0}".format(payload.get("error"))
+                )
+            return self._search_messages_from_api_payload(
+                workspace_name=workspace_name,
+                payload=payload,
+            )
+
     def list_thread_replies(
         self,
         workspace_name: str,
@@ -395,6 +461,36 @@ class PlaywrightSlackAdapter:
                 payload=payload,
             )
 
+    def list_thread_messages(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> list[SlackThreadMessage]:
+        if not self._on_io_thread():
+            return self._run_on_io_thread(
+                lambda: self.list_thread_messages(workspace_name, channel_name, thread_ts)
+            )
+        with self._io_lock:
+            payload = self._api_client(workspace_name).conversations_replies(
+                channel_id=self.get_channel_id(workspace_name, channel_name),
+                thread_ts=thread_ts,
+                limit=200,
+                oldest=None,
+            )
+            if payload.get("ok") is False and payload.get("error") == "thread_not_found":
+                return []
+            if not payload.get("ok"):
+                raise RuntimeError(
+                    "Slack API conversations.replies failed: {0}".format(payload.get("error"))
+                )
+            return self._thread_messages_from_api_payload(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                payload=payload,
+            )
+
     def delete_message(
         self,
         workspace_name: str,
@@ -405,6 +501,33 @@ class PlaywrightSlackAdapter:
         del channel_name
         del message_ts
         raise NotImplementedError("Slack message deletion is not implemented yet.")
+
+    def update_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+        text: str,
+    ) -> None:
+        if not self._on_io_thread():
+            self._run_on_io_thread(
+                lambda: self.update_message(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    message_ts=message_ts,
+                    text=text,
+                )
+            )
+            return None
+        with self._io_lock:
+            payload = self._api_client(workspace_name).chat_update(
+                channel_id=self.get_channel_id(workspace_name, channel_name),
+                ts=message_ts,
+                text=text,
+            )
+            if not payload.get("ok"):
+                raise RuntimeError("Slack API chat.update failed: {0}".format(payload.get("error")))
+        return None
 
     def find_existing_bob_messages(
         self,
@@ -902,17 +1025,46 @@ class PlaywrightSlackAdapter:
         thread_ts: str,
         payload: Dict[str, Any],
     ) -> List[SlackThreadReplyMessage]:
+        messages = self._thread_messages_from_api_payload(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            payload=payload,
+        )
+        replies: List[SlackThreadReplyMessage] = []
+        for item in messages:
+            if item.message_ts == thread_ts:
+                continue
+            replies.append(
+                SlackThreadReplyMessage(
+                    workspace_name=item.workspace_name,
+                    channel_name=item.channel_name,
+                    thread_ts=item.thread_ts,
+                    message_ts=item.message_ts,
+                    author_actor_id=item.author_actor_id,
+                    text=item.text,
+                )
+            )
+        return replies
+
+    def _thread_messages_from_api_payload(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        payload: Dict[str, Any],
+    ) -> List[SlackThreadMessage]:
         if payload.get("ok") is False and payload.get("error") == "thread_not_found":
             return []
-        replies: List[SlackThreadReplyMessage] = []
+        messages: List[SlackThreadMessage] = []
         for item in payload.get("messages", []):
             if not isinstance(item, dict):
                 continue
             message_ts = str(item.get("ts") or "").strip()
-            if not message_ts or message_ts == thread_ts:
+            if not message_ts:
                 continue
-            replies.append(
-                SlackThreadReplyMessage(
+            messages.append(
+                SlackThreadMessage(
                     workspace_name=workspace_name,
                     channel_name=channel_name,
                     thread_ts=thread_ts,
@@ -921,8 +1073,56 @@ class PlaywrightSlackAdapter:
                     text=str(item.get("text") or ""),
                 )
             )
-        replies.sort(key=lambda item: float(item.message_ts))
-        return replies
+        messages.sort(key=lambda item: float(item.message_ts))
+        return messages
+
+    def _search_messages_from_api_payload(
+        self,
+        workspace_name: str,
+        payload: Dict[str, Any],
+    ) -> List[SlackSearchMessage]:
+        results: List[SlackSearchMessage] = []
+        messages = payload.get("messages")
+        if not isinstance(messages, dict):
+            return results
+        for item in messages.get("matches", []):
+            if not isinstance(item, dict):
+                continue
+            channel = item.get("channel")
+            if not isinstance(channel, dict):
+                continue
+            channel_id = str(channel.get("id") or "").strip()
+            message_ts = str(item.get("ts") or "").strip()
+            if not channel_id or not message_ts:
+                continue
+            thread_ts = self._thread_ts_from_search_match(item)
+            results.append(
+                SlackSearchMessage(
+                    workspace_name=workspace_name,
+                    channel_id=channel_id,
+                    message_ts=message_ts,
+                    thread_ts=thread_ts,
+                    author_actor_id=str(item.get("user") or ""),
+                    text=str(item.get("text") or ""),
+                )
+            )
+        results.sort(key=lambda item: float(item.message_ts), reverse=True)
+        return results
+
+    def _thread_ts_from_search_match(self, item: Dict[str, Any]) -> Optional[str]:
+        thread_ts = str(item.get("thread_ts") or "").strip()
+        if thread_ts:
+            return thread_ts
+        permalink = str(item.get("permalink") or "").strip()
+        if not permalink:
+            return None
+        parsed = urlparse(permalink)
+        query = parse_qs(parsed.query or "", keep_blank_values=False)
+        values = query.get("thread_ts") or []
+        if not values:
+            return None
+        candidate = str(values[0]).strip()
+        return candidate or None
 
 
 def _is_closed_page_error(error: Exception) -> bool:

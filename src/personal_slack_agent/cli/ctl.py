@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -9,7 +10,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ..chrome_launcher import (
     default_launcher_app_path,
@@ -126,6 +127,28 @@ def _is_cdp_reachable(url: str) -> bool:
         return False
 
 
+def _wait_for_process_exit(
+    paths: RuntimePaths,
+    timeout_seconds: float,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if not _running_pids(paths):
+            return True
+        sleep_fn(0.1)
+    return not _running_pids(paths)
+
+
+def _terminate_pid(pid: int) -> None:
+    if pid <= 0:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bobctl",
@@ -157,7 +180,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=30.0,
         help="Polling interval for bob-agent in seconds (default: 30).",
     )
-    subparsers.add_parser("stop", help="Stop Bob.")
+    restart_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force-stop bob-agent if cooperative restart does not complete in time.",
+    )
+    stop_parser = subparsers.add_parser("stop", help="Stop Bob.")
+    stop_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force-stop bob-agent with SIGTERM if cooperative stop does not complete in time.",
+    )
     subparsers.add_parser("status", help="Show Bob status.")
     install_launcher_parser = subparsers.add_parser(
         "install-chrome-launcher",
@@ -255,8 +288,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "restart":
-        stop_exit = main(["stop"])
-        if stop_exit not in (0, 1):
+        stop_argv = ["stop"]
+        if bool(getattr(args, "force", False)):
+            stop_argv.append("--force")
+        stop_exit = main(stop_argv)
+        if bool(getattr(args, "force", False)):
+            if stop_exit != 0:
+                return stop_exit
+        elif stop_exit not in (0, 1):
             return stop_exit
         return main(
             [
@@ -289,13 +328,17 @@ def main(argv: list[str] | None = None) -> int:
         paths.stop_request_file.parent.mkdir(parents=True, exist_ok=True)
         paths.stop_request_file.write_text("stop\n", encoding="utf-8")
 
-        deadline = time.time() + 3.0
-        while time.time() < deadline:
-            if not _running_pids(paths):
-                break
-            time.sleep(0.1)
-
-        if _running_pids(paths):
+        if not _wait_for_process_exit(paths, timeout_seconds=3.0):
+            if bool(getattr(args, "force", False)):
+                _terminate_pid(pid)
+                if _wait_for_process_exit(paths, timeout_seconds=2.0):
+                    _remove_lock_file(paths.lock_file)
+                    _remove_lock_file(paths.pid_file)
+                    _remove_lock_file(paths.stop_request_file)
+                    print("Force-stopped bob-agent pid {0}.".format(pid))
+                    return 0
+                print("Force-stop sent to bob-agent pid {0}, but it is still running.".format(pid))
+                return 1
             print("Requested bob-agent pid {0} stop; it should exit on the next poll tick.".format(pid))
             return 1
 

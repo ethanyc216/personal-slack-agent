@@ -1601,7 +1601,7 @@ def test_run_poll_loop_repeats_until_interrupted(tmp_path):
     assert all(duration <= 1.0 for duration in calls["sleep"])
 
 
-def test_run_poll_cycle_processes_scheduled_actions_after_watcher():
+def test_run_poll_cycle_processes_scheduled_actions_before_and_after_watcher():
     calls = []
 
     class FakeWatcher:
@@ -1617,7 +1617,7 @@ def test_run_poll_cycle_processes_scheduled_actions_after_watcher():
         orchestrator=FakeOrchestrator(),
     )
 
-    assert calls == ["watcher", "scheduled"]
+    assert calls == ["scheduled", "watcher", "scheduled"]
 
 
 def test_run_poll_cycle_consumes_reconcile_requests(tmp_path):
@@ -1642,7 +1642,12 @@ def test_run_poll_cycle_consumes_reconcile_requests(tmp_path):
         reconcile_request_path=reconcile_file,
     )
 
-    assert calls == [("reconcile", "oracle"), ("watcher", None), ("scheduled", None)]
+    assert calls == [
+        ("reconcile", "oracle"),
+        ("scheduled", None),
+        ("watcher", None),
+        ("scheduled", None),
+    ]
     assert not reconcile_file.exists()
 
 

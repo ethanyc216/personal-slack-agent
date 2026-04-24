@@ -618,6 +618,167 @@ def test_post_root_message_uses_api_client_path_only():
     assert calls == [("C222", "Bob, smoke ok", None, False)]
 
 
+def test_update_message_uses_api_client_path_only():
+    calls = []
+
+    class FakeApiClient:
+        def chat_update(self, channel_id, ts, text):
+            calls.append((channel_id, ts, text))
+            return {
+                "ok": True,
+                "ts": ts,
+                "message": {"ts": ts, "text": text},
+            }
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter.set_workspace_urls({"oracle": "https://app.slack.com/client/T123/C111"})
+    adapter.set_channel_urls(
+        {("oracle", "yifanche-bob"): "https://app.slack.com/client/T123/C222"}
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+
+    adapter.update_message(
+        "oracle",
+        "yifanche-bob",
+        "1775717794.417429",
+        "bob can you do it?\n_*Bob is working on it :arrows_counterclockwise::*_",
+    )
+
+    assert calls == [
+        (
+            "C222",
+            "1775717794.417429",
+            "bob can you do it?\n_*Bob is working on it :arrows_counterclockwise::*_",
+        )
+    ]
+
+
+def test_get_channel_id_accepts_runtime_channel_name():
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+
+    assert adapter.get_channel_id("oracle", "slack:C999") == "C999"
+
+
+def test_list_accessible_conversation_ids_uses_api_client_path_only():
+    class FakeApiClient:
+        def users_conversations(self, limit=200, types=None):
+            assert limit == 999
+            assert types == "public_channel,private_channel,im,mpim"
+            return {
+                "ok": True,
+                "channels": [
+                    {"id": "C111"},
+                    {"id": "D222"},
+                    {"id": "G333"},
+                    {"id": ""},
+                ],
+            }
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+
+    conversation_ids = adapter.list_accessible_conversation_ids("oracle")
+
+    assert conversation_ids == ["C111", "D222", "G333"]
+
+
+def test_list_thread_messages_uses_api_client_path_only():
+    calls = []
+
+    class FakeApiClient:
+        def conversations_replies(self, channel_id, thread_ts, limit=200, oldest=None):
+            calls.append((channel_id, thread_ts, limit, oldest))
+            return {
+                "ok": True,
+                "messages": [
+                    {
+                        "ts": "1774999116.837699",
+                        "thread_ts": "1774999116.837699",
+                        "user": "U999",
+                        "text": "can you say no?",
+                    },
+                    {
+                        "ts": "1774999117.000000",
+                        "thread_ts": "1774999116.837699",
+                        "user": "U123",
+                        "text": "bob can you do it?",
+                    },
+                ],
+            }
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+
+    messages = adapter.list_thread_messages("oracle", "slack:C222", "1774999116.837699")
+
+    assert calls == [("C222", "1774999116.837699", 200, None)]
+    assert [(item.message_ts, item.author_actor_id, item.text) for item in messages] == [
+        ("1774999116.837699", "U999", "can you say no?"),
+        ("1774999117.000000", "U123", "bob can you do it?"),
+    ]
+
+
+def test_search_messages_parses_thread_ts_from_permalink():
+    class FakeApiClient:
+        def search_messages(self, query, count=20, page=1, sort=None, sort_dir=None):
+            assert query == "bob"
+            assert count == 50
+            assert page == 1
+            assert sort == "timestamp"
+            assert sort_dir == "desc"
+            return {
+                "ok": True,
+                "messages": {
+                    "matches": [
+                        {
+                            "ts": "1777007562.458519",
+                            "user": "U123",
+                            "text": "bob please reply",
+                            "channel": {"id": "C222", "name": "yifanche-bob-test"},
+                            "permalink": "https://dyn.slack.com/archives/C222/p1777007562458519?thread_ts=1777006365.616769",
+                        }
+                    ]
+                },
+            }
+
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter._api_client = lambda workspace_name: FakeApiClient()  # type: ignore[method-assign]
+
+    messages = adapter.search_messages(
+        "oracle",
+        query="bob",
+        count=50,
+        page=1,
+        sort="timestamp",
+        sort_dir="desc",
+    )
+
+    assert len(messages) == 1
+    assert messages[0].channel_id == "C222"
+    assert messages[0].message_ts == "1777007562.458519"
+    assert messages[0].thread_ts == "1777006365.616769"
+
+
 def test_post_root_message_serializes_concurrent_browser_api_calls():
     class SlowTransport:
         def __init__(self):

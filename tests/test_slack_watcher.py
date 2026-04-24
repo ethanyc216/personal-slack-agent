@@ -5,9 +5,15 @@ from personal_slack_agent.models import (
     ChannelConfig,
     DefaultSettings,
     SessionStatus,
+    WatcherSettings,
     WorkspaceConfig,
 )
-from personal_slack_agent.slack import SlackRootMessage, SlackThreadReplyMessage
+from personal_slack_agent.slack import (
+    SlackRootMessage,
+    SlackSearchMessage,
+    SlackThreadMessage,
+    SlackThreadReplyMessage,
+)
 from personal_slack_agent.state import BobStateStore
 
 
@@ -15,6 +21,7 @@ class RecordingOrchestrator:
     def __init__(self) -> None:
         self.root_calls = []
         self.reply_calls = []
+        self.ultimate_calls = []
 
     def handle_new_root_message(
         self,
@@ -24,6 +31,18 @@ class RecordingOrchestrator:
         author_actor_id: str,
         text: str,
     ) -> None:
+        if channel_name.startswith("slack:") and text.strip().lower().startswith("bob"):
+            self.ultimate_calls.append(
+                {
+                    "workspace_name": workspace_name,
+                    "channel_name": channel_name,
+                    "thread_ts": message_ts,
+                    "message_ts": message_ts,
+                    "author_actor_id": author_actor_id,
+                    "text": text,
+                }
+            )
+            return
         self.root_calls.append(
             {
                 "workspace_name": workspace_name,
@@ -54,11 +73,34 @@ class RecordingOrchestrator:
             }
         )
 
+    def handle_ultimate_invocation(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        author_actor_id: str,
+        text: str,
+    ) -> None:
+        self.ultimate_calls.append(
+            {
+                "workspace_name": workspace_name,
+                "channel_name": channel_name,
+                "thread_ts": thread_ts,
+                "message_ts": message_ts,
+                "author_actor_id": author_actor_id,
+                "text": text,
+            }
+        )
+
 
 class FakeBrowser:
     def __init__(self) -> None:
         self.channel_ids = {}
+        self.accessible_conversation_ids = {}
         self.root_messages = {}
+        self.search_results = {}
+        self.thread_messages = {}
         self.thread_replies = {}
         self.thread_reply_errors = {}
         self.thread_reply_calls = []
@@ -66,7 +108,31 @@ class FakeBrowser:
         self.disconnect_handlers = {}
 
     def get_channel_id(self, workspace_name: str, channel_name: str) -> str:
+        if channel_name.startswith("slack:"):
+            return channel_name.split(":", 1)[1]
         return self.channel_ids[(workspace_name, channel_name)]
+
+    def list_accessible_conversation_ids(self, workspace_name: str):
+        value = self.accessible_conversation_ids.get(workspace_name, [])
+        if isinstance(value, Exception):
+            raise value
+        return list(value)
+
+    def search_messages(
+        self,
+        workspace_name: str,
+        query: str,
+        count: int = 20,
+        page: int = 1,
+        sort: str = None,
+        sort_dir: str = None,
+    ):
+        del query
+        del count
+        del page
+        del sort
+        del sort_dir
+        return list(self.search_results.get(workspace_name, []))
 
     def subscribe_to_realtime_frames(self, workspace_name: str, on_frame, on_disconnect) -> None:
         self.frame_handlers[workspace_name] = on_frame
@@ -104,6 +170,42 @@ class FakeBrowser:
             replies = [reply for reply in replies if float(reply.message_ts) > float(oldest)]
         return replies[:limit]
 
+    def list_thread_messages(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ):
+        explicit = self.thread_messages.get((workspace_name, channel_name, thread_ts))
+        if explicit is not None:
+            return list(explicit)
+        messages = []
+        for item in self.root_messages.get((workspace_name, channel_name), []):
+            if item.message_ts == thread_ts:
+                messages.append(
+                    SlackThreadMessage(
+                        workspace_name=item.workspace_name,
+                        channel_name=item.channel_name,
+                        thread_ts=thread_ts,
+                        message_ts=item.message_ts,
+                        author_actor_id=item.author_actor_id,
+                        text=item.text,
+                    )
+                )
+                break
+        for item in self.thread_replies.get((workspace_name, channel_name, thread_ts), []):
+            messages.append(
+                SlackThreadMessage(
+                    workspace_name=item.workspace_name,
+                    channel_name=item.channel_name,
+                    thread_ts=item.thread_ts,
+                    message_ts=item.message_ts,
+                    author_actor_id=item.author_actor_id,
+                    text=item.text,
+                )
+            )
+        return messages
+
     def emit_frame(self, workspace_name: str, raw_frame: str) -> None:
         self.frame_handlers[workspace_name](raw_frame)
 
@@ -117,11 +219,16 @@ def _config(tmp_path):
         workspaces=[
             WorkspaceConfig(
                 name="oracle",
-                allowed_actor_ids=["U123"],
                 channels=[ChannelConfig(name="yifanche-private")],
             )
         ],
     )
+
+
+def _ultimate_mode_config(tmp_path):
+    config = _config(tmp_path)
+    config.watcher = WatcherSettings(bob_ultimate_mode=True)
+    return config
 
 
 def test_watcher_reconciles_root_messages_since_channel_cursor(tmp_path):
@@ -272,6 +379,409 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
             "message_ts": "9999999999.0",
             "author_actor_id": "U123",
             "text": "follow-up",
+        }
+    ]
+
+
+def test_watcher_routes_unconfigured_root_message_to_ultimate_mode(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.accessible_conversation_ids["oracle"] = ["C999"]
+    browser.root_messages[("oracle", "slack:C999")] = [
+        SlackRootMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="bob review this",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "slack:C999",
+            "thread_ts": "2.0",
+            "message_ts": "2.0",
+            "author_actor_id": "U123",
+            "text": "bob review this",
+        }
+    ]
+
+
+def test_watcher_routes_unconfigured_bob_reply_to_ultimate_mode(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.accessible_conversation_ids["oracle"] = ["C999"]
+    browser.thread_replies[("oracle", "slack:C999", "10.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="10.0",
+            message_ts="10.1",
+            author_actor_id="U123",
+            text="bob can you do it?",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    browser.emit_frame(
+        "oracle",
+        '{"type":"message","channel":"C999","ts":"10.1","thread_ts":"10.0","text":"bob can you do it?"}',
+    )
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls[-1] == {
+        "workspace_name": "oracle",
+        "channel_name": "slack:C999",
+        "thread_ts": "10.0",
+        "message_ts": "10.1",
+        "author_actor_id": "U123",
+        "text": "bob can you do it?",
+    }
+
+
+def test_watcher_ultimate_mode_ignores_non_bob_reply(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.accessible_conversation_ids["oracle"] = ["C999"]
+    browser.thread_replies[("oracle", "slack:C999", "10.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="10.0",
+            message_ts="10.2",
+            author_actor_id="U999",
+            text="plain follow-up",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.reply_calls == []
+    assert orchestrator.ultimate_calls == []
+
+
+def test_watcher_routes_configured_channel_bob_reply_to_ultimate_mode(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.thread_replies[("oracle", "yifanche-private", "20.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="20.0",
+            message_ts="20.1",
+            author_actor_id="U123",
+            text="bob do it here too",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    browser.emit_frame(
+        "oracle",
+        '{"type":"message","channel":"C123","ts":"20.1","thread_ts":"20.0","text":"bob do it here too"}',
+    )
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls[-1] == {
+        "workspace_name": "oracle",
+        "channel_name": "yifanche-private",
+        "thread_ts": "20.0",
+        "message_ts": "20.1",
+        "author_actor_id": "U123",
+        "text": "bob do it here too",
+    }
+
+
+def test_watcher_ultimate_mode_tolerates_runtime_channel_listing_failure(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.accessible_conversation_ids["oracle"] = RuntimeError("enterprise_is_restricted")
+    browser.root_messages[("oracle", "yifanche-private")] = [
+        SlackRootMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="Bob, hi",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.root_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "message_ts": "1.0",
+            "author_actor_id": "U123",
+            "text": "Bob, hi",
+        }
+    ]
+
+
+def test_watcher_search_fallback_routes_recent_ultimate_reply(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.search_results["oracle"] = [
+        SlackSearchMessage(
+            workspace_name="oracle",
+            channel_id="C123",
+            message_ts="1777007562.458519",
+            thread_ts="1777006365.616769",
+            author_actor_id="U123",
+            text="bob please reply with exactly ultimate mode test 1 ok and nothing else.",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("oracle", "C123")] = "yifanche-private"
+    watcher._ultimate_search_cursor["oracle"] = 1777007560.0
+
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "thread_ts": "1777006365.616769",
+            "message_ts": "1777007562.458519",
+            "author_actor_id": "U123",
+            "text": "bob please reply with exactly ultimate mode test 1 ok and nothing else.",
+        }
+    ]
+
+
+def test_watcher_search_fallback_recovers_late_indexed_reply_after_newer_hit(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("oracle", "C123")] = "yifanche-private"
+    watcher._ultimate_search_cursor["oracle"] = 1777007000.0
+
+    browser.search_results["oracle"] = [
+        SlackSearchMessage(
+            workspace_name="oracle",
+            channel_id="C123",
+            message_ts="1777007562.458519",
+            thread_ts="1777006365.616769",
+            author_actor_id="U123",
+            text="bob first visible hit",
+        )
+    ]
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "thread_ts": "1777006365.616769",
+            "message_ts": "1777007562.458519",
+            "author_actor_id": "U123",
+            "text": "bob first visible hit",
+        }
+    ]
+
+    orchestrator.ultimate_calls.clear()
+    browser.search_results["oracle"] = [
+        SlackSearchMessage(
+            workspace_name="oracle",
+            channel_id="C123",
+            message_ts="1777007561.000001",
+            thread_ts="1777006365.616769",
+            author_actor_id="U123",
+            text="bob late indexed older hit",
+        )
+    ]
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "yifanche-private",
+            "thread_ts": "1777006365.616769",
+            "message_ts": "1777007561.000001",
+            "author_actor_id": "U123",
+            "text": "bob late indexed older hit",
+        }
+    ]
+
+
+def test_watcher_stops_between_channel_reconciles_when_requested(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    stop_flag = {"value": False}
+    orchestrator = RecordingOrchestrator()
+    original_handle_new_root_message = orchestrator.handle_new_root_message
+
+    def stopping_handle_new_root_message(**kwargs):
+        original_handle_new_root_message(**kwargs)
+        if kwargs.get("channel_name") == "first-channel":
+            stop_flag["value"] = True
+
+    class StoppingBrowser(FakeBrowser):
+        def list_root_messages(
+            self,
+            workspace_name: str,
+            channel_name: str,
+            oldest: str = None,
+            latest: str = None,
+            limit: int = 50,
+        ):
+            messages = super().list_root_messages(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                oldest=oldest,
+                latest=latest,
+                limit=limit,
+            )
+            return messages
+
+    browser = StoppingBrowser()
+    browser.channel_ids[("oracle", "first-channel")] = "C111"
+    browser.channel_ids[("oracle", "second-channel")] = "C222"
+    browser.root_messages[("oracle", "first-channel")] = [
+        SlackRootMessage(
+            workspace_name="oracle",
+            channel_name="first-channel",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="Bob, first",
+        )
+    ]
+    browser.root_messages[("oracle", "second-channel")] = [
+        SlackRootMessage(
+            workspace_name="oracle",
+            channel_name="second-channel",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="Bob, second",
+        )
+    ]
+    orchestrator.handle_new_root_message = stopping_handle_new_root_message
+    config = AppConfig(
+        defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
+        workspaces=[
+            WorkspaceConfig(
+                name="oracle",
+                channels=[
+                    ChannelConfig(name="first-channel"),
+                    ChannelConfig(name="second-channel"),
+                ],
+            )
+        ],
+    )
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=config,
+        should_stop=lambda: stop_flag["value"],
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.root_calls == [
+        {
+            "workspace_name": "oracle",
+            "channel_name": "first-channel",
+            "message_ts": "1.0",
+            "author_actor_id": "U123",
+            "text": "Bob, first",
         }
     ]
 

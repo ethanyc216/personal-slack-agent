@@ -361,6 +361,7 @@ def test_watcher_settings_load_from_watcher_section(tmp_path):
         periodic_terminal_thread_reconcile_batch_size = 3
         historical_terminal_thread_reconcile_base_interval_seconds = 90
         historical_terminal_thread_reconcile_max_interval_seconds = 1200
+        bob_ultimate_mode = true
         """,
         encoding="utf-8",
     )
@@ -374,6 +375,7 @@ def test_watcher_settings_load_from_watcher_section(tmp_path):
     assert config.watcher.periodic_terminal_thread_reconcile_batch_size == 3
     assert config.watcher.historical_terminal_thread_reconcile_base_interval_seconds == 90.0
     assert config.watcher.historical_terminal_thread_reconcile_max_interval_seconds == 1200.0
+    assert config.watcher.bob_ultimate_mode is True
 
 
 def test_watcher_settings_fallback_to_legacy_defaults_keys(tmp_path):
@@ -393,6 +395,7 @@ def test_watcher_settings_fallback_to_legacy_defaults_keys(tmp_path):
         periodic_terminal_thread_reconcile_batch_size = 2
         historical_terminal_thread_reconcile_base_interval_seconds = 75
         historical_terminal_thread_reconcile_max_interval_seconds = 600
+        bob_ultimate_mode = true
         """,
         encoding="utf-8",
     )
@@ -406,6 +409,7 @@ def test_watcher_settings_fallback_to_legacy_defaults_keys(tmp_path):
     assert config.watcher.periodic_terminal_thread_reconcile_batch_size == 2
     assert config.watcher.historical_terminal_thread_reconcile_base_interval_seconds == 75.0
     assert config.watcher.historical_terminal_thread_reconcile_max_interval_seconds == 600.0
+    assert config.watcher.bob_ultimate_mode is True
 
 
 def test_dump_config_emits_orchestrator_and_watcher_sections(tmp_path):
@@ -427,6 +431,7 @@ def test_dump_config_emits_orchestrator_and_watcher_sections(tmp_path):
         periodic_terminal_thread_reconcile_batch_size = 2
         historical_terminal_thread_reconcile_base_interval_seconds = 75
         historical_terminal_thread_reconcile_max_interval_seconds = 600
+        bob_ultimate_mode = true
         """,
         encoding="utf-8",
     )
@@ -444,6 +449,7 @@ def test_dump_config_emits_orchestrator_and_watcher_sections(tmp_path):
     assert "periodic_terminal_thread_reconcile_batch_size = 2" in rendered
     assert "historical_terminal_thread_reconcile_base_interval_seconds = 75" in rendered
     assert "historical_terminal_thread_reconcile_max_interval_seconds = 600" in rendered
+    assert "bob_ultimate_mode = true" in rendered
 
 
 def test_dump_config_emits_browser_runner_and_lifecycle_sections(tmp_path):

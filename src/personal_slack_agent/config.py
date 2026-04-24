@@ -36,6 +36,9 @@ class ConfigError(ValueError):
     pass
 
 
+RUNTIME_CHANNEL_PREFIX = "slack:"
+
+
 def apply_channel_defaults(
     defaults: DefaultSettings,
     channel_defaults: WorkspaceChannelDefaults,
@@ -121,6 +124,33 @@ def apply_channel_defaults(
         else channel_defaults.slack_channel_id
     )
     return channel
+
+
+def runtime_channel_name(slack_channel_id: str) -> str:
+    return "{0}{1}".format(RUNTIME_CHANNEL_PREFIX, slack_channel_id)
+
+
+def slack_channel_id_from_runtime_channel_name(channel_name: str) -> Optional[str]:
+    if not channel_name.startswith(RUNTIME_CHANNEL_PREFIX):
+        return None
+    channel_id = channel_name[len(RUNTIME_CHANNEL_PREFIX):].strip()
+    return channel_id or None
+
+
+def build_runtime_channel(
+    defaults: DefaultSettings,
+    workspace: WorkspaceConfig,
+    channel_name: str,
+) -> Optional[ChannelConfig]:
+    slack_channel_id = slack_channel_id_from_runtime_channel_name(channel_name)
+    if slack_channel_id is None:
+        return None
+    channel = ChannelConfig(
+        name=channel_name,
+        slack_channel_id=slack_channel_id,
+    )
+    resolved = apply_channel_defaults(defaults, workspace.channel_defaults, channel)
+    return _validate_channel_memory_policy(resolved)
 
 
 def load_config(config_path: Union[str, Path]) -> AppConfig:
@@ -276,6 +306,9 @@ def dump_config(config: AppConfig) -> str:
                 _render_number(
                     config.watcher.historical_terminal_thread_reconcile_max_interval_seconds
                 )
+            ),
+            "bob_ultimate_mode = {0}".format(
+                "true" if config.watcher.bob_ultimate_mode else "false"
             ),
         ]
     )
@@ -670,6 +703,12 @@ def _parse_watcher(
             default=15 * 60.0,
         )
         or 15 * 60.0,
+        bob_ultimate_mode=_optional_bool(
+            raw_watcher.get("bob_ultimate_mode", legacy_defaults.get("bob_ultimate_mode")),
+            "watcher.bob_ultimate_mode",
+            default=False,
+        )
+        or False,
     )
 
 

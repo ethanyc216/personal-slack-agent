@@ -16,16 +16,20 @@ from personal_slack_agent.models import (
     WorkspaceConfig,
 )
 from personal_slack_agent.orchestrator import BobOrchestrator
+from personal_slack_agent.slack import SlackThreadMessage
 from personal_slack_agent.state import BobStateStore
 
 
 class FakeSlackBrowser:
     def __init__(self) -> None:
         self.thread_posts: Dict[str, List[str]] = {}
+        self.updated_messages: Dict[str, List[str]] = {}
+        self.thread_messages: Dict[tuple[str, str, str], list] = {}
         self.deleted_messages: List[str] = []
         self.uploaded_snippets: List[dict] = []
         self.reactions: List[dict] = []
         self.post_error: Exception = None
+        self.update_error: Exception = None
         self.upload_error: Exception = None
         self.reaction_error: Exception = None
 
@@ -43,6 +47,20 @@ class FakeSlackBrowser:
         posts = self.thread_posts.setdefault(thread_ts, [])
         posts.append(text)
         return "{0}.{1:06d}".format(thread_ts.split(".")[0], len(posts))
+
+    def update_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+        text: str,
+    ) -> None:
+        if self.update_error is not None:
+            raise self.update_error
+        del workspace_name
+        del channel_name
+        updates = self.updated_messages.setdefault(message_ts, [])
+        updates.append(text)
 
     def delete_message(
         self,
@@ -102,6 +120,14 @@ class FakeSlackBrowser:
                 "emoji_name": emoji_name,
             }
         )
+
+    def list_thread_messages(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ):
+        return list(self.thread_messages.get((workspace_name, channel_name, thread_ts), []))
 
 
 @dataclass
@@ -816,7 +842,7 @@ def test_post_failure_marks_session_failed_instead_of_leaving_it_running(fake_en
     assert record.status is SessionStatus.FAILED
 
 
-def test_new_root_message_is_enqueued_before_worker_dispatch(fake_environment):
+def test_new_root_message_dispatches_immediately_with_worker_pool(fake_environment):
     orchestrator, _browser, store, _runner = fake_environment
     orchestrator._max_concurrent_tasks = 5  # type: ignore[attr-defined]
 
@@ -828,10 +854,248 @@ def test_new_root_message_is_enqueued_before_worker_dispatch(fake_environment):
         text="Bob, hi there",
     )
 
-    queued = store.list_tasks(status=TaskStatus.QUEUED)
-    assert len(queued) == 1
-    assert queued[0].task_kind == "new_root"
-    assert queued[0].prompt_text == "Bob, hi there"
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        if not store.list_tasks(status=TaskStatus.QUEUED) and not store.list_tasks(
+            status=TaskStatus.RUNNING
+        ):
+            break
+        time.sleep(0.01)
+
+    assert store.list_tasks(status=TaskStatus.QUEUED) == []
+    completed = store.list_tasks(status=TaskStatus.COMPLETED)
+    assert len(completed) == 1
+    assert completed[0].task_kind == "new_root"
+    assert completed[0].prompt_text == "Bob, hi there"
+
+
+def test_ultimate_invocation_dispatches_immediately_with_worker_pool(fake_environment):
+    orchestrator, browser, store, _runner = fake_environment
+    orchestrator._max_concurrent_tasks = 5  # type: ignore[attr-defined]
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    browser.thread_messages[("oracle", "slack:C999", "1776915000.000001")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776915000.000001",
+            message_ts="1776915000.000001",
+            author_actor_id="U123",
+            text="bob dispatch this now",
+        )
+    ]
+
+    orchestrator.handle_ultimate_invocation(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776915000.000001",
+        message_ts="1776915000.000001",
+        author_actor_id="U123",
+        text="bob dispatch this now",
+    )
+
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        if not store.list_tasks(status=TaskStatus.QUEUED) and not store.list_tasks(
+            status=TaskStatus.RUNNING
+        ):
+            break
+        time.sleep(0.01)
+
+    assert store.list_tasks(status=TaskStatus.QUEUED) == []
+    completed = store.list_tasks(status=TaskStatus.COMPLETED)
+    assert any(item.task_kind == "ultimate_invocation" for item in completed)
+
+
+def test_ultimate_root_message_updates_same_message_and_includes_thread_context(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    browser.thread_messages[("oracle", "slack:C999", "1776911047.025189")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776911047.025189",
+            message_ts="1776911047.025189",
+            author_actor_id="U123",
+            text="bob review this",
+        )
+    ]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        message_ts="1776911047.025189",
+        author_actor_id="U123",
+        text="bob review this",
+    )
+
+    assert browser.reactions[-1]["message_ts"] == "1776911047.025189"
+    assert browser.updated_messages["1776911047.025189"][0].startswith("bob review this\n_*Bob is working on it")
+    assert browser.updated_messages["1776911047.025189"][-1].endswith("_*codex Bob :white_check_mark::*_ Final answer")
+    assert "Slack thread transcript:" in runner.new_session_calls[0]["prompt"]
+    assert "bob review this" in runner.new_session_calls[0]["prompt"]
+    record = store.get_by_thread("oracle", "slack:C999", "1776911047.025189")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_IDLE
+
+
+def test_ultimate_reply_invocation_reuses_session_and_updates_same_message(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776911047.025189",
+        root_ts="1776911047.025189",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser.thread_messages[("oracle", "slack:C999", "1776911047.025189")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776911047.025189",
+            message_ts="1776911047.025189",
+            author_actor_id="U999",
+            text="can you say no?",
+        ),
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776911047.025189",
+            message_ts="1776911050.000200",
+            author_actor_id="U123",
+            text="bob can you do it?",
+        ),
+    ]
+
+    orchestrator.handle_ultimate_invocation(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776911047.025189",
+        message_ts="1776911050.000200",
+        author_actor_id="U123",
+        text="bob can you do it?",
+    )
+
+    assert browser.reactions[-1]["message_ts"] == "1776911050.000200"
+    assert browser.updated_messages["1776911050.000200"][0].startswith("bob can you do it?\n_*Bob is working on it")
+    assert browser.updated_messages["1776911050.000200"][-1].endswith("_*codex Bob :white_check_mark::*_ Final answer")
+    assert len(runner.resume_calls) == 1
+    assert "Slack thread transcript:" in runner.resume_calls[0]["prompt"]
+    assert "can you say no?" in runner.resume_calls[0]["prompt"]
+
+
+def test_ultimate_invocation_falls_back_to_thread_reply_if_message_update_fails(fake_environment):
+    orchestrator, browser, _store, _runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    browser.update_error = RuntimeError("chat.update failed")
+    browser.thread_messages[("oracle", "slack:C999", "1776911047.025189")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776911047.025189",
+            message_ts="1776911047.025189",
+            author_actor_id="U123",
+            text="bob review this",
+        )
+    ]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        message_ts="1776911047.025189",
+        author_actor_id="U123",
+        text="bob review this",
+    )
+
+    assert browser.thread_posts["1776911047.025189"][0].startswith("_*Bob is working on it :arrows_counterclockwise::*_")
+    assert browser.thread_posts["1776911047.025189"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
+
+
+def test_ultimate_mode_applies_to_configured_channel_root_messages(fake_environment):
+    orchestrator, browser, _store, runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    browser.thread_messages[("oracle", "yifanche-private", "1776912000.000001")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1776912000.000001",
+            message_ts="1776912000.000001",
+            author_actor_id="U123",
+            text="bob review this configured channel",
+        )
+    ]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        message_ts="1776912000.000001",
+        author_actor_id="U123",
+        text="bob review this configured channel",
+    )
+
+    assert browser.updated_messages["1776912000.000001"][0].startswith(
+        "bob review this configured channel\n_*Bob is working on it"
+    )
+    assert browser.updated_messages["1776912000.000001"][-1].endswith(
+        "_*codex Bob :white_check_mark::*_ Final answer"
+    )
+    assert len(runner.new_session_calls) == 1
+
+
+def test_ultimate_waiting_approval_accepts_bob_prefixed_approve(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776913000.000001",
+        root_ts="1776913000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_APPROVAL,
+        approval_request_id="APR-001",
+        approval_command_summary="git status -sb",
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="session-123",
+        final_output="approved",
+    )
+    browser.thread_messages[("oracle", "slack:C999", "1776913000.000001")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776913000.000001",
+            message_ts="1776913000.000001",
+            author_actor_id="U999",
+            text="please approve",
+        ),
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776913000.000001",
+            message_ts="1776913001.000001",
+            author_actor_id="U123",
+            text="bob approve APR-001",
+        ),
+    ]
+
+    orchestrator.handle_ultimate_invocation(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776913000.000001",
+        message_ts="1776913001.000001",
+        author_actor_id="U123",
+        text="bob approve APR-001",
+    )
+
+    assert runner.resume_calls[-1]["prompt"] == "approve APR-001"
+    assert browser.updated_messages["1776913001.000001"][-1].endswith(
+        "_*codex Bob :white_check_mark::*_ approved"
+    )
 
 
 def test_process_scheduled_actions_runs_up_to_global_concurrency_limit(tmp_path):

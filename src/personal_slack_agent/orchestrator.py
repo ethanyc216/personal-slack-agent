@@ -2,6 +2,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import time
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
+from .config import build_runtime_channel, slack_channel_id_from_runtime_channel_name
 from .codex_runner import CodexRunResult
 from .generated_files import GeneratedFile, extract_generated_files, normalize_slack_markdown
 from .models import (
@@ -13,7 +14,7 @@ from .models import (
     TaskRecord,
     TaskStatus,
 )
-from .slack import SlackBrowserAdapter
+from .slack import SlackBrowserAdapter, SlackThreadMessage
 from .state import BobStateStore
 
 
@@ -43,8 +44,10 @@ class CodexRunner(Protocol):
 class BobOrchestrator:
     _PURPOSE_ROOT_REQUEST = "root_request"
     _PURPOSE_THREAD_REPLY = "thread_reply"
+    _PURPOSE_ULTIMATE_INVOCATION = "ultimate_invocation"
     _TASK_KIND_NEW_ROOT = "new_root"
     _TASK_KIND_THREAD_REPLY = "thread_reply"
+    _TASK_KIND_ULTIMATE_INVOCATION = "ultimate_invocation"
     _LABEL_WORKING = "_*Bob is working on it :arrows_counterclockwise::*_"
     _LABEL_QUEUED = "_*Bob queued it :hourglass_flowing_sand::*_"
     _LABEL_INPUT = "_*Bob needs input :exclamation::*_"
@@ -94,6 +97,16 @@ class BobOrchestrator:
         channel = self._find_channel(workspace, channel_name) if workspace else None
         if workspace is None or channel is None:
             return
+        if self._should_use_ultimate_mode_for_channel(channel_name):
+            self.handle_ultimate_invocation(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=message_ts,
+                message_ts=message_ts,
+                author_actor_id=author_actor_id,
+                text=text,
+            )
+            return
         if not self._is_bob_root_message(text):
             return
         if not self._is_actor_allowed(workspace_name, channel_name, author_actor_id):
@@ -142,8 +155,72 @@ class BobOrchestrator:
             task_kind=self._TASK_KIND_NEW_ROOT,
             prompt_text=text,
         )
-        if self._max_concurrent_tasks == 1:
-            self._dispatch_queued_tasks()
+        self._dispatch_queued_tasks()
+
+    def handle_ultimate_invocation(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        author_actor_id: str,
+        text: str,
+    ) -> None:
+        workspace = self._find_workspace(workspace_name)
+        channel = self._find_channel(workspace, channel_name) if workspace else None
+        if workspace is None or channel is None:
+            return
+        if not self.config.watcher.bob_ultimate_mode:
+            return
+        if not self._should_use_ultimate_mode_for_channel(channel_name):
+            return
+        if not self._is_bob_root_message(text):
+            return
+        if not self._is_actor_allowed(workspace_name, channel_name, author_actor_id):
+            return
+        if not channel.effective_accept_root_bob_requests:
+            return
+
+        claimed = self.state_store.claim_processed_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            author_actor_id=author_actor_id,
+            purpose=self._PURPOSE_ULTIMATE_INVOCATION,
+        )
+        if not claimed:
+            return
+
+        self._try_ack_message(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            message_ts=message_ts,
+        )
+        existing = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
+        self.state_store.enqueue_task(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            author_actor_id=author_actor_id,
+            task_kind=self._TASK_KIND_ULTIMATE_INVOCATION,
+            prompt_text=text,
+            codex_session_id=existing.codex_session_id if existing is not None else None,
+        )
+        if self.state_store.count_incomplete_tasks_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        ) > 1:
+            self._try_append_queued_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                original_text=text,
+            )
+        self._dispatch_queued_tasks()
 
     def process_scheduled_actions(self, now_epoch: Optional[int] = None) -> None:
         self._drain_completed_tasks()
@@ -239,8 +316,7 @@ class BobOrchestrator:
                 thread_ts=thread_ts,
                 message_ts=message_ts,
             )
-        if self._max_concurrent_tasks == 1:
-            self._dispatch_queued_tasks()
+        self._dispatch_queued_tasks()
 
     def _handle_approval_reply(
         self,
@@ -493,6 +569,216 @@ class BobOrchestrator:
             ),
         )
 
+    def _process_ultimate_run_result(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        original_text: str,
+        session_id: str,
+        run_result: CodexRunResult,
+        result_key_suffix: str,
+    ) -> None:
+        if run_result.wait_kind == "input":
+            wait_message = run_result.wait_message or "Please reply with another `bob ...` message."
+            self._append_message_line_or_fallback(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                original_text=original_text,
+                intent_key="ultimate-wait-input-{0}".format(result_key_suffix),
+                line="{0} {1}".format(self._LABEL_INPUT, wait_message),
+            )
+            self.state_store.set_waiting_state(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.WAITING_FOR_INPUT,
+                waiting_message_ts=None,
+                approval_request_id=None,
+                approval_command_summary=None,
+                reminder_due_at=None,
+                auto_close_due_at=None,
+            )
+            return
+
+        if run_result.wait_kind == "approval":
+            approval_request_id = self._extract_approval_request_id(run_result.wait_message)
+            if approval_request_id is None:
+                approval_request_id = "APR-{0}".format(thread_ts.replace(".", "")[-6:])
+            approval_summary = run_result.wait_message or "Command requires approval"
+            if self._should_auto_approve(approval_summary, approval_request_id):
+                auto_result = self._runner_for_channel(workspace_name, channel_name).resume_session(
+                    session_id,
+                    "approve {0}".format(approval_request_id),
+                    self._cwd_for_thread(workspace_name, channel_name, thread_ts),
+                    sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
+                    workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                        workspace_name,
+                        channel_name,
+                    ),
+                )
+                self._process_ultimate_run_result(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    message_ts=message_ts,
+                    original_text=original_text,
+                    session_id=session_id,
+                    run_result=auto_result,
+                    result_key_suffix="auto-{0}".format(result_key_suffix),
+                )
+                return
+            self._append_message_line_or_fallback(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                original_text=original_text,
+                intent_key="ultimate-wait-approval-{0}-{1}".format(
+                    approval_request_id,
+                    result_key_suffix,
+                ),
+                line=(
+                    "{0} {1} "
+                    "(send `bob approve {2}`, `bob deny {2}`, or `bob cancel {2}`)"
+                ).format(self._LABEL_APPROVAL, approval_summary, approval_request_id),
+            )
+            self.state_store.set_waiting_state(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.WAITING_FOR_APPROVAL,
+                waiting_message_ts=None,
+                approval_request_id=approval_request_id,
+                approval_command_summary=approval_summary,
+                reminder_due_at=None,
+                auto_close_due_at=None,
+            )
+            return
+
+        if run_result.final_output:
+            self._deliver_ultimate_final_output(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                original_text=original_text,
+                session_id=session_id,
+                result_key_suffix=result_key_suffix,
+                final_output=run_result.final_output,
+            )
+            self.state_store.update_status(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                status=SessionStatus.CLOSED_IDLE,
+            )
+            return
+
+        if run_result.failure_text:
+            if self._is_exec_timeout_failure(run_result.failure_text):
+                self._append_message_line_or_fallback(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    message_ts=message_ts,
+                    original_text=original_text,
+                    intent_key="ultimate-timeout-{0}".format(session_id),
+                    line="{0} {1}".format(self._LABEL_TIMED_OUT, run_result.failure_text),
+                )
+                self.state_store.update_status(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    status=SessionStatus.CLOSED_TIMEOUT,
+                    last_error=run_result.failure_text,
+                )
+            else:
+                self._append_message_line_or_fallback(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    message_ts=message_ts,
+                    original_text=original_text,
+                    intent_key="ultimate-failure-{0}".format(session_id),
+                    line=self._failure_text(),
+                )
+                self.state_store.update_status(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    status=SessionStatus.FAILED,
+                    last_error=run_result.failure_text,
+                )
+
+    def _deliver_ultimate_final_output(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        original_text: str,
+        session_id: str,
+        result_key_suffix: str,
+        final_output: str,
+    ) -> None:
+        summary, files = extract_generated_files(final_output)
+        if not files:
+            self._append_message_line_or_fallback(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                original_text=original_text,
+                intent_key="ultimate-final-{0}-{1}".format(session_id, result_key_suffix),
+                line="{0} {1}".format(self._LABEL_DONE, final_output),
+            )
+            return
+
+        uploaded_any = False
+        for generated_file in files:
+            try:
+                self.browser.upload_text_snippet(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    filename=generated_file.path,
+                    content=generated_file.content,
+                )
+                uploaded_any = True
+            except Exception:
+                if not uploaded_any:
+                    self._append_message_line_or_fallback(
+                        workspace_name=workspace_name,
+                        channel_name=channel_name,
+                        thread_ts=thread_ts,
+                        message_ts=message_ts,
+                        original_text=original_text,
+                        intent_key="ultimate-final-{0}-{1}".format(session_id, result_key_suffix),
+                        line="{0} {1}".format(self._LABEL_DONE, final_output),
+                    )
+                    return
+                raise
+
+        summary_text = summary or "Uploaded generated file snippets."
+        file_list = ", ".join("`{0}`".format(item.path) for item in files)
+        self._append_message_line_or_fallback(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            original_text=original_text,
+            intent_key="ultimate-final-{0}-{1}".format(session_id, result_key_suffix),
+            line="{0} {1}\n\nUploaded snippets: {2}".format(
+                self._LABEL_DONE,
+                summary_text,
+                file_list,
+            ),
+        )
+
     def _dispatch_queued_tasks(self) -> None:
         available_slots = self._max_concurrent_tasks - len(self._active_tasks)
         if available_slots <= 0:
@@ -544,6 +830,8 @@ class BobOrchestrator:
                 self._execute_new_root_task(task)
             elif task.task_kind == self._TASK_KIND_THREAD_REPLY:
                 self._execute_thread_reply_task(task)
+            elif task.task_kind == self._TASK_KIND_ULTIMATE_INVOCATION:
+                self._execute_ultimate_invocation_task(task)
             else:
                 raise ValueError("Unknown task kind: {0}".format(task.task_kind))
         except Exception as exc:
@@ -734,6 +1022,295 @@ class BobOrchestrator:
                 prompt=task.prompt_text,
             )
 
+    def _execute_ultimate_invocation_task(self, task: TaskRecord) -> None:
+        record = self.state_store.get_by_thread(
+            task.workspace_name,
+            task.channel_name,
+            task.thread_ts,
+        )
+        if record is not None and record.status is SessionStatus.WAITING_FOR_APPROVAL:
+            self._handle_ultimate_approval_invocation(task, record)
+            return
+        thread_messages = self.browser.list_thread_messages(
+            task.workspace_name,
+            task.channel_name,
+            task.thread_ts,
+        )
+        if not thread_messages:
+            thread_messages = [
+                SlackThreadMessage(
+                    workspace_name=task.workspace_name,
+                    channel_name=task.channel_name,
+                    thread_ts=task.thread_ts,
+                    message_ts=task.message_ts,
+                    author_actor_id=task.author_actor_id,
+                    text=task.prompt_text,
+                )
+            ]
+        prompt = self._build_ultimate_prompt(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            user_text=task.prompt_text,
+            invocation_message_ts=task.message_ts,
+            thread_messages=thread_messages,
+        )
+        if record is None:
+            self._execute_new_ultimate_session(task, prompt)
+            return
+        self._resume_ultimate_session(task, record, prompt)
+
+    def _handle_ultimate_approval_invocation(
+        self,
+        task: TaskRecord,
+        record: SessionRecord,
+    ) -> None:
+        approval_text = self._strip_bob_prefix(task.prompt_text)
+        action, approval_id = self._parse_approval_reply(approval_text)
+        current_approval_id = record.approval_request_id or ""
+        if approval_id != current_approval_id or action not in ("approve", "deny", "cancel"):
+            self._append_message_line_or_fallback(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                message_ts=task.message_ts,
+                original_text=task.prompt_text,
+                intent_key="ultimate-approval-id-mismatch-{0}".format(task.message_ts),
+                line=self._approval_needed_text(record),
+            )
+            return
+
+        if action in ("deny", "cancel"):
+            action_text = "denied" if action == "deny" else "canceled"
+            self.state_store.update_status(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                status=SessionStatus.CLOSED_MANUAL,
+            )
+            self._append_message_line_or_fallback(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                message_ts=task.message_ts,
+                original_text=task.prompt_text,
+                intent_key="ultimate-approval-{0}-{1}".format(action, approval_id),
+                line="_*Bob {0} command request :exclamation:*_ {1}.".format(
+                    action_text,
+                    approval_id,
+                ),
+            )
+            return
+
+        previous_status = record.status
+        self.state_store.update_status(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            status=SessionStatus.RUNNING,
+            clear_waiting_fields=False,
+        )
+        self._try_append_working_message(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            message_ts=task.message_ts,
+            original_text=task.prompt_text,
+            intent_key="ultimate-start-status-{0}".format(task.message_ts),
+            session_id=record.codex_session_id,
+        )
+        try:
+            run_result = self._runner_for_channel(task.workspace_name, task.channel_name).resume_session(
+                record.codex_session_id,
+                approval_text,
+                record.cwd,
+                sandbox_mode=self._sandbox_mode_for_channel(task.workspace_name, task.channel_name),
+                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                    task.workspace_name,
+                    task.channel_name,
+                ),
+            )
+        except Exception:
+            self.state_store.release_processed_message(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                message_ts=task.message_ts,
+                purpose=self._PURPOSE_ULTIMATE_INVOCATION,
+            )
+            self.state_store.update_status(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                status=previous_status,
+                clear_waiting_fields=False,
+            )
+            raise
+        self._process_ultimate_run_result(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            message_ts=task.message_ts,
+            original_text=task.prompt_text,
+            session_id=record.codex_session_id,
+            run_result=run_result,
+            result_key_suffix=task.message_ts,
+        )
+
+    def _execute_new_ultimate_session(self, task: TaskRecord, prompt: str) -> None:
+        cwd = self._resolve_default_cwd(task.workspace_name, task.channel_name)
+        started_session_id: Optional[str] = None
+
+        def _on_session_started(session_id: str) -> None:
+            nonlocal started_session_id
+            started_session_id = session_id
+            self.state_store.upsert_session(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                root_ts=task.thread_ts,
+                codex_session_id=session_id,
+                cwd=cwd,
+                owner_actor_id=task.author_actor_id,
+                status=SessionStatus.RUNNING,
+            )
+            self._try_append_working_message(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                message_ts=task.message_ts,
+                original_text=task.prompt_text,
+                intent_key="ultimate-start-status-{0}".format(session_id),
+                session_id=session_id,
+            )
+
+        try:
+            run_result = self._runner_for_channel(task.workspace_name, task.channel_name).run_new_session(
+                prompt=prompt,
+                cwd=cwd,
+                additional_roots=list(
+                    self._find_channel(
+                        self._find_workspace(task.workspace_name),
+                        task.channel_name,
+                    ).effective_additional_roots
+                ),
+                sandbox_mode=self._sandbox_mode_for_channel(task.workspace_name, task.channel_name),
+                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                    task.workspace_name,
+                    task.channel_name,
+                ),
+                on_session_started=_on_session_started,
+            )
+            session_id = run_result.session_id or started_session_id or "unknown-session"
+            self.state_store.upsert_session(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                root_ts=task.thread_ts,
+                codex_session_id=session_id,
+                cwd=cwd,
+                owner_actor_id=task.author_actor_id,
+                status=SessionStatus.RUNNING,
+            )
+            if started_session_id is None:
+                self._try_append_working_message(
+                    workspace_name=task.workspace_name,
+                    channel_name=task.channel_name,
+                    thread_ts=task.thread_ts,
+                    message_ts=task.message_ts,
+                    original_text=task.prompt_text,
+                    intent_key="ultimate-start-status-{0}".format(session_id),
+                    session_id=session_id,
+                )
+            self._process_ultimate_run_result(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                message_ts=task.message_ts,
+                original_text=task.prompt_text,
+                session_id=session_id,
+                run_result=run_result,
+                result_key_suffix=task.message_ts,
+            )
+        except Exception:
+            record = self.state_store.get_by_thread(task.workspace_name, task.channel_name, task.thread_ts)
+            if record is None:
+                self.state_store.release_processed_message(
+                    workspace_name=task.workspace_name,
+                    channel_name=task.channel_name,
+                    thread_ts=task.thread_ts,
+                    message_ts=task.message_ts,
+                    purpose=self._PURPOSE_ULTIMATE_INVOCATION,
+                )
+            else:
+                self.state_store.update_status(
+                    workspace_name=task.workspace_name,
+                    channel_name=task.channel_name,
+                    thread_ts=task.thread_ts,
+                    status=SessionStatus.FAILED,
+                )
+            raise
+
+    def _resume_ultimate_session(
+        self,
+        task: TaskRecord,
+        record: SessionRecord,
+        prompt: str,
+    ) -> None:
+        previous_status = record.status
+        self.state_store.update_status(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            status=SessionStatus.RUNNING,
+            clear_waiting_fields=False,
+        )
+        self._try_append_working_message(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            message_ts=task.message_ts,
+            original_text=task.prompt_text,
+            intent_key="ultimate-start-status-{0}".format(task.message_ts),
+            session_id=record.codex_session_id,
+        )
+        try:
+            run_result = self._runner_for_channel(task.workspace_name, task.channel_name).resume_session(
+                record.codex_session_id,
+                prompt,
+                record.cwd,
+                sandbox_mode=self._sandbox_mode_for_channel(task.workspace_name, task.channel_name),
+                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                    task.workspace_name,
+                    task.channel_name,
+                ),
+            )
+        except Exception:
+            self.state_store.release_processed_message(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                message_ts=task.message_ts,
+                purpose=self._PURPOSE_ULTIMATE_INVOCATION,
+            )
+            self.state_store.update_status(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                status=previous_status,
+                clear_waiting_fields=False,
+            )
+            raise
+        self._process_ultimate_run_result(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            message_ts=task.message_ts,
+            original_text=task.prompt_text,
+            session_id=record.codex_session_id,
+            run_result=run_result,
+            result_key_suffix=task.message_ts,
+        )
+
     def _resume_record(
         self,
         workspace_name: str,
@@ -886,6 +1463,122 @@ class BobOrchestrator:
         )
         return reply_ts
 
+    def _append_message_line(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        original_text: str,
+        intent_key: str,
+        line: str,
+    ) -> None:
+        normalized_line = normalize_slack_markdown(line)
+        self.state_store.upsert_outbound_intent(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key=intent_key,
+            action="append_message_line",
+            text=normalized_line,
+            delivered=False,
+            message_ts=None,
+        )
+        pending_intent = self._find_pending_intent(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key=intent_key,
+        )
+        if pending_intent is None:
+            return
+
+        next_text = self._compose_message_with_appended_lines(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            original_text=original_text,
+            pending_line=normalized_line,
+        )
+        try:
+            self.browser.update_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                message_ts=message_ts,
+                text=next_text,
+            )
+        except Exception:
+            self.state_store.mark_outbound_intent_attempted(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key=intent_key,
+            )
+            raise
+
+        self.state_store.mark_outbound_intent_delivered(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key=intent_key,
+            message_ts=message_ts,
+        )
+
+    def _append_message_line_or_fallback(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        original_text: str,
+        intent_key: str,
+        line: str,
+    ) -> None:
+        try:
+            self._append_message_line(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message_ts,
+                original_text=original_text,
+                intent_key=intent_key,
+                line=line,
+            )
+        except Exception:
+            self._deliver_thread_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="fallback-{0}".format(intent_key),
+                text=line,
+            )
+
+    def _compose_message_with_appended_lines(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        original_text: str,
+        pending_line: Optional[str] = None,
+    ) -> str:
+        lines = [normalize_slack_markdown(original_text).rstrip()]
+        for intent in self.state_store.list_outbound_intents_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        ):
+            if (
+                intent.action == "append_message_line"
+                and intent.delivery_state == "delivered"
+                and intent.message_ts == message_ts
+            ):
+                lines.append(intent.text)
+        if pending_line is not None:
+            lines.append(pending_line)
+        return "\n".join(item for item in lines if item)
+
     def _find_pending_intent(
         self,
         workspace_name: str,
@@ -1010,6 +1703,37 @@ class BobOrchestrator:
             user_text,
         )
 
+    def _build_ultimate_prompt(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        user_text: str,
+        invocation_message_ts: str,
+        thread_messages: List[SlackThreadMessage],
+    ) -> str:
+        transcript_lines = []
+        for message in thread_messages:
+            transcript_lines.append(
+                "[{0}] {1}: {2}".format(
+                    message.message_ts,
+                    message.author_actor_id or "unknown",
+                    normalize_slack_markdown(message.text),
+                )
+            )
+        transcript_text = "\n".join(transcript_lines) if transcript_lines else "(empty thread)"
+        return (
+            "{0}\n\n"
+            "Ultimate mode:\n"
+            "- invocation_mode: one-shot inline message append\n"
+            "- invocation_message_ts: {1}\n\n"
+            "Slack thread transcript:\n"
+            "{2}"
+        ).format(
+            self._build_codex_prompt(workspace_name, channel_name, user_text),
+            invocation_message_ts,
+            transcript_text,
+        )
+
     def _is_actor_allowed(self, workspace_name: str, channel_name: str, actor_id: str) -> bool:
         workspace = self._find_workspace(workspace_name)
         if workspace is None:
@@ -1037,13 +1761,26 @@ class BobOrchestrator:
         for channel in workspace.channels:
             if channel.name == channel_name:
                 return channel
+        if self.config.watcher.bob_ultimate_mode:
+            runtime_channel = build_runtime_channel(self.config.defaults, workspace, channel_name)
+            if runtime_channel is not None:
+                return runtime_channel
         return None
+
+    def _should_use_ultimate_mode_for_channel(self, channel_name: str) -> bool:
+        return self.config.watcher.bob_ultimate_mode
 
     def _parse_approval_reply(self, text: str) -> Tuple[str, str]:
         parts = text.strip().split()
         if len(parts) < 2:
             return "", ""
         return parts[0].lower(), parts[1]
+
+    def _strip_bob_prefix(self, text: str) -> str:
+        stripped = text.strip()
+        if stripped[:3].lower() != "bob":
+            return stripped
+        return stripped[3:].strip()
 
     def _is_bob_root_message(self, text: str) -> bool:
         normalized = text.strip().lower()
@@ -1173,6 +1910,26 @@ class BobOrchestrator:
         except Exception:
             return
 
+    def _try_append_working_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        original_text: str,
+        intent_key: str,
+        session_id: str,
+    ) -> None:
+        self._append_message_line_or_fallback(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            original_text=original_text,
+            intent_key=intent_key,
+            line=self._working_text(session_id=session_id, thread_ts=thread_ts),
+        )
+
     def _try_deliver_queued_message(
         self,
         workspace_name: str,
@@ -1190,6 +1947,24 @@ class BobOrchestrator:
             )
         except Exception:
             return
+
+    def _try_append_queued_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        original_text: str,
+    ) -> None:
+        self._append_message_line_or_fallback(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            message_ts=message_ts,
+            original_text=original_text,
+            intent_key="queued-{0}".format(message_ts),
+            line=self._queued_text(),
+        )
 
     def _reminder_text(self, record: SessionRecord) -> str:
         if record.status is SessionStatus.WAITING_FOR_APPROVAL:

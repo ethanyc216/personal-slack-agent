@@ -22,6 +22,26 @@ class SlackThreadReplyMessage:
     text: str
 
 
+@dataclass
+class SlackThreadMessage:
+    workspace_name: str
+    channel_name: str
+    thread_ts: str
+    message_ts: str
+    author_actor_id: str
+    text: str
+
+
+@dataclass
+class SlackSearchMessage:
+    workspace_name: str
+    channel_id: str
+    message_ts: str
+    thread_ts: Optional[str]
+    author_actor_id: str
+    text: str
+
+
 class SlackBrowserAdapter(Protocol):
     def get_channel_id(
         self,
@@ -48,6 +68,23 @@ class SlackBrowserAdapter(Protocol):
     ) -> List[SlackRootMessage]:
         ...
 
+    def list_accessible_conversation_ids(
+        self,
+        workspace_name: str,
+    ) -> List[str]:
+        ...
+
+    def search_messages(
+        self,
+        workspace_name: str,
+        query: str,
+        count: int = 20,
+        page: int = 1,
+        sort: Optional[str] = None,
+        sort_dir: Optional[str] = None,
+    ) -> List[SlackSearchMessage]:
+        ...
+
     def list_thread_replies(
         self,
         workspace_name: str,
@@ -56,6 +93,14 @@ class SlackBrowserAdapter(Protocol):
         oldest: Optional[str] = None,
         limit: int = 200,
     ) -> List[SlackThreadReplyMessage]:
+        ...
+
+    def list_thread_messages(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> List[SlackThreadMessage]:
         ...
 
     def post_thread_reply(
@@ -90,6 +135,15 @@ class SlackBrowserAdapter(Protocol):
         workspace_name: str,
         channel_name: str,
         message_ts: str,
+    ) -> None:
+        ...
+
+    def update_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        message_ts: str,
+        text: str,
     ) -> None:
         ...
 

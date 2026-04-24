@@ -807,6 +807,35 @@ def test_stop_requests_cooperative_shutdown_for_running_lock_pid(tmp_path, monke
     assert "requested" in captured.out.lower()
 
 
+def test_stop_force_terminates_running_lock_pid(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    paths = build_runtime_paths()
+    paths.lock_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.lock_file.write_text("43210", encoding="utf-8")
+    paths.pid_file.write_text("43210", encoding="utf-8")
+
+    terminated = []
+
+    waits = iter([False, True])
+    monkeypatch.setattr(ctl_module, "_running_pids", lambda _paths: [43210])
+    monkeypatch.setattr(
+        ctl_module,
+        "_wait_for_process_exit",
+        lambda _paths, timeout_seconds, sleep_fn=None: next(waits),
+    )
+    monkeypatch.setattr(ctl_module, "_terminate_pid", lambda pid: terminated.append(pid))
+
+    exit_code = ctl_main(["stop", "--force"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert terminated == [43210]
+    assert not paths.lock_file.exists()
+    assert not paths.pid_file.exists()
+    assert not paths.stop_request_file.exists()
+    assert "force" in captured.out.lower()
+
+
 def test_stop_removes_stale_lock_pid(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     paths = build_runtime_paths()
@@ -823,3 +852,58 @@ def test_stop_removes_stale_lock_pid(tmp_path, monkeypatch, capsys):
     assert not paths.lock_file.exists()
     assert not paths.pid_file.exists()
     assert "stale lock" in captured.out.lower()
+
+
+def test_restart_force_stops_then_starts_with_same_config_and_interval(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("[defaults]\nallowed_actor_ids=[\"U123\"]\n", encoding="utf-8")
+    paths = build_runtime_paths()
+    paths.pid_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.pid_file.write_text("43210", encoding="utf-8")
+    paths.lock_file.write_text("43210", encoding="utf-8")
+
+    terminated = []
+    spawned = {}
+    stopped = {"value": False}
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            spawned["cmd"] = list(cmd)
+            spawned["kwargs"] = dict(kwargs)
+            self.pid = 33333
+            paths.pid_file.write_text(str(self.pid), encoding="utf-8")
+
+    waits = iter([False, True])
+    monkeypatch.setattr(
+        ctl_module,
+        "_running_pids",
+        lambda _paths: [] if stopped["value"] or spawned else [43210],
+    )
+    monkeypatch.setattr(
+        ctl_module,
+        "_wait_for_process_exit",
+        lambda _paths, timeout_seconds, sleep_fn=None: (
+            stopped.__setitem__("value", result := next(waits)) or result
+        ),
+    )
+    monkeypatch.setattr(ctl_module, "_terminate_pid", lambda pid: terminated.append(pid))
+    monkeypatch.setattr(ctl_module.subprocess, "Popen", FakePopen)
+
+    exit_code = ctl_main(["restart", "--force", "--poll-interval-seconds", "12"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert terminated == [43210]
+    assert "force" in captured.out.lower()
+    assert "started" in captured.out.lower()
+    assert spawned["cmd"] == [
+        str(Path(sys.executable)),
+        "-m",
+        "personal_slack_agent.cli.agent",
+        "--config",
+        str(config_file),
+        "--poll-interval-seconds",
+        "12.0",
+    ]

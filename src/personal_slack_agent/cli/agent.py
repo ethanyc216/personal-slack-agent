@@ -530,6 +530,7 @@ def run_poll_cycle(
 ) -> None:
     del logger
     _drain_reconcile_requests(watcher, reconcile_request_path)
+    orchestrator.process_scheduled_actions()
     watcher.run_cycle()
     orchestrator.process_scheduled_actions()
 
@@ -694,6 +695,7 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                 orchestrator=orchestrator,
                 state_store=state_store,
                 config=config,
+                should_stop=lambda: paths.stop_request_file.exists(),
                 logger=logger,
             )
             try:

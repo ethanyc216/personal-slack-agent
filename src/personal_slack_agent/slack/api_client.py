@@ -75,15 +75,19 @@ class SlackApiClient:
         query: str,
         count: int = 20,
         page: int = 1,
+        sort: str | None = None,
+        sort_dir: str | None = None,
     ) -> Dict[str, Any]:
-        return self._call_api(
-            "search.messages",
-            {
-                "query": query,
-                "count": count,
-                "page": page,
-            },
-        )
+        params: Dict[str, Any] = {
+            "query": query,
+            "count": count,
+            "page": page,
+        }
+        if sort is not None:
+            params["sort"] = sort
+        if sort_dir is not None:
+            params["sort_dir"] = sort_dir
+        return self._call_api("search.messages", params)
 
     def api_test(self) -> Dict[str, Any]:
         return self._call_api("api.test", {})
@@ -103,6 +107,21 @@ class SlackApiClient:
         if thread_ts is not None:
             params["thread_ts"] = thread_ts
         return self._call_api("chat.postMessage", params)
+
+    def chat_update(
+        self,
+        channel_id: str,
+        ts: str,
+        text: str,
+    ) -> Dict[str, Any]:
+        return self._call_api(
+            "chat.update",
+            {
+                "channel": channel_id,
+                "ts": ts,
+                "text": text,
+            },
+        )
 
     def reactions_add(
         self,

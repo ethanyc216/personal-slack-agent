@@ -29,6 +29,7 @@ recent_terminal_thread_reconcile_limit = 6
 periodic_terminal_thread_reconcile_batch_size = 1
 historical_terminal_thread_reconcile_base_interval_seconds = 60
 historical_terminal_thread_reconcile_max_interval_seconds = 900
+bob_ultimate_mode = false
 
 [[workspaces]]
 name = "my-workspace"
