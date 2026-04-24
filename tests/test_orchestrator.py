@@ -1125,7 +1125,7 @@ def test_ultimate_invocation_falls_back_to_thread_reply_if_message_update_fails(
     assert browser.thread_posts["1776911047.025189"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
 
 
-def test_ultimate_mode_applies_to_configured_channel_root_messages(fake_environment):
+def test_configured_channel_root_messages_keep_legacy_thread_reply_behavior(fake_environment):
     orchestrator, browser, _store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
     browser.thread_messages[("oracle", "yifanche-private", "1776912000.000001")] = [
@@ -1147,12 +1147,56 @@ def test_ultimate_mode_applies_to_configured_channel_root_messages(fake_environm
         text="bob review this configured channel",
     )
 
-    assert browser.updated_messages["1776912000.000001"][0].startswith(
-        "bob review this configured channel\n_*Bob is working on it"
+    assert browser.updated_messages == {}
+    assert browser.thread_posts["1776912000.000001"][0].startswith(
+        "_*Bob is working on it :arrows_counterclockwise::*_"
     )
-    assert browser.updated_messages["1776912000.000001"][-1].endswith(
+    assert browser.thread_posts["1776912000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
+    assert len(runner.new_session_calls) == 1
+
+
+def test_configured_channel_thread_reply_without_existing_session_can_use_ultimate_mode(
+    fake_environment,
+):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    browser.thread_messages[("oracle", "yifanche-private", "1776912100.000001")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1776912100.000001",
+            message_ts="1776912100.000001",
+            author_actor_id="U999",
+            text="hello there",
+        ),
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="1776912100.000001",
+            message_ts="1776912105.000001",
+            author_actor_id="U123",
+            text="bob can you do it here?",
+        ),
+    ]
+
+    orchestrator.handle_ultimate_invocation(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="1776912100.000001",
+        message_ts="1776912105.000001",
+        author_actor_id="U123",
+        text="bob can you do it here?",
+    )
+
+    assert browser.updated_messages["1776912105.000001"][0].startswith(
+        "bob can you do it here?\n_*Bob is working on it"
+    )
+    assert browser.updated_messages["1776912105.000001"][-1].endswith(
         "_*codex Bob :white_check_mark::*_ Final answer"
     )
+    record = store.get_by_thread("oracle", "yifanche-private", "1776912100.000001")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_IDLE
     assert len(runner.new_session_calls) == 1
 
 

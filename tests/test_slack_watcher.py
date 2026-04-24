@@ -348,6 +348,14 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
         owner_actor_id="U123",
         status=SessionStatus.CLOSED_IDLE,
     )
+    state.record_processed_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="10.0",
+        message_ts="10.0",
+        author_actor_id="U123",
+        purpose="root_request",
+    )
     browser = FakeBrowser()
     browser.channel_ids[("oracle", "yifanche-private")] = "C123"
     orchestrator = RecordingOrchestrator()
@@ -553,6 +561,71 @@ def test_watcher_routes_configured_channel_bob_reply_to_ultimate_mode(tmp_path):
         "author_actor_id": "U123",
         "text": "bob do it here too",
     }
+
+
+def test_watcher_routes_configured_channel_bob_reply_to_thread_handler_when_thread_is_legacy_session(
+    tmp_path,
+):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="30.0",
+        root_ts="30.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    state.record_processed_message(
+        workspace_name="oracle",
+        channel_name="yifanche-private",
+        thread_ts="30.0",
+        message_ts="30.0",
+        author_actor_id="U123",
+        purpose="root_request",
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    browser.thread_replies[("oracle", "yifanche-private", "30.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="oracle",
+            channel_name="yifanche-private",
+            thread_ts="30.0",
+            message_ts="9999999999.0",
+            author_actor_id="U123",
+            text="bob continue",
+        )
+    ]
+    browser.emit_frame(
+        "oracle",
+        '{"type":"message","channel":"C123","ts":"9999999999.0","thread_ts":"30.0","text":"bob continue"}',
+    )
+    watcher.run_cycle()
+
+    assert orchestrator.reply_calls == [
+        {
+                "workspace_name": "oracle",
+                "channel_name": "yifanche-private",
+                "thread_ts": "30.0",
+                "message_ts": "9999999999.0",
+                "author_actor_id": "U123",
+                "text": "bob continue",
+            }
+        ]
+    assert orchestrator.ultimate_calls == []
 
 
 def test_watcher_ultimate_mode_tolerates_runtime_channel_listing_failure(tmp_path):

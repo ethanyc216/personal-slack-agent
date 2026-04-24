@@ -170,9 +170,14 @@ class BobOrchestrator:
         channel = self._find_channel(workspace, channel_name) if workspace else None
         if workspace is None or channel is None:
             return
+        existing = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
         if not self.config.watcher.bob_ultimate_mode:
             return
-        if not self._should_use_ultimate_mode_for_channel(channel_name):
+        if not self._should_use_ultimate_mode_for_invocation(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        ):
             return
         if not self._is_bob_root_message(text):
             return
@@ -185,9 +190,9 @@ class BobOrchestrator:
             workspace_name=workspace_name,
             channel_name=channel_name,
             thread_ts=thread_ts,
-            message_ts=message_ts,
-            author_actor_id=author_actor_id,
-            purpose=self._PURPOSE_ULTIMATE_INVOCATION,
+                message_ts=message_ts,
+                author_actor_id=author_actor_id,
+                purpose=self._PURPOSE_ULTIMATE_INVOCATION,
         )
         if not claimed:
             return
@@ -197,7 +202,6 @@ class BobOrchestrator:
             channel_name=channel_name,
             message_ts=message_ts,
         )
-        existing = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
         self.state_store.enqueue_task(
             workspace_name=workspace_name,
             channel_name=channel_name,
@@ -1820,7 +1824,25 @@ class BobOrchestrator:
         return None
 
     def _should_use_ultimate_mode_for_channel(self, channel_name: str) -> bool:
-        return self.config.watcher.bob_ultimate_mode
+        return (
+            self.config.watcher.bob_ultimate_mode
+            and slack_channel_id_from_runtime_channel_name(channel_name) is not None
+        )
+
+    def _should_use_ultimate_mode_for_invocation(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> bool:
+        if self._should_use_ultimate_mode_for_channel(channel_name):
+            return True
+        return not self.state_store.thread_has_processed_purpose(
+            workspace_name,
+            channel_name,
+            thread_ts,
+            self._PURPOSE_ROOT_REQUEST,
+        )
 
     def _parse_approval_reply(self, text: str) -> Tuple[str, str]:
         parts = text.strip().split()

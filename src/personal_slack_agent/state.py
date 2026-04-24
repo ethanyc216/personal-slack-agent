@@ -597,6 +597,28 @@ class BobStateStore:
             ).fetchone()
         return row is not None
 
+    def thread_has_processed_purpose(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        purpose: str,
+    ) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM processed_messages
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                  AND purpose = ?
+                LIMIT 1
+                """,
+                (workspace_name, channel_name, thread_ts, purpose),
+            ).fetchone()
+        return row is not None
+
     def record_processed_message(
         self,
         workspace_name: str,

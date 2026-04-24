@@ -325,6 +325,11 @@ class SlackWatcher:
             thread_ts,
         )
         current_cursor = cursor
+        legacy_thread = self._is_legacy_configured_bob_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        )
         while True:
             if self._stop_requested():
                 return
@@ -365,7 +370,9 @@ class SlackWatcher:
                     pending_outbound_texts,
                 ):
                     continue
-                if self._should_route_ultimate_invocation(reply.text):
+                if self._should_route_ultimate_invocation(reply.text) and (
+                    self._is_runtime_channel(channel_name) or not legacy_thread
+                ):
                     self.orchestrator.handle_ultimate_invocation(
                         workspace_name=reply.workspace_name,
                         channel_name=reply.channel_name,
@@ -431,39 +438,20 @@ class SlackWatcher:
         thread_ts: str,
         message_ts: str,
     ) -> None:
-        if self.config.watcher.bob_ultimate_mode:
-            cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
-            if not _is_newer_timestamp(message_ts, cursor):
-                return
-            reply = self._find_thread_reply(workspace_name, channel_name, thread_ts, message_ts)
-            if reply is None:
-                self._threads_pending_reconcile.add((workspace_name, channel_name, thread_ts))
-                return
-            if self._should_route_ultimate_invocation(reply.text):
-                self.orchestrator.handle_ultimate_invocation(
-                    workspace_name=reply.workspace_name,
-                    channel_name=reply.channel_name,
-                    thread_ts=reply.thread_ts,
-                    message_ts=reply.message_ts,
-                    author_actor_id=reply.author_actor_id,
-                    text=reply.text,
-                )
-                self.state_store.upsert_thread_cursor(
-                    workspace_name,
-                    channel_name,
-                    thread_ts,
-                    reply.message_ts,
-                )
-                return
         record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
-        if self._is_runtime_channel(channel_name):
-            cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
-            if not _is_newer_timestamp(message_ts, cursor):
-                return
-            reply = self._find_thread_reply(workspace_name, channel_name, thread_ts, message_ts)
-            if reply is None:
-                self._threads_pending_reconcile.add((workspace_name, channel_name, thread_ts))
-                return
+        cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
+        if not _is_newer_timestamp(message_ts, cursor):
+            return
+        reply = self._find_thread_reply(workspace_name, channel_name, thread_ts, message_ts)
+        if reply is None:
+            self._threads_pending_reconcile.add((workspace_name, channel_name, thread_ts))
+            return
+        legacy_thread = self._is_legacy_configured_bob_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        )
+        if self._is_runtime_channel(channel_name) or not legacy_thread:
             if self._should_route_ultimate_invocation(reply.text):
                 self.orchestrator.handle_ultimate_invocation(
                     workspace_name=reply.workspace_name,
@@ -481,13 +469,12 @@ class SlackWatcher:
             )
             return
         if record is None:
-            return
-        cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
-        if not _is_newer_timestamp(message_ts, cursor):
-            return
-        reply = self._find_thread_reply(workspace_name, channel_name, thread_ts, message_ts)
-        if reply is None:
-            self._threads_pending_reconcile.add((workspace_name, channel_name, thread_ts))
+            self.state_store.upsert_thread_cursor(
+                workspace_name,
+                channel_name,
+                thread_ts,
+                reply.message_ts,
+            )
             return
         delivered_timestamps = set(
             self.state_store.list_delivered_outbound_message_timestamps(
@@ -664,6 +651,19 @@ class SlackWatcher:
                 channel_name = runtime_channel_name(message.channel_id)
                 self._channel_name_by_id[(workspace_name, message.channel_id)] = channel_name
             thread_ts = message.thread_ts or message.message_ts
+            if (
+                not self._is_runtime_channel(channel_name)
+                and (
+                    message.thread_ts is None
+                    or message.thread_ts == message.message_ts
+                    or self._is_legacy_configured_bob_thread(
+                        workspace_name,
+                        channel_name,
+                        thread_ts,
+                    )
+                )
+            ):
+                continue
             self.orchestrator.handle_ultimate_invocation(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -699,6 +699,22 @@ class SlackWatcher:
 
     def _is_runtime_channel(self, channel_name: str) -> bool:
         return slack_channel_id_from_runtime_channel_name(channel_name) is not None
+
+    def _is_legacy_configured_bob_thread(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> bool:
+        return (
+            not self._is_runtime_channel(channel_name)
+            and self.state_store.thread_has_processed_purpose(
+                workspace_name,
+                channel_name,
+                thread_ts,
+                "root_request",
+            )
+        )
 
     def _should_route_ultimate_invocation(self, text: str) -> bool:
         return self.config.watcher.bob_ultimate_mode and text.strip().lower().startswith("bob")
