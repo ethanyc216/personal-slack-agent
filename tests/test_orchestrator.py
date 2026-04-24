@@ -1,3 +1,4 @@
+from concurrent.futures import Future
 from dataclasses import dataclass
 import time
 import threading
@@ -985,6 +986,116 @@ def test_ultimate_reply_invocation_reuses_session_and_updates_same_message(fake_
     assert len(runner.resume_calls) == 1
     assert "Slack thread transcript:" in runner.resume_calls[0]["prompt"]
     assert "can you say no?" in runner.resume_calls[0]["prompt"]
+
+
+def test_ultimate_reply_invocation_marks_working_before_resume_returns(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776911047.025189",
+        root_ts="1776911047.025189",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="session-123",
+        final_output="Final answer",
+    )
+    browser.thread_messages[("oracle", "slack:C999", "1776911047.025189")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776911047.025189",
+            message_ts="1776911047.025189",
+            author_actor_id="U999",
+            text="can you say no?",
+        ),
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776911047.025189",
+            message_ts="1776911050.000200",
+            author_actor_id="U123",
+            text="bob can you do it?",
+        ),
+    ]
+    observed = {}
+
+    def _record_working_state(_call):
+        record = store.get_by_thread("oracle", "slack:C999", "1776911047.025189")
+        observed["status"] = record.status if record is not None else None
+        observed["updates"] = list(browser.updated_messages.get("1776911050.000200", []))
+
+    runner.on_resume = _record_working_state
+
+    orchestrator.handle_ultimate_invocation(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776911047.025189",
+        message_ts="1776911050.000200",
+        author_actor_id="U123",
+        text="bob can you do it?",
+    )
+
+    assert observed["status"] is SessionStatus.RUNNING
+    assert observed["updates"][0].startswith("bob can you do it?\n_*Bob is working on it")
+
+
+def test_ultimate_invocation_dispatch_drains_completed_same_thread_worker(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.watcher.bob_ultimate_mode = True
+    store.upsert_session(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776915000.000001",
+        root_ts="1776915000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser.thread_messages[("oracle", "slack:C999", "1776915000.000001")] = [
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776915000.000001",
+            message_ts="1776915000.000001",
+            author_actor_id="U999",
+            text="old context",
+        ),
+        SlackThreadMessage(
+            workspace_name="oracle",
+            channel_name="slack:C999",
+            thread_ts="1776915000.000001",
+            message_ts="1776915001.000001",
+            author_actor_id="U123",
+            text="bob can you do it now?",
+        ),
+    ]
+    completed_future = Future()
+    completed_future.set_result(None)
+    thread_key = ("oracle", "slack:C999", "1776915000.000001")
+    orchestrator._active_tasks[999] = completed_future
+    orchestrator._active_task_threads[999] = thread_key
+    orchestrator._thread_active_counts[thread_key] = 1
+
+    orchestrator.handle_ultimate_invocation(
+        workspace_name="oracle",
+        channel_name="slack:C999",
+        thread_ts="1776915000.000001",
+        message_ts="1776915001.000001",
+        author_actor_id="U123",
+        text="bob can you do it now?",
+    )
+
+    assert len(runner.resume_calls) == 1
+    assert browser.updated_messages["1776915001.000001"][-1].endswith(
+        "_*codex Bob :white_check_mark::*_ Final answer"
+    )
 
 
 def test_ultimate_invocation_falls_back_to_thread_reply_if_message_update_fails(fake_environment):

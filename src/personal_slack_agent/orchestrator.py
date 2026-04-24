@@ -780,6 +780,7 @@ class BobOrchestrator:
         )
 
     def _dispatch_queued_tasks(self) -> None:
+        self._drain_completed_tasks()
         available_slots = self._max_concurrent_tasks - len(self._active_tasks)
         if available_slots <= 0:
             return
@@ -1179,8 +1180,9 @@ class BobOrchestrator:
                 thread_ts=task.thread_ts,
                 message_ts=task.message_ts,
                 original_text=task.prompt_text,
-                intent_key="ultimate-start-status-{0}".format(session_id),
+                intent_key="ultimate-start-status-{0}".format(task.message_ts),
                 session_id=session_id,
+                redeliver_existing=True,
             )
 
         try:
@@ -1218,8 +1220,9 @@ class BobOrchestrator:
                     thread_ts=task.thread_ts,
                     message_ts=task.message_ts,
                     original_text=task.prompt_text,
-                    intent_key="ultimate-start-status-{0}".format(session_id),
+                    intent_key="ultimate-start-status-{0}".format(task.message_ts),
                     session_id=session_id,
+                    redeliver_existing=True,
                 )
             self._process_ultimate_run_result(
                 workspace_name=task.workspace_name,
@@ -1263,6 +1266,16 @@ class BobOrchestrator:
             thread_ts=task.thread_ts,
             status=SessionStatus.RUNNING,
             clear_waiting_fields=False,
+        )
+        self._try_append_working_message(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            message_ts=task.message_ts,
+            original_text=task.prompt_text,
+            intent_key="ultimate-start-status-{0}".format(task.message_ts),
+            session_id=record.codex_session_id,
+            redeliver_existing=True,
         )
         try:
             run_result = self._runner_for_channel(task.workspace_name, task.channel_name).resume_session(
@@ -1308,15 +1321,6 @@ class BobOrchestrator:
             )
             self._execute_new_ultimate_session(task, prompt)
             return
-        self._try_append_working_message(
-            workspace_name=task.workspace_name,
-            channel_name=task.channel_name,
-            thread_ts=task.thread_ts,
-            message_ts=task.message_ts,
-            original_text=task.prompt_text,
-            intent_key="ultimate-start-status-{0}".format(task.message_ts),
-            session_id=record.codex_session_id,
-        )
         self._process_ultimate_run_result(
             workspace_name=task.workspace_name,
             channel_name=task.channel_name,
@@ -1489,6 +1493,7 @@ class BobOrchestrator:
         original_text: str,
         intent_key: str,
         line: str,
+        redeliver_existing: bool = False,
     ) -> None:
         normalized_line = normalize_slack_markdown(line)
         self.state_store.upsert_outbound_intent(
@@ -1501,13 +1506,24 @@ class BobOrchestrator:
             delivered=False,
             message_ts=None,
         )
+        existing_intent = self._find_thread_intent(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            intent_key=intent_key,
+        )
         pending_intent = self._find_pending_intent(
             workspace_name=workspace_name,
             channel_name=channel_name,
             thread_ts=thread_ts,
             intent_key=intent_key,
         )
-        if pending_intent is None:
+        if pending_intent is None and (
+            not redeliver_existing
+            or existing_intent is None
+            or existing_intent.action != "append_message_line"
+            or existing_intent.message_ts != message_ts
+        ):
             return
 
         next_text = self._compose_message_with_appended_lines(
@@ -1516,7 +1532,7 @@ class BobOrchestrator:
             thread_ts=thread_ts,
             message_ts=message_ts,
             original_text=original_text,
-            pending_line=normalized_line,
+            pending_line=normalized_line if pending_intent is not None else None,
         )
         try:
             self.browser.update_message(
@@ -1526,12 +1542,13 @@ class BobOrchestrator:
                 text=next_text,
             )
         except Exception:
-            self.state_store.mark_outbound_intent_attempted(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                intent_key=intent_key,
-            )
+            if pending_intent is not None:
+                self.state_store.mark_outbound_intent_attempted(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    intent_key=intent_key,
+                )
             raise
 
         self.state_store.mark_outbound_intent_delivered(
@@ -1551,6 +1568,7 @@ class BobOrchestrator:
         original_text: str,
         intent_key: str,
         line: str,
+        redeliver_existing: bool = False,
     ) -> None:
         try:
             self._append_message_line(
@@ -1561,6 +1579,7 @@ class BobOrchestrator:
                 original_text=original_text,
                 intent_key=intent_key,
                 line=line,
+                redeliver_existing=redeliver_existing,
             )
         except Exception:
             self._deliver_thread_message(
@@ -1611,6 +1630,22 @@ class BobOrchestrator:
                 and intent.thread_ts == thread_ts
                 and intent.intent_key == intent_key
             ):
+                return intent
+        return None
+
+    def _find_thread_intent(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        intent_key: str,
+    ) -> Optional[OutboundIntentRecord]:
+        for intent in self.state_store.list_outbound_intents_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        ):
+            if intent.intent_key == intent_key:
                 return intent
         return None
 
@@ -1939,6 +1974,7 @@ class BobOrchestrator:
         original_text: str,
         intent_key: str,
         session_id: str,
+        redeliver_existing: bool = False,
     ) -> None:
         self._append_message_line_or_fallback(
             workspace_name=workspace_name,
@@ -1948,6 +1984,7 @@ class BobOrchestrator:
             original_text=original_text,
             intent_key=intent_key,
             line=self._working_text(session_id=session_id, thread_ts=thread_ts),
+            redeliver_existing=redeliver_existing,
         )
 
     def _try_deliver_queued_message(
