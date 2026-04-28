@@ -295,7 +295,21 @@ def main(argv: list[str] | None = None) -> int:
         if bool(getattr(args, "force", False)):
             if stop_exit != 0:
                 return stop_exit
-        elif stop_exit not in (0, 1):
+        elif stop_exit == 1:
+            if _wait_for_process_exit(paths, timeout_seconds=float(args.poll_interval_seconds)):
+                _remove_lock_file(paths.lock_file)
+                _remove_lock_file(paths.pid_file)
+                _remove_lock_file(paths.stop_request_file)
+                print("Stopped bob-agent after waiting one poll interval.")
+            else:
+                running = _running_pids(paths)
+                pid_text = " pid {0}".format(running[0]) if running else ""
+                print(
+                    "bob-agent is still running{0} after waiting one poll interval; "
+                    "use `bobctl restart --force` to stop it immediately.".format(pid_text)
+                )
+                return 1
+        elif stop_exit != 0:
             return stop_exit
         return main(
             [

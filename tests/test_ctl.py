@@ -765,6 +765,63 @@ def test_restart_stops_then_starts_with_same_config_and_interval(tmp_path, monke
     ]
 
 
+def test_restart_waits_one_poll_interval_after_cooperative_stop_request(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("[defaults]\nallowed_actor_ids=[\"U123\"]\n", encoding="utf-8")
+    paths = build_runtime_paths()
+    paths.pid_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.pid_file.write_text("43210", encoding="utf-8")
+    paths.lock_file.write_text("43210", encoding="utf-8")
+
+    stopped = {"value": False}
+    spawned = {}
+    wait_timeouts = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            spawned["cmd"] = list(cmd)
+            spawned["kwargs"] = dict(kwargs)
+            self.pid = 33333
+            paths.pid_file.write_text(str(self.pid), encoding="utf-8")
+
+    def fake_wait(_paths, timeout_seconds, sleep_fn=None):
+        del sleep_fn
+        wait_timeouts.append(timeout_seconds)
+        if len(wait_timeouts) == 1:
+            return False
+        stopped["value"] = True
+        return True
+
+    monkeypatch.setattr(
+        ctl_module,
+        "_running_pids",
+        lambda _paths: [] if stopped["value"] or spawned else [43210],
+    )
+    monkeypatch.setattr(ctl_module, "_wait_for_process_exit", fake_wait)
+    monkeypatch.setattr(ctl_module.subprocess, "Popen", FakePopen)
+
+    exit_code = ctl_main(["restart", "--poll-interval-seconds", "12"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert wait_timeouts == [3.0, 12.0]
+    assert "stopped" in captured.out.lower()
+    assert "started" in captured.out.lower()
+    assert spawned["cmd"] == [
+        str(Path(sys.executable)),
+        "-m",
+        "personal_slack_agent.cli.agent",
+        "--config",
+        str(config_file),
+        "--poll-interval-seconds",
+        "12.0",
+    ]
+
+
 def test_start_removes_stale_stop_request_file_before_spawn(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
