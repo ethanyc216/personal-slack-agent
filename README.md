@@ -60,13 +60,14 @@ python3 -m venv .venv
 
 ## Configuration
 
-Generate a starter config:
+Run the interactive setup wizard:
 
 ```bash
 .venv/bin/bob-init
 ```
 
-This writes:
+The wizard prompts for the owner identity, Slack workspace URL, channel, default working directory,
+and channel memory policy, then writes a validated config:
 
 ```text
 ~/.config/personal-slack-agent/bob.toml
@@ -78,6 +79,7 @@ Also included in the repo:
 config/bob.sample.toml
 docs/setup.md
 docs/bob-config-setup.md
+docs/command-reference.md
 ```
 
 ### Example config
@@ -95,6 +97,7 @@ cdp_url = "http://127.0.0.1:9222"
 browser_user_data_dir = "/Users/you/.cache/personal-slack-agent/chrome-profile"
 
 [runner]
+bob_codex_home = "/Users/you/.local/share/personal-slack-agent/codex-home"
 codex_exec_timeout_seconds = 600
 
 [lifecycle]
@@ -261,6 +264,8 @@ If you later change the `[browser]` settings, rerun the same install command to 
 This launcher is for the browser only. Bob itself still must be started or restarted from a normal unsandboxed shell.
 
 ## Usage
+
+For a command-by-command operator reference, see [docs/command-reference.md](docs/command-reference.md).
 
 ### Start Bob in background
 

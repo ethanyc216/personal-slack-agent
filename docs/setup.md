@@ -10,13 +10,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 ```
 
-## 2. Generate starter config
+## 2. Run the setup wizard
 
 ```bash
 bob-init
 ```
 
-This creates:
+The wizard prompts for the owner identity, Slack workspace URL, channel, default working directory,
+and channel memory policy. It writes a validated config to:
 
 ```text
 ~/.config/personal-slack-agent/bob.toml
@@ -32,6 +33,12 @@ For a field-by-field explanation of the Bob config file, see:
 
 ```text
 docs/bob-config-setup.md
+```
+
+For a command-by-command operator reference, see:
+
+```text
+docs/command-reference.md
 ```
 
 ## 3. Start Chrome for Bob
@@ -84,9 +91,10 @@ If you later change the `[browser]` settings, rerun the same install command to 
 
 This launcher is for the browser only. Bob itself still must be started or restarted from a normal unsandboxed shell.
 
-## 4. Fill in your config
+## 4. Review your config
 
-At minimum:
+The setup wizard fills in the minimum practical config. Review or edit these fields if your Slack
+workspace or channel needs a different setup:
 
 - `owner_name`
 - `owner_preferred_name`
@@ -97,6 +105,12 @@ At minimum:
 - `persistent_memory_mode`
 - `persistent_memory_owner` for any `owner_only` channel
 - `slack_channel_id` if Bob cannot resolve a channel from the rendered Slack sidebar
+
+You can inspect the current file with:
+
+```bash
+bobctl show-config --config ~/.config/personal-slack-agent/bob.toml
+```
 
 ## 5. Discover Slack API auth automatically
 

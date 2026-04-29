@@ -174,6 +174,49 @@ def test_doctor_prints_runtime_paths(tmp_path, monkeypatch, capsys):
     assert str(tmp_path / ".local" / "share" / "personal-slack-agent") in captured.out
 
 
+def test_doctor_accepts_config_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "custom-bob.toml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[browser]",
+                'cdp_url = "http://127.0.0.1:9555"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = ctl_main(["doctor", "--config", str(config_file)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "config_file: {0}".format(config_file) in captured.out
+    assert "cdp_url: http://127.0.0.1:9555" in captured.out
+
+
+def test_show_config_accepts_config_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / "custom-bob.toml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[[workspaces]]",
+                'name = "workspace"',
+                'slack_api_token = "xoxc-secret"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = ctl_main(["show-config", "--config", str(config_file)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "config_file: {0}".format(config_file) in captured.out
+    assert 'slack_api_token = "***REDACTED***"' in captured.out
+
+
 def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     workspace_root = tmp_path / "work"

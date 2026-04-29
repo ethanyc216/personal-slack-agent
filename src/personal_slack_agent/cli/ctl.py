@@ -218,8 +218,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=40,
         help="Number of trailing lines to print (default: 40).",
     )
-    subparsers.add_parser("show-config", help="Show resolved config path and contents.")
-    subparsers.add_parser("doctor", help="Run Bob diagnostics.")
+    show_config_parser = subparsers.add_parser(
+        "show-config",
+        help="Show resolved config path and contents.",
+    )
+    show_config_parser.add_argument(
+        "--config",
+        default=str(default_config_file()),
+        help="Path to the Bob configuration file to inspect.",
+    )
+    doctor_parser = subparsers.add_parser("doctor", help="Run Bob diagnostics.")
+    doctor_parser.add_argument(
+        "--config",
+        default=str(default_config_file()),
+        help="Path to the Bob configuration file to diagnose.",
+    )
     smoke_parser = subparsers.add_parser("smoke-test", help="Run a live Bob smoke test.")
     smoke_parser.add_argument("--workspace", help="Workspace name from bob.toml.")
     smoke_parser.add_argument("--channel", help="Channel name from bob.toml.")

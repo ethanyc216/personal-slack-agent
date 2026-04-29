@@ -2,7 +2,7 @@
 
 This document explains how `~/.config/personal-slack-agent/bob.toml` is structured, which settings are required, and how to choose values for a practical Bob setup.
 
-This is not the first-time machine bootstrap guide. For installation and Chrome startup, see [docs/setup.md](/Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent/docs/setup.md).
+This is not the first-time machine bootstrap guide. For installation and Chrome startup, see [docs/setup.md](setup.md).
 
 ## Config File Location
 
@@ -12,7 +12,7 @@ Bob reads configuration from:
 ~/.config/personal-slack-agent/bob.toml
 ```
 
-Generate a starter file with:
+Run the interactive setup wizard with:
 
 ```bash
 bob-init
@@ -23,6 +23,9 @@ The repo also includes:
 ```text
 config/bob.sample.toml
 ```
+
+`bob-init` writes a validated first config, then points you to `bobctl show-config`,
+`bobctl doctor`, and this guide for further updates.
 
 ## Structure Overview
 
@@ -332,6 +335,7 @@ Usually means Slack did not expose the channel in the rendered sidebar. Add `sla
 
 ## Related Docs
 
-- [README.md](/Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent/README.md)
-- [docs/setup.md](/Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent/docs/setup.md)
-- [config/bob.sample.toml](/Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent/config/bob.sample.toml)
+- [README.md](../README.md)
+- [docs/setup.md](setup.md)
+- [docs/command-reference.md](command-reference.md)
+- [config/bob.sample.toml](../config/bob.sample.toml)
