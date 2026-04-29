@@ -189,11 +189,11 @@ def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
                 'cdp_url = "http://127.0.0.1:9222"',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-bob"',
+                'name = "bob_channel"',
                 'persistent_memory_mode = "disabled"',
             ]
         ),
@@ -210,7 +210,7 @@ def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
     assert "cdp_reachable: True" in captured.out
     assert "workspace_count: 1" in captured.out
     assert "channel_count: 1" in captured.out
-    assert "oracle:yifanche-bob" in captured.out
+    assert "bob_company:bob_channel" in captured.out
 
 
 def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, capsys):
@@ -226,7 +226,7 @@ def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, c
                 'cdp_url = "http://127.0.0.1:9222"',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
                 "",
                 "[workspaces.channel_defaults]",
@@ -235,7 +235,7 @@ def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, c
                 "post_terminal_threads_here = true",
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-bob"',
+                'name = "bob_channel"',
             ]
         ),
         encoding="utf-8",
@@ -264,20 +264,20 @@ def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, c
             return FakePage()
 
         def discover_api_session(self, workspace_name):
-            assert workspace_name == "oracle"
+            assert workspace_name == "bob_company"
             return ("xoxc-demo-token", "https://example.enterprise.slack.com")
 
         def api_test(self, workspace_name):
-            assert workspace_name == "oracle"
+            assert workspace_name == "bob_company"
             return {"ok": True}
 
         def get_channel_id(self, workspace_name, channel_name):
-            assert workspace_name == "oracle"
-            assert channel_name == "yifanche-bob"
+            assert workspace_name == "bob_company"
+            assert channel_name == "bob_channel"
             return "C123"
 
         def subscribe_to_realtime_frames(self, workspace_name, on_frame, on_disconnect):
-            assert workspace_name == "oracle"
+            assert workspace_name == "bob_company"
             on_frame('{"type":"hello"}')
             self.on_disconnect = on_disconnect
 
@@ -321,13 +321,13 @@ def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, c
 
     assert exit_code == 0
     assert "db_ready: True" in captured.out
-    assert "terminal_default_target: oracle:yifanche-bob" in captured.out
+    assert "terminal_default_target: bob_company:bob_channel" in captured.out
     assert "browser_attach: True" in captured.out
-    assert "workspace[oracle].slack_tab: True" in captured.out
-    assert "workspace[oracle].api_session: True" in captured.out
-    assert "workspace[oracle].api_test: True" in captured.out
-    assert "channel[oracle:yifanche-bob].channel_id: C123" in captured.out
-    assert "workspace[oracle].socket_subscribe: True" in captured.out
+    assert "workspace[bob_company].slack_tab: True" in captured.out
+    assert "workspace[bob_company].api_session: True" in captured.out
+    assert "workspace[bob_company].api_test: True" in captured.out
+    assert "channel[bob_company:bob_channel].channel_id: C123" in captured.out
+    assert "workspace[bob_company].socket_subscribe: True" in captured.out
     assert "terminal_codex_exec: True" in captured.out
 
 
@@ -347,7 +347,7 @@ def test_doctor_reports_terminal_codex_exec_failure_without_crashing(tmp_path, m
                 "codex_exec_timeout_seconds = 1200",
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
                 "",
                 "[workspaces.channel_defaults]",
@@ -356,7 +356,7 @@ def test_doctor_reports_terminal_codex_exec_failure_without_crashing(tmp_path, m
                 "post_terminal_threads_here = true",
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-bob"',
+                'name = "bob_channel"',
             ]
         ),
         encoding="utf-8",
@@ -451,7 +451,7 @@ def test_doctor_reports_browser_probe_failure_without_crashing(tmp_path, monkeyp
                 'cdp_url = "http://127.0.0.1:9222"',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
                 "",
                 "[workspaces.channel_defaults]",
@@ -459,7 +459,7 @@ def test_doctor_reports_browser_probe_failure_without_crashing(tmp_path, monkeyp
                 'persistent_memory_mode = "disabled"',
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-bob"',
+                'name = "bob_channel"',
             ]
         ),
         encoding="utf-8",
@@ -519,9 +519,9 @@ def test_smoke_test_reports_success(tmp_path, monkeypatch, capsys):
         [
             "smoke-test",
             "--workspace",
-            "oracle",
+            "bob_company",
             "--channel",
-            "yifanche-bob",
+            "bob_channel",
             "--text",
             "Bob, smoke ok",
             "--timeout-seconds",
@@ -534,8 +534,8 @@ def test_smoke_test_reports_success(tmp_path, monkeypatch, capsys):
 
     assert exit_code == 0
     assert calls == {
-        "workspace_name": "oracle",
-        "channel_name": "yifanche-bob",
+        "workspace_name": "bob_company",
+        "channel_name": "bob_channel",
         "text": "Bob, smoke ok",
         "timeout_seconds": 20.0,
         "poll_interval_seconds": 2.0,
@@ -550,8 +550,8 @@ def test_wait_for_smoke_result_returns_session_and_final_message(tmp_path):
     store = ctl_module.BobStateStore(paths.state_dir / "bob.sqlite3")
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-bob",
+        workspace_name="bob_company",
+        channel_name="bob_channel",
         thread_ts="1775717794.417429",
         root_ts="1775717794.417429",
         codex_session_id="session-123",
@@ -560,8 +560,8 @@ def test_wait_for_smoke_result_returns_session_and_final_message(tmp_path):
         status=ctl_module.SessionStatus.CLOSED_IDLE,
     )
     store.upsert_outbound_intent(
-        workspace_name="oracle",
-        channel_name="yifanche-bob",
+        workspace_name="bob_company",
+        channel_name="bob_channel",
         thread_ts="1775717794.417429",
         intent_key="final-session-123",
         action="post_thread_reply",
@@ -572,8 +572,8 @@ def test_wait_for_smoke_result_returns_session_and_final_message(tmp_path):
 
     result = ctl_module._wait_for_smoke_result(
         paths=paths,
-        workspace_name="oracle",
-        channel_name="yifanche-bob",
+        workspace_name="bob_company",
+        channel_name="bob_channel",
         thread_ts="1775717794.417429",
         timeout_seconds=1.0,
         poll_interval_seconds=0.01,

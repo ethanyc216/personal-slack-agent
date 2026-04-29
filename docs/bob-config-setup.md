@@ -2,7 +2,7 @@
 
 This document explains how `~/.config/personal-slack-agent/bob.toml` is structured, which settings are required, and how to choose values for a practical Bob setup.
 
-This is not the first-time machine bootstrap guide. For installation and Chrome startup, see [docs/setup.md](/Users/yifanche/Code/OHAI/ctdm/personal_slack_agent/docs/setup.md).
+This is not the first-time machine bootstrap guide. For installation and Chrome startup, see [docs/setup.md](/Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent/docs/setup.md).
 
 ## Config File Location
 
@@ -145,7 +145,7 @@ Common fields:
   Any normal Slack client URL inside the workspace, for example:
 
   ```toml
-  slack_url = "https://app.slack.com/client/E655JKQRX/C040C3N43B8"
+  slack_url = "https://app.slack.com/client/bob_team/bob_channel"
   ```
 
   Bob uses this as the anchor workspace route for the browser session.
@@ -154,7 +154,7 @@ Common fields:
   Same-origin Slack web host used for the private Slack Web API transport, for example:
 
   ```toml
-  slack_api_origin = "https://oracle.enterprise.slack.com"
+  slack_api_origin = "https://bob-company.enterprise.slack.example"
   ```
 
 - `slack_api_token`
@@ -234,12 +234,12 @@ Use for personal Bob work where durable preferences may be updated:
 
 ```toml
 [[workspaces.channels]]
-name = "yifanche-private"
+name = "bob_private_channel"
 post_terminal_threads_here = true
 codex_home_mode = "default"
 persistent_memory_mode = "owner_only"
-persistent_memory_owner = "yifanche"
-additional_roots = ["/Users/yifanche/Code"]
+persistent_memory_owner = "bob_owner_handle"
+additional_roots = ["/Users/bob_owner_handle/Code"]
 ```
 
 ### Shared Bob channel
@@ -248,7 +248,7 @@ Use for normal shared Bob work where durable personal memory must stay disabled:
 
 ```toml
 [[workspaces.channels]]
-name = "yifanche-bob"
+name = "bob_channel"
 codex_sandbox_mode = "workspace-write"
 codex_home_mode = "isolated"
 persistent_memory_mode = "disabled"
@@ -260,7 +260,7 @@ Use for smoke tests and integration validation:
 
 ```toml
 [[workspaces.channels]]
-name = "yifanche-bob-test"
+name = "bob_test_channel"
 codex_sandbox_mode = "workspace-write"
 codex_home_mode = "isolated"
 persistent_memory_mode = "disabled"
@@ -311,11 +311,11 @@ Usually means Slack did not expose the channel in the rendered sidebar. Add `sla
 ## Operational Notes
 
 - The local `bobctl` install in this environment is typically an editable install against this repo checkout.
-- Normal Bob operation should no longer require a persistent visible `https://oracle.enterprise.slack.com/api/api.test` helper tab for Slack API calls.
+- Normal Bob operation should no longer require a persistent visible `https://bob-company.enterprise.slack.example/api/api.test` helper tab for Slack API calls.
 - Bob still requires the main Slack workspace tab for websocket-driven detection, channel discovery, and auth bootstrap.
 
 ## Related Docs
 
-- [README.md](/Users/yifanche/Code/OHAI/ctdm/personal_slack_agent/README.md)
-- [docs/setup.md](/Users/yifanche/Code/OHAI/ctdm/personal_slack_agent/docs/setup.md)
-- [config/bob.sample.toml](/Users/yifanche/Code/OHAI/ctdm/personal_slack_agent/config/bob.sample.toml)
+- [README.md](/Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent/README.md)
+- [docs/setup.md](/Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent/docs/setup.md)
+- [config/bob.sample.toml](/Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent/config/bob.sample.toml)

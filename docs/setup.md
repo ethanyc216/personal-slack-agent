@@ -145,7 +145,7 @@ If you want terminal-originated Bob requests without specifying the channel each
 
 ```toml
 persistent_memory_mode = "owner_only"
-persistent_memory_owner = "yifanche"
+persistent_memory_owner = "bob_owner_handle"
 post_terminal_threads_here = true
 ```
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Bob require explicit per-channel durable-memory policy, and inject that policy into every new or resumed Codex prompt so shared/test channels cannot update Yifan's personal session notes.
+**Goal:** Make Bob require explicit per-channel durable-memory policy, and inject that policy into every new or resumed Codex prompt so shared/test channels cannot update Bob owner's personal session notes.
 
 **Architecture:** Extend `ChannelConfig` and config parsing to require a channel memory-policy declaration, then centralize prompt wrapping inside `BobOrchestrator` so all Codex traffic carries channel context plus the memory rule. Keep the policy narrow: full tool/skill/MCP/agent access remains available in all channels, while only durable personal preference updates are constrained.
 
@@ -57,12 +57,12 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-private"
+        name = "bob_private_channel"
         persistent_memory_mode = "owner_only"
-        persistent_memory_owner = "yifanche"
+        persistent_memory_owner = "bob_owner_handle"
         """,
         encoding="utf-8",
     )
@@ -71,12 +71,12 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
     channel = config.workspaces[0].channels[0]
 
     assert channel.persistent_memory_mode == "owner_only"
-    assert channel.persistent_memory_owner == "yifanche"
+    assert channel.persistent_memory_owner == "bob_owner_handle"
 ```
 
 - [ ] **Step 2: Run the targeted config test to verify it fails**
 
-Run: `cd /Users/yifanche/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_config.py::test_channel_memory_policy_owner_only_is_loaded -q`
+Run: `cd /Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_config.py::test_channel_memory_policy_owner_only_is_loaded -q`
 
 Expected: FAIL because `ChannelConfig` does not yet define the new fields.
 
@@ -95,12 +95,12 @@ def test_channel_memory_policy_disabled_rejects_owner(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-bob"
+        name = "bob_channel"
         persistent_memory_mode = "disabled"
-        persistent_memory_owner = "yifanche"
+        persistent_memory_owner = "bob_owner_handle"
         """,
         encoding="utf-8",
     )
@@ -121,10 +121,10 @@ def test_channel_memory_policy_owner_only_requires_owner(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-private"
+        name = "bob_private_channel"
         persistent_memory_mode = "owner_only"
         """,
         encoding="utf-8",
@@ -171,7 +171,7 @@ def _validate_channel_memory_policy(channel: ChannelConfig) -> ChannelConfig:
 
 - [ ] **Step 5: Run the config file to verify the new tests pass**
 
-Run: `cd /Users/yifanche/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_config.py -q`
+Run: `cd /Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_config.py -q`
 
 Expected: PASS for the new channel memory-policy tests and the existing config suite.
 
@@ -195,23 +195,23 @@ def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_enviro
     orchestrator, _browser, _store, runner = fake_environment
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, remember that I prefer reviewer passes",
     )
 
     prompt = runner.new_session_calls[0]["prompt"]
-    assert "channel: yifanche-private" in prompt
+    assert "channel: bob_private_channel" in prompt
     assert "persistent_memory_mode: owner_only" in prompt
-    assert "persistent_memory_owner: yifanche" in prompt
+    assert "persistent_memory_owner: bob_owner_handle" in prompt
     assert "may use all available tools, skills, MCP servers, and agents" in prompt
 ```
 
 - [ ] **Step 2: Run the targeted orchestrator test to verify it fails**
 
-Run: `cd /Users/yifanche/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_orchestrator.py::test_new_root_message_wraps_prompt_with_owner_only_memory_policy -q`
+Run: `cd /Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_orchestrator.py::test_new_root_message_wraps_prompt_with_owner_only_memory_policy -q`
 
 Expected: FAIL because the orchestrator currently forwards raw Slack text.
 
@@ -221,7 +221,7 @@ Expected: FAIL because the orchestrator currently forwards raw Slack text.
 def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_channel(fake_environment):
     orchestrator, _browser, _store, runner = fake_environment
     shared = ChannelConfig(
-        name="yifanche-bob",
+        name="bob_channel",
         persistent_memory_mode="disabled",
         persistent_memory_owner=None,
         effective_default_cwd=orchestrator.config.defaults.default_cwd,
@@ -230,15 +230,15 @@ def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_ch
     orchestrator.config.workspaces[0].channels.append(shared)
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-bob",
+        workspace_name="bob_company",
+        channel_name="bob_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, help my coworker debug this test",
     )
 
     prompt = runner.new_session_calls[0]["prompt"]
-    assert "channel: yifanche-bob" in prompt
+    assert "channel: bob_channel" in prompt
     assert "persistent_memory_mode: disabled" in prompt
     assert "do not update personal session notes" in prompt.lower()
 ```
@@ -247,7 +247,7 @@ def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_ch
 def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environment):
     orchestrator, _browser, store, runner = fake_environment
     shared = ChannelConfig(
-        name="yifanche-bob-test",
+        name="bob_test_channel",
         persistent_memory_mode="disabled",
         persistent_memory_owner=None,
         effective_default_cwd=orchestrator.config.defaults.default_cwd,
@@ -255,8 +255,8 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
     )
     orchestrator.config.workspaces[0].channels.append(shared)
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-bob-test",
+        workspace_name="bob_company",
+        channel_name="bob_test_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -266,8 +266,8 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-bob-test",
+        workspace_name="bob_company",
+        channel_name="bob_test_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461010.000001",
         author_actor_id="U123",
@@ -275,7 +275,7 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
     )
 
     prompt = runner.resume_calls[0]["prompt"]
-    assert "channel: yifanche-bob-test" in prompt
+    assert "channel: bob_test_channel" in prompt
     assert "persistent_memory_mode: disabled" in prompt
     assert "do not update personal session notes" in prompt.lower()
 ```
@@ -296,9 +296,9 @@ def _build_codex_prompt(self, workspace_name: str, channel_name: str, user_text:
         ).format(owner)
     else:
         memory_rule = (
-            "This Slack channel does not grant permission to update Yifan Chen / Ethan's "
+            "This Slack channel does not grant permission to update Bob owner's "
             "personal durable preference files. Do not update personal session notes or similar "
-            "durable preference files for Yifan from this conversation."
+            "durable preference files for Bob owner from this conversation."
         )
 
     return (
@@ -340,7 +340,7 @@ run_result = self.codex_runner.resume_session(session_id, wrapped_prompt, record
 
 - [ ] **Step 6: Run the orchestrator suite**
 
-Run: `cd /Users/yifanche/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_orchestrator.py -q`
+Run: `cd /Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_orchestrator.py -q`
 
 Expected: PASS for the new prompt-policy tests and the existing orchestrator behavior.
 
@@ -361,21 +361,21 @@ git commit -m "feat: inject channel memory policy into codex prompts"
 
 ```toml
 [[workspaces.channels]]
-name = "yifanche-private"
+name = "bob_private_channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
 persistent_memory_mode = "owner_only"
-persistent_memory_owner = "yifanche"
+persistent_memory_owner = "bob_owner_handle"
 post_terminal_threads_here = true
 
 [[workspaces.channels]]
-name = "yifanche-bob"
+name = "bob_channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
 persistent_memory_mode = "disabled"
 
 [[workspaces.channels]]
-name = "yifanche-bob-test"
+name = "bob_test_channel"
 default_cwd = "/Users/you/Code"
 accept_root_bob_requests = true
 persistent_memory_mode = "disabled"
@@ -393,13 +393,13 @@ persistent_memory_mode = "disabled"
 
 - [ ] **Step 3: Run targeted verification**
 
-Run: `cd /Users/yifanche/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_config.py tests/test_orchestrator.py -q`
+Run: `cd /Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest tests/test_config.py tests/test_orchestrator.py -q`
 
 Expected: PASS
 
 - [ ] **Step 4: Run the full test suite**
 
-Run: `cd /Users/yifanche/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest -q`
+Run: `cd /Users/bob_owner_handle/Code/OHAI/ctdm/personal_slack_agent && .venv/bin/python -m pytest -q`
 
 Expected: PASS
 

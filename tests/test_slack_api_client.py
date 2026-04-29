@@ -264,13 +264,13 @@ def test_search_messages_uses_expected_private_api_post_shape():
         call_api=fake_call,
     )
 
-    client.search_messages(query="in:yifanche-bob-test", count=20, page=1)
+    client.search_messages(query="in:bob_test_channel", count=20, page=1)
 
     assert calls == [
         (
             "search.messages",
             {
-                "query": "in:yifanche-bob-test",
+                "query": "in:bob_test_channel",
                 "count": 20,
                 "page": 1,
             },

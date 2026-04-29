@@ -2,11 +2,11 @@
 
 ## Goal
 
-Add an opt-in Bob mode that lets Yifan invoke Bob with an explicit `bob ...` message from any accessible Slack conversation, including public channels, private channels, DMs, and group DMs, while keeping the current configured-channel Bob behavior unchanged unless the new mode is enabled.
+Add an opt-in Bob mode that lets Bob owner invoke Bob with an explicit `bob ...` message from any accessible Slack conversation, including public channels, private channels, DMs, and group DMs, while keeping the current configured-channel Bob behavior unchanged unless the new mode is enabled.
 
 ## Current Problem
 
-Bob currently assumes all supported conversations are explicitly listed in `bob.toml`. It only creates new sessions from root messages that begin with `bob`, only resumes tracked configured threads, and always posts Bob status/output as separate thread replies. That does not support the desired workflow where Yifan can reply inside an arbitrary thread with `bob can you do it?` and have Bob acknowledge the message, append working status into that same message, append the final Bob response into that same message, and then stop monitoring unless Yifan explicitly invokes Bob again.
+Bob currently assumes all supported conversations are explicitly listed in `bob.toml`. It only creates new sessions from root messages that begin with `bob`, only resumes tracked configured threads, and always posts Bob status/output as separate thread replies. That does not support the desired workflow where Bob owner can reply inside an arbitrary thread with `bob can you do it?` and have Bob acknowledge the message, append working status into that same message, append the final Bob response into that same message, and then stop monitoring unless Bob owner explicitly invokes Bob again.
 
 ## Approved Scope
 
@@ -14,12 +14,12 @@ Bob currently assumes all supported conversations are explicitly listed in `bob.
 - Place the flag under `[watcher]`.
 - Default the flag to `false` so current behavior is preserved.
 - When `bob_ultimate_mode = true`, allow explicit `bob ...` invocation from any accessible conversation in the configured workspace, including public/private channels, DMs, and group DMs.
-- Only allowed actor ids may invoke the mode; in practice this remains Yifan-only through existing actor-id config.
+- Only allowed actor ids may invoke the mode; in practice this remains Bob owner-only through existing actor-id config.
 - Treat each explicit `bob ...` message as a one-time invocation.
 - Reuse the same Codex session for later explicit `bob ...` messages in the same Slack thread.
 - Before each explicit invocation, hydrate the full current Slack thread and include it in the prompt so Codex sees replies that may have happened outside the local session.
 - For the new mode, Bob must add `:ack:` to the invoking message and then edit that same message to append the working line and the final `codex Bob` line instead of posting separate Bob replies.
-- After an invocation completes, Bob does not keep monitoring the thread for non-`bob` replies. A later explicit `bob ...` message from Yifan triggers the next one-shot run.
+- After an invocation completes, Bob does not keep monitoring the thread for non-`bob` replies. A later explicit `bob ...` message from Bob owner triggers the next one-shot run.
 
 ## Out of Scope
 
@@ -230,7 +230,7 @@ Required coverage:
 - runtime synthetic channel resolution from workspace channel defaults
 - explicit root `bob ...` invocation in an unconfigured accessible conversation
 - explicit reply `bob ...` invocation in an arbitrary thread whose root is not a Bob message
-- Yifan-only invocation enforcement via actor ids
+- Bob owner-only invocation enforcement via actor ids
 - same-message append behavior for working and final output
 - session reuse on a later `bob ...` in the same thread
 - full-thread hydration being included on each explicit invocation

@@ -43,7 +43,7 @@ These instructions apply to the `personal_slack_agent` repository.
   1. Restart `bob-agent` from a normal unsandboxed shell or top-level session first.
   2. Retry the same Bob Slack prompt before changing `bob_codex_home`, writable roots, or sandbox mode.
   3. Do not treat `/tmp/.../codex-home` versus `/Users/.../codex-home` as proof of a path-location bug until Bob has been relaunched outside the inherited sandbox.
-- A workspace-backed `bob_codex_home` such as `/Users/yifanche/workspace/personal-slack-agent/codex-home` is valid once `bob-agent` is launched normally.
+- A workspace-backed `bob_codex_home` such as `/Users/bob_owner_handle/workspace/personal-slack-agent/codex-home` is valid once `bob-agent` is launched normally.
 
 - Distinguish Jira/browser-path failure from global browser availability:
   - If a Bob session can start normally but Chrome DevTools calls such as `new_page`, `navigate_page`, `evaluate_script`, or `take_snapshot` return `user cancelled MCP tool call`,
@@ -66,7 +66,7 @@ These instructions apply to the `personal_slack_agent` repository.
 
 ## Bob Browser Usage
 
-- Normal Bob operation should no longer require a persistent visible `https://oracle.enterprise.slack.com/api/api.test` helper tab for Slack API calls.
+- Normal Bob operation should no longer require a persistent visible `https://bob-company.enterprise.slack.example/api/api.test` helper tab for Slack API calls.
 - Bob still needs a real Slack workspace tab such as `https://app.slack.com/client/...` for websocket-driven detection, channel-id discovery, and browser-auth bootstrap.
 - If the required Slack workspace tab is missing, Bob now prefers non-focusing Chromium target creation instead of foreground `new_page()` tab creation, but real focus behavior is still browser-dependent and should be validated from the live operator shell when it matters.
 

@@ -65,7 +65,7 @@ def test_normalize_slack_markdown_strips_fence_language():
     text = """
 Before
 ```text
-https://confluence.oraclecorp.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
+https://confluence.example.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
 ```
 After
 """.strip()
@@ -73,7 +73,7 @@ After
     assert normalize_slack_markdown(text) == """
 Before
 ```
-https://confluence.oraclecorp.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
+https://confluence.example.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
 ```
 After
 """.strip()
@@ -83,13 +83,13 @@ def test_normalize_slack_markdown_strips_indented_fence_language():
     text = """
 Here:
     ```text
-    https://confluence.oraclecorp.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
+    https://confluence.example.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
     ```
 """.strip()
 
     assert normalize_slack_markdown(text) == """
 Here:
     ```
-    https://confluence.oraclecorp.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
+    https://confluence.example.com/confluence/display/DOPE/How+to+make+API+calls+with+Request+Signing
     ```
 """.strip()

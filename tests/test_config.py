@@ -28,7 +28,7 @@ def test_config_loads_without_defaults_when_workspace_channel_defaults_provide_r
         cdp_url = "http://127.0.0.1:9222"
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
         slack_url = "https://app.slack.com/client/T12345678/C12345678"
 
         [workspaces.channel_defaults]
@@ -36,7 +36,7 @@ def test_config_loads_without_defaults_when_workspace_channel_defaults_provide_r
         persistent_memory_mode = "disabled"
 
         [[workspaces.channels]]
-        name = "yifanche-bob"
+        name = "bob_channel"
         """,
         encoding="utf-8",
     )
@@ -623,18 +623,18 @@ def test_channel_override_wins_over_workspace_channel_defaults(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{default_root}"
         accept_root_bob_requests = true
 
         [[workspaces.channels]]
-        name = "yifanche-private"
+        name = "bob_private_channel"
         default_cwd = "{channel_root}"
         accept_root_bob_requests = false
         persistent_memory_mode = "owner_only"
-        persistent_memory_owner = "yifanche"
+        persistent_memory_owner = "bob_owner_handle"
         """,
         encoding="utf-8",
     )
@@ -660,14 +660,14 @@ def test_channel_additional_roots_override_can_be_empty(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{default_root}"
         additional_roots = ["{extra_root}"]
 
         [[workspaces.channels]]
-        name = "yifanche-bob"
+        name = "bob_channel"
         additional_roots = []
         persistent_memory_mode = "disabled"
         """,
@@ -692,15 +692,15 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{root}"
 
         [[workspaces.channels]]
-        name = "yifanche-private"
+        name = "bob_private_channel"
         persistent_memory_mode = "owner_only"
-        persistent_memory_owner = "yifanche"
+        persistent_memory_owner = "bob_owner_handle"
         """,
         encoding="utf-8",
     )
@@ -709,7 +709,7 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
     channel = config.workspaces[0].channels[0]
 
     assert channel.persistent_memory_mode == "owner_only"
-    assert channel.persistent_memory_owner == "yifanche"
+    assert channel.persistent_memory_owner == "bob_owner_handle"
     assert channel.effective_codex_home_mode == "default"
 
 
@@ -724,14 +724,14 @@ def test_channel_memory_policy_can_default_from_workspace_channel_defaults(tmp_p
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{root}"
         persistent_memory_mode = "disabled"
 
         [[workspaces.channels]]
-        name = "yifanche-bob"
+        name = "bob_channel"
         """,
         encoding="utf-8",
     )
@@ -753,14 +753,14 @@ def test_channel_codex_home_mode_override_is_loaded(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{root}"
         codex_home_mode = "default"
 
         [[workspaces.channels]]
-        name = "yifanche-bob"
+        name = "bob_channel"
         codex_home_mode = "isolated"
         persistent_memory_mode = "disabled"
         """,
@@ -785,14 +785,14 @@ def test_channel_codex_sandbox_mode_override_is_loaded(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{root}"
         codex_sandbox_mode = "workspace-write"
 
         [[workspaces.channels]]
-        name = "yifanche-bob-test"
+        name = "bob_test_channel"
         codex_sandbox_mode = "danger-full-access"
         persistent_memory_mode = "disabled"
         """,
@@ -816,14 +816,14 @@ def test_channel_allowed_actor_ids_override_is_loaded_and_dumped(tmp_path):
         [defaults]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
 
         [[workspaces.channels]]
-        name = "yifanche-bob-test"
+        name = "bob_test_channel"
         allowed_actor_ids = ["U999"]
         persistent_memory_mode = "disabled"
         """,
@@ -850,14 +850,14 @@ def test_workspace_channel_defaults_allowed_actor_ids_is_loaded(tmp_path):
         [defaults]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{root}"
         allowed_actor_ids = ["U123"]
 
         [[workspaces.channels]]
-        name = "yifanche-bob-test"
+        name = "bob_test_channel"
         persistent_memory_mode = "disabled"
         """,
         encoding="utf-8",
@@ -879,14 +879,14 @@ def test_workspace_allowed_actor_ids_is_rejected(tmp_path):
         allowed_actor_ids = []
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
         allowed_actor_ids = ["U123"]
 
         [workspaces.channel_defaults]
         default_cwd = "{root}"
 
         [[workspaces.channels]]
-        name = "yifanche-bob-test"
+        name = "bob_test_channel"
         persistent_memory_mode = "disabled"
         """,
         encoding="utf-8",
@@ -911,14 +911,14 @@ def test_channel_workspace_write_writable_roots_override_is_loaded(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         default_cwd = "{root}"
         codex_workspace_write_writable_roots = ["{root}"]
 
         [[workspaces.channels]]
-        name = "yifanche-bob-test"
+        name = "bob_test_channel"
         codex_workspace_write_writable_roots = ["{workspace_root}", "{scratch_root}", "/tmp"]
         persistent_memory_mode = "disabled"
         """,
@@ -958,10 +958,10 @@ def test_dump_config_emits_workspace_channel_defaults_from_legacy_defaults(tmp_p
         codex_sandbox_mode = "workspace-write"
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-bob"
+        name = "bob_channel"
         persistent_memory_mode = "disabled"
         """,
         encoding="utf-8",
@@ -989,13 +989,13 @@ def test_channel_slack_channel_id_is_loaded_and_dumped(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
         slack_url = "https://app.slack.com/client/T12345678/C00000001"
 
         [[workspaces.channels]]
-        name = "yifanche-bob-test"
+        name = "bob_test_channel"
         persistent_memory_mode = "disabled"
-        slack_channel_id = "C0AS82WLCBU"
+        slack_channel_id = "bob_channel"
         """,
         encoding="utf-8",
     )
@@ -1006,8 +1006,8 @@ def test_channel_slack_channel_id_is_loaded_and_dumped(tmp_path):
     rewritten.write_text(rendered, encoding="utf-8")
     reloaded = load_config(rewritten)
 
-    assert reloaded.workspaces[0].channels[0].slack_channel_id == "C0AS82WLCBU"
-    assert 'slack_channel_id = "C0AS82WLCBU"' in rendered
+    assert reloaded.workspaces[0].channels[0].slack_channel_id == "bob_channel"
+    assert 'slack_channel_id = "bob_channel"' in rendered
 
 
 def test_channel_codex_sandbox_mode_is_dumped(tmp_path):
@@ -1023,10 +1023,10 @@ def test_channel_codex_sandbox_mode_is_dumped(tmp_path):
         codex_sandbox_mode = "workspace-write"
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-bob-test"
+        name = "bob_test_channel"
         codex_sandbox_mode = "danger-full-access"
         persistent_memory_mode = "disabled"
         """,
@@ -1056,10 +1056,10 @@ def test_channel_workspace_write_writable_roots_is_dumped(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-bob-test"
+        name = "bob_test_channel"
         codex_workspace_write_writable_roots = ["{workspace_root}", "{scratch_root}", "/tmp"]
         persistent_memory_mode = "disabled"
         """,
@@ -1087,12 +1087,12 @@ def test_channel_memory_policy_disabled_rejects_owner(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-bob"
+        name = "bob_channel"
         persistent_memory_mode = "disabled"
-        persistent_memory_owner = "yifanche"
+        persistent_memory_owner = "bob_owner_handle"
         """,
         encoding="utf-8",
     )
@@ -1113,10 +1113,10 @@ def test_channel_memory_policy_owner_only_requires_owner(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-private"
+        name = "bob_private_channel"
         persistent_memory_mode = "owner_only"
         """,
         encoding="utf-8",
@@ -1138,11 +1138,11 @@ def test_channel_memory_policy_mode_is_required(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
-        name = "yifanche-private"
-        persistent_memory_owner = "yifanche"
+        name = "bob_private_channel"
+        persistent_memory_owner = "bob_owner_handle"
         """,
         encoding="utf-8",
     )
@@ -1163,14 +1163,14 @@ def test_channel_legacy_slack_url_is_ignored_and_not_dumped(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
         slack_url = "https://app.slack.com/client/T12345678/C00000001"
 
         [[workspaces.channels]]
-        name = "yifanche-private"
+        name = "bob_private_channel"
         slack_url = "https://app.slack.com/client/T12345678/C12345678"
         persistent_memory_mode = "owner_only"
-        persistent_memory_owner = "yifanche"
+        persistent_memory_owner = "bob_owner_handle"
         """,
         encoding="utf-8",
     )
@@ -1194,7 +1194,7 @@ def test_missing_workspace_channel_name_raises(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
         default_cwd = "{default_root}"
@@ -1217,7 +1217,7 @@ def test_workspace_without_allowed_actor_ids_defaults_to_unrestricted_access(tmp
         default_cwd = "{default_root}"
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
         """,
         encoding="utf-8",
     )
@@ -1240,7 +1240,7 @@ def test_workspace_with_empty_allowed_actor_ids_allows_unrestricted_access(tmp_p
         allowed_actor_ids = []
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [workspaces.channel_defaults]
         allowed_actor_ids = []
@@ -1267,14 +1267,14 @@ def test_duplicate_workspace_and_channel_names_raise(tmp_path):
         allowed_actor_ids = ["U123"]
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
 
         [[workspaces.channels]]
         name = "ops"
         persistent_memory_mode = "disabled"
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
         """,
         encoding="utf-8",
     )

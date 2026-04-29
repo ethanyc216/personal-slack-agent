@@ -49,7 +49,7 @@ codex_home_mode = "default"
 name = "my-private-channel"
 allowed_actor_ids = ["U12345678"]
 persistent_memory_mode = "owner_only"
-persistent_memory_owner = "yifanche"
+persistent_memory_owner = "bob_owner_handle"
 # Optional: mark one channel for the `bob` terminal wrapper to use by default.
 post_terminal_threads_here = true
 

@@ -130,7 +130,7 @@ codex_home_mode = "default"
 name = "my-private-channel"
 allowed_actor_ids = ["U12345678"]
 persistent_memory_mode = "owner_only"
-persistent_memory_owner = "yifanche"
+persistent_memory_owner = "bob_owner_handle"
 
 [[workspaces.channels]]
 name = "my-shared-bob-channel"

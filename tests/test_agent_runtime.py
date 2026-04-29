@@ -14,16 +14,16 @@ from personal_slack_agent.slack import SlackRootMessage, SlackThreadReplyMessage
 
 def test_slack_message_contract_dataclasses_preserve_required_fields():
     root = SlackRootMessage(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, summarize this",
     )
     reply = SlackThreadReplyMessage(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461010.000001",
         author_actor_id="U123",
@@ -31,16 +31,16 @@ def test_slack_message_contract_dataclasses_preserve_required_fields():
     )
 
     assert asdict(root) == {
-        "workspace_name": "oracle",
-        "channel_name": "yifanche-private",
+        "workspace_name": "bob_company",
+        "channel_name": "bob_private_channel",
         "thread_ts": "1743461000.000001",
         "message_ts": "1743461000.000001",
         "author_actor_id": "U123",
         "text": "Bob, summarize this",
     }
     assert asdict(reply) == {
-        "workspace_name": "oracle",
-        "channel_name": "yifanche-private",
+        "workspace_name": "bob_company",
+        "channel_name": "bob_private_channel",
         "thread_ts": "1743461000.000001",
         "message_ts": "1743461010.000001",
         "author_actor_id": "U123",
@@ -63,16 +63,16 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
                 'browser_mode = "shared_browser"',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
                 "",
                 "[workspaces.channel_defaults]",
                 'default_cwd = "{0}"'.format(workspace_root),
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-private"',
+                'name = "bob_private_channel"',
                 'persistent_memory_mode = "owner_only"',
-                'persistent_memory_owner = "yifanche"',
+                'persistent_memory_owner = "bob_owner_handle"',
             ]
         ),
         encoding="utf-8",
@@ -130,7 +130,7 @@ def test_run_once_builds_runtime_stack_and_executes_watcher_cycle(tmp_path, monk
     assert exit_code == 0
     assert calls["cycle"] == 1
     assert calls["workspace_urls"] == {
-        "oracle": "https://app.slack.com/client/T12345678/C12345678"
+        "bob_company": "https://app.slack.com/client/T12345678/C12345678"
     }
     assert calls["workspace_api_contexts"] == {}
     assert calls["channel_urls"] == {}
@@ -155,16 +155,16 @@ def test_run_once_passes_configured_codex_exec_timeout_to_runners(tmp_path, monk
                 "codex_exec_timeout_seconds = 1200",
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
                 "",
                 "[workspaces.channel_defaults]",
                 'default_cwd = "{0}"'.format(workspace_root),
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-private"',
+                'name = "bob_private_channel"',
                 'persistent_memory_mode = "owner_only"',
-                'persistent_memory_owner = "yifanche"',
+                'persistent_memory_owner = "bob_owner_handle"',
             ]
         ),
         encoding="utf-8",
@@ -681,7 +681,7 @@ def test_prepare_bob_codex_home_does_not_rewrite_unrelated_memories_root(
 
     bob_home = tmp_path / "workspace" / "personal-slack-agent" / "custom-bob-home"
     old_home = "/private/tmp/personal-slack-agent/custom-bob-home"
-    unrelated_memories = "/Users/yifanche/workspace/project/memories"
+    unrelated_memories = "/Users/bob_owner_handle/workspace/project/memories"
     state_db = bob_home / "state_5.sqlite"
     state_db.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1415,13 +1415,13 @@ def test_run_once_uses_configured_bob_codex_home(tmp_path, monkeypatch):
                 'bob_codex_home = "{0}"'.format(configured_bob_home),
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-private"',
+                'name = "bob_private_channel"',
                 'persistent_memory_mode = "owner_only"',
-                'persistent_memory_owner = "yifanche"',
+                'persistent_memory_owner = "bob_owner_handle"',
             ]
         ),
         encoding="utf-8",
@@ -1490,18 +1490,18 @@ def test_run_once_seeds_explicit_channel_urls_when_channel_ids_are_configured(tm
                 'browser_mode = "shared_browser"',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
-                'slack_url = "https://app.slack.com/client/E655JKQRX/C040C3N43B8"',
+                'name = "bob_company"',
+                'slack_url = "https://app.slack.com/client/bob_team/bob_channel"',
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-private"',
+                'name = "bob_private_channel"',
                 'persistent_memory_mode = "owner_only"',
-                'persistent_memory_owner = "yifanche"',
+                'persistent_memory_owner = "bob_owner_handle"',
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-bob-test"',
+                'name = "bob_test_channel"',
                 'persistent_memory_mode = "disabled"',
-                'slack_channel_id = "C0AS82WLCBU"',
+                'slack_channel_id = "bob_channel"',
             ]
         ),
         encoding="utf-8",
@@ -1552,7 +1552,7 @@ def test_run_once_seeds_explicit_channel_urls_when_channel_ids_are_configured(tm
 
     assert exit_code == 0
     assert calls["channel_urls"] == {
-        ("oracle", "yifanche-bob-test"): "https://app.slack.com/client/E655JKQRX/C0AS82WLCBU"
+        ("bob_company", "bob_test_channel"): "https://app.slack.com/client/bob_team/bob_channel"
     }
 
 
@@ -1623,7 +1623,7 @@ def test_run_poll_cycle_processes_scheduled_actions_before_and_after_watcher():
 def test_run_poll_cycle_consumes_reconcile_requests(tmp_path):
     calls = []
     reconcile_file = tmp_path / "bob.reconcile"
-    reconcile_file.write_text("oracle\n", encoding="utf-8")
+    reconcile_file.write_text("bob_company\n", encoding="utf-8")
 
     class FakeWatcher:
         def request_workspace_reconcile(self, workspace_name):
@@ -1643,7 +1643,7 @@ def test_run_poll_cycle_consumes_reconcile_requests(tmp_path):
     )
 
     assert calls == [
-        ("reconcile", "oracle"),
+        ("reconcile", "bob_company"),
         ("scheduled", None),
         ("watcher", None),
         ("scheduled", None),

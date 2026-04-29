@@ -11,15 +11,15 @@ from personal_slack_agent.codex_runner import (
 def test_build_new_session_command_includes_json_and_roots():
     command = build_new_session_command(
         prompt="Bob, hi there",
-        cwd="/Users/yifanche/Code/OHAI/ctdm",
-        additional_roots=["/Users/yifanche/Code", "/tmp/work"],
+        cwd="/Users/bob_owner_handle/Code/OHAI/ctdm",
+        additional_roots=["/Users/bob_owner_handle/Code", "/tmp/work"],
     )
 
     assert command[:4] == ["codex", "exec", "--json", "--skip-git-repo-check"]
     assert command[-1] == "Bob, hi there"
     assert command.count("--add-dir") == 2
     assert "--cd" in command
-    assert command[command.index("--cd") + 1] == "/Users/yifanche/Code/OHAI/ctdm"
+    assert command[command.index("--cd") + 1] == "/Users/bob_owner_handle/Code/OHAI/ctdm"
     assert "--sandbox" not in command
 
 
@@ -43,7 +43,7 @@ def test_build_resume_session_command_includes_session_and_prompt():
 def test_build_commands_include_explicit_sandbox_mode_when_requested():
     new_command = build_new_session_command(
         prompt="Bob, hi there",
-        cwd="/Users/yifanche/Code/OHAI/ctdm",
+        cwd="/Users/bob_owner_handle/Code/OHAI/ctdm",
         additional_roots=[],
         sandbox_mode="danger-full-access",
     )
@@ -69,11 +69,11 @@ def test_build_commands_include_explicit_sandbox_mode_when_requested():
 
 
 def test_build_commands_include_workspace_write_writable_roots_override_when_requested():
-    roots = ["/Users/yifanche/workspace", "/Users/yifanche/scratch", "/tmp"]
+    roots = ["/Users/bob_owner_handle/workspace", "/Users/bob_owner_handle/scratch", "/tmp"]
 
     new_command = build_new_session_command(
         prompt="Bob, hi there",
-        cwd="/Users/yifanche/Code/OHAI/ctdm",
+        cwd="/Users/bob_owner_handle/Code/OHAI/ctdm",
         additional_roots=[],
         sandbox_mode="workspace-write",
         workspace_write_writable_roots=roots,
@@ -93,9 +93,9 @@ def test_build_commands_include_workspace_write_writable_roots_override_when_req
         "--sandbox",
         "workspace-write",
         "-c",
-        'sandbox_workspace_write.writable_roots=["/Users/yifanche/workspace", "/Users/yifanche/scratch", "/tmp"]',
+        'sandbox_workspace_write.writable_roots=["/Users/bob_owner_handle/workspace", "/Users/bob_owner_handle/scratch", "/tmp"]',
         "--cd",
-        "/Users/yifanche/Code/OHAI/ctdm",
+        "/Users/bob_owner_handle/Code/OHAI/ctdm",
         "Bob, hi there",
     ]
     assert resume_command == [
@@ -107,7 +107,7 @@ def test_build_commands_include_workspace_write_writable_roots_override_when_req
         "-c",
         'sandbox_mode="workspace-write"',
         "-c",
-        'sandbox_workspace_write.writable_roots=["/Users/yifanche/workspace", "/Users/yifanche/scratch", "/tmp"]',
+        'sandbox_workspace_write.writable_roots=["/Users/bob_owner_handle/workspace", "/Users/bob_owner_handle/scratch", "/tmp"]',
         "session-123",
         "Continue with the fix",
     ]
@@ -199,8 +199,8 @@ def test_subprocess_codex_runner_executes_new_session_and_parses_result():
 
     result = runner.run_new_session(
         prompt="Bob, hi there",
-        cwd="/Users/yifanche/Code/OHAI/ctdm",
-        additional_roots=["/Users/yifanche/Code"],
+        cwd="/Users/bob_owner_handle/Code/OHAI/ctdm",
+        additional_roots=["/Users/bob_owner_handle/Code"],
     )
 
     assert calls == [[
@@ -209,9 +209,9 @@ def test_subprocess_codex_runner_executes_new_session_and_parses_result():
         "--json",
         "--skip-git-repo-check",
         "--cd",
-        "/Users/yifanche/Code/OHAI/ctdm",
+        "/Users/bob_owner_handle/Code/OHAI/ctdm",
         "--add-dir",
-        "/Users/yifanche/Code",
+        "/Users/bob_owner_handle/Code",
         "Bob, hi there",
     ]]
     assert result.session_id == "session-123"
@@ -403,8 +403,8 @@ def test_subprocess_codex_runner_includes_workspace_write_writable_roots(monkeyp
         "continue",
         "/tmp/project",
         workspace_write_writable_roots=[
-            "/Users/yifanche/workspace",
-            "/Users/yifanche/scratch",
+            "/Users/bob_owner_handle/workspace",
+            "/Users/bob_owner_handle/scratch",
             "/tmp",
         ],
     )
@@ -419,7 +419,7 @@ def test_subprocess_codex_runner_includes_workspace_write_writable_roots(monkeyp
         "-c",
         'sandbox_mode="workspace-write"',
         "-c",
-        'sandbox_workspace_write.writable_roots=["/Users/yifanche/workspace", "/Users/yifanche/scratch", "/tmp"]',
+        'sandbox_workspace_write.writable_roots=["/Users/bob_owner_handle/workspace", "/Users/bob_owner_handle/scratch", "/tmp"]',
         "session-123",
         "continue",
     ]]

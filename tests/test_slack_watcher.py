@@ -223,8 +223,8 @@ def _config(tmp_path):
         defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
         workspaces=[
             WorkspaceConfig(
-                name="oracle",
-                channels=[ChannelConfig(name="yifanche-private")],
+                name="bob_company",
+                channels=[ChannelConfig(name="bob_private_channel")],
             )
         ],
     )
@@ -241,21 +241,21 @@ def test_watcher_reconciles_root_messages_since_channel_cursor(tmp_path):
 
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
-    state.upsert_channel_cursor("oracle", "yifanche-private", "1.0")
+    state.upsert_channel_cursor("bob_company", "bob_private_channel", "1.0")
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.root_messages[("oracle", "yifanche-private")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
         SlackRootMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1.0",
             message_ts="1.0",
             author_actor_id="U123",
             text="old",
         ),
         SlackRootMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="2.0",
             message_ts="2.0",
             author_actor_id="U123",
@@ -274,14 +274,14 @@ def test_watcher_reconciles_root_messages_since_channel_cursor(tmp_path):
 
     assert orchestrator.root_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "message_ts": "2.0",
             "author_actor_id": "U123",
             "text": "Bob, hi",
         }
     ]
-    assert state.get_channel_cursor("oracle", "yifanche-private") == "2.0"
+    assert state.get_channel_cursor("bob_company", "bob_private_channel") == "2.0"
 
 
 def test_watcher_hydrates_root_event_from_websocket_signal(tmp_path):
@@ -289,13 +289,13 @@ def test_watcher_hydrates_root_event_from_websocket_signal(tmp_path):
 
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
-    state.upsert_channel_cursor("oracle", "yifanche-private", "1.0")
+    state.upsert_channel_cursor("bob_company", "bob_private_channel", "1.0")
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.root_messages[("oracle", "yifanche-private")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
         SlackRootMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1.0",
             message_ts="1.0",
             author_actor_id="U123",
@@ -311,10 +311,10 @@ def test_watcher_hydrates_root_event_from_websocket_signal(tmp_path):
     )
 
     watcher.run_cycle()
-    browser.root_messages[("oracle", "yifanche-private")].append(
+    browser.root_messages[("bob_company", "bob_private_channel")].append(
         SlackRootMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="2.0",
             message_ts="2.0",
             author_actor_id="U123",
@@ -322,7 +322,7 @@ def test_watcher_hydrates_root_event_from_websocket_signal(tmp_path):
         )
     )
     browser.emit_frame(
-        "oracle",
+        "bob_company",
         '{"type":"message","channel":"C123","ts":"2.0","text":"Bob, websocket"}',
     )
 
@@ -330,7 +330,7 @@ def test_watcher_hydrates_root_event_from_websocket_signal(tmp_path):
 
     assert orchestrator.root_calls[-1]["message_ts"] == "2.0"
     assert orchestrator.root_calls[-1]["text"] == "Bob, websocket"
-    assert state.get_channel_cursor("oracle", "yifanche-private") == "2.0"
+    assert state.get_channel_cursor("bob_company", "bob_private_channel") == "2.0"
 
 
 def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
@@ -339,8 +339,8 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-123",
@@ -349,15 +349,15 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
         status=SessionStatus.CLOSED_IDLE,
     )
     state.record_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         message_ts="10.0",
         author_actor_id="U123",
         purpose="root_request",
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
     orchestrator = RecordingOrchestrator()
     watcher = SlackWatcher(
         browser=browser,
@@ -367,10 +367,10 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
     )
 
     watcher.run_cycle()
-    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="10.0",
             message_ts="9999999999.0",
             author_actor_id="U123",
@@ -378,7 +378,7 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
         )
     ]
     browser.emit_frame(
-        "oracle",
+        "bob_company",
         '{"type":"message","subtype":"message_replied","message":{"channel":"C123","thread_ts":"10.0","latest_reply":"9999999999.0"}}',
     )
 
@@ -386,8 +386,8 @@ def test_watcher_hydrates_thread_reply_event_for_tracked_session(tmp_path):
 
     assert orchestrator.reply_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "10.0",
             "message_ts": "9999999999.0",
             "author_actor_id": "U123",
@@ -402,11 +402,11 @@ def test_watcher_routes_unconfigured_root_message_to_ultimate_mode(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.accessible_conversation_ids["oracle"] = ["C999"]
-    browser.root_messages[("oracle", "slack:C999")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = ["C999"]
+    browser.root_messages[("bob_company", "slack:C999")] = [
         SlackRootMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="2.0",
             message_ts="2.0",
@@ -426,7 +426,7 @@ def test_watcher_routes_unconfigured_root_message_to_ultimate_mode(tmp_path):
 
     assert orchestrator.ultimate_calls == [
         {
-            "workspace_name": "oracle",
+            "workspace_name": "bob_company",
             "channel_name": "slack:C999",
             "thread_ts": "2.0",
             "message_ts": "2.0",
@@ -442,11 +442,11 @@ def test_watcher_routes_unconfigured_bob_reply_to_ultimate_mode(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.accessible_conversation_ids["oracle"] = ["C999"]
-    browser.thread_replies[("oracle", "slack:C999", "10.0")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = ["C999"]
+    browser.thread_replies[("bob_company", "slack:C999", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="10.0",
             message_ts="10.1",
@@ -464,13 +464,13 @@ def test_watcher_routes_unconfigured_bob_reply_to_ultimate_mode(tmp_path):
 
     watcher.run_cycle()
     browser.emit_frame(
-        "oracle",
+        "bob_company",
         '{"type":"message","channel":"C999","ts":"10.1","thread_ts":"10.0","text":"bob can you do it?"}',
     )
     watcher.run_cycle()
 
     assert orchestrator.ultimate_calls[-1] == {
-        "workspace_name": "oracle",
+        "workspace_name": "bob_company",
         "channel_name": "slack:C999",
         "thread_ts": "10.0",
         "message_ts": "10.1",
@@ -485,7 +485,7 @@ def test_watcher_ultimate_mode_ignores_non_bob_reply(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="10.0",
         root_ts="10.0",
@@ -495,11 +495,11 @@ def test_watcher_ultimate_mode_ignores_non_bob_reply(tmp_path):
         status=SessionStatus.CLOSED_IDLE,
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.accessible_conversation_ids["oracle"] = ["C999"]
-    browser.thread_replies[("oracle", "slack:C999", "10.0")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = ["C999"]
+    browser.thread_replies[("bob_company", "slack:C999", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="10.0",
             message_ts="10.2",
@@ -527,11 +527,11 @@ def test_watcher_routes_configured_channel_bob_reply_to_ultimate_mode(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_replies[("oracle", "yifanche-private", "20.0")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_replies[("bob_company", "bob_private_channel", "20.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="20.0",
             message_ts="20.1",
             author_actor_id="U123",
@@ -548,14 +548,14 @@ def test_watcher_routes_configured_channel_bob_reply_to_ultimate_mode(tmp_path):
 
     watcher.run_cycle()
     browser.emit_frame(
-        "oracle",
+        "bob_company",
         '{"type":"message","channel":"C123","ts":"20.1","thread_ts":"20.0","text":"bob do it here too"}',
     )
     watcher.run_cycle()
 
     assert orchestrator.ultimate_calls[-1] == {
-        "workspace_name": "oracle",
-        "channel_name": "yifanche-private",
+        "workspace_name": "bob_company",
+        "channel_name": "bob_private_channel",
         "thread_ts": "20.0",
         "message_ts": "20.1",
         "author_actor_id": "U123",
@@ -571,8 +571,8 @@ def test_watcher_routes_configured_channel_bob_reply_to_thread_handler_when_thre
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="30.0",
         root_ts="30.0",
         codex_session_id="session-123",
@@ -581,15 +581,15 @@ def test_watcher_routes_configured_channel_bob_reply_to_thread_handler_when_thre
         status=SessionStatus.CLOSED_IDLE,
     )
     state.record_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="30.0",
         message_ts="30.0",
         author_actor_id="U123",
         purpose="root_request",
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
     orchestrator = RecordingOrchestrator()
     watcher = SlackWatcher(
         browser=browser,
@@ -599,10 +599,10 @@ def test_watcher_routes_configured_channel_bob_reply_to_thread_handler_when_thre
     )
 
     watcher.run_cycle()
-    browser.thread_replies[("oracle", "yifanche-private", "30.0")] = [
+    browser.thread_replies[("bob_company", "bob_private_channel", "30.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="30.0",
             message_ts="9999999999.0",
             author_actor_id="U123",
@@ -610,15 +610,15 @@ def test_watcher_routes_configured_channel_bob_reply_to_thread_handler_when_thre
         )
     ]
     browser.emit_frame(
-        "oracle",
+        "bob_company",
         '{"type":"message","channel":"C123","ts":"9999999999.0","thread_ts":"30.0","text":"bob continue"}',
     )
     watcher.run_cycle()
 
     assert orchestrator.reply_calls == [
         {
-                "workspace_name": "oracle",
-                "channel_name": "yifanche-private",
+                "workspace_name": "bob_company",
+                "channel_name": "bob_private_channel",
                 "thread_ts": "30.0",
                 "message_ts": "9999999999.0",
                 "author_actor_id": "U123",
@@ -634,12 +634,12 @@ def test_watcher_ultimate_mode_tolerates_runtime_channel_listing_failure(tmp_pat
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.accessible_conversation_ids["oracle"] = RuntimeError("enterprise_is_restricted")
-    browser.root_messages[("oracle", "yifanche-private")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = RuntimeError("enterprise_is_restricted")
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
         SlackRootMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1.0",
             message_ts="1.0",
             author_actor_id="U123",
@@ -658,8 +658,8 @@ def test_watcher_ultimate_mode_tolerates_runtime_channel_listing_failure(tmp_pat
 
     assert orchestrator.root_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "message_ts": "1.0",
             "author_actor_id": "U123",
             "text": "Bob, hi",
@@ -673,10 +673,10 @@ def test_watcher_search_fallback_routes_recent_ultimate_reply(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.search_results["oracle"] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.search_results["bob_company"] = [
         SlackSearchMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_id="C123",
             message_ts="1777007562.458519",
             thread_ts="1777006365.616769",
@@ -692,15 +692,15 @@ def test_watcher_search_fallback_routes_recent_ultimate_reply(tmp_path):
         config=_ultimate_mode_config(tmp_path),
     )
     watcher._initialized = True
-    watcher._channel_name_by_id[("oracle", "C123")] = "yifanche-private"
-    watcher._ultimate_search_cursor["oracle"] = 1777007560.0
+    watcher._channel_name_by_id[("bob_company", "C123")] = "bob_private_channel"
+    watcher._ultimate_search_cursor["bob_company"] = 1777007560.0
 
     watcher.run_cycle()
 
     assert orchestrator.ultimate_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "1777006365.616769",
             "message_ts": "1777007562.458519",
             "author_actor_id": "U123",
@@ -715,7 +715,7 @@ def test_watcher_search_fallback_recovers_late_indexed_reply_after_newer_hit(tmp
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
     orchestrator = RecordingOrchestrator()
     watcher = SlackWatcher(
         browser=browser,
@@ -724,12 +724,12 @@ def test_watcher_search_fallback_recovers_late_indexed_reply_after_newer_hit(tmp
         config=_ultimate_mode_config(tmp_path),
     )
     watcher._initialized = True
-    watcher._channel_name_by_id[("oracle", "C123")] = "yifanche-private"
-    watcher._ultimate_search_cursor["oracle"] = 1777007000.0
+    watcher._channel_name_by_id[("bob_company", "C123")] = "bob_private_channel"
+    watcher._ultimate_search_cursor["bob_company"] = 1777007000.0
 
-    browser.search_results["oracle"] = [
+    browser.search_results["bob_company"] = [
         SlackSearchMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_id="C123",
             message_ts="1777007562.458519",
             thread_ts="1777006365.616769",
@@ -741,8 +741,8 @@ def test_watcher_search_fallback_recovers_late_indexed_reply_after_newer_hit(tmp
 
     assert orchestrator.ultimate_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "1777006365.616769",
             "message_ts": "1777007562.458519",
             "author_actor_id": "U123",
@@ -751,9 +751,9 @@ def test_watcher_search_fallback_recovers_late_indexed_reply_after_newer_hit(tmp
     ]
 
     orchestrator.ultimate_calls.clear()
-    browser.search_results["oracle"] = [
+    browser.search_results["bob_company"] = [
         SlackSearchMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_id="C123",
             message_ts="1777007561.000001",
             thread_ts="1777006365.616769",
@@ -765,8 +765,8 @@ def test_watcher_search_fallback_recovers_late_indexed_reply_after_newer_hit(tmp
 
     assert orchestrator.ultimate_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "1777006365.616769",
             "message_ts": "1777007561.000001",
             "author_actor_id": "U123",
@@ -781,10 +781,10 @@ def test_watcher_search_fallback_runs_again_after_reconcile_work(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "first-channel")] = "C111"
-    browser.root_messages[("oracle", "first-channel")] = [
+    browser.channel_ids[("bob_company", "first-channel")] = "C111"
+    browser.root_messages[("bob_company", "first-channel")] = [
         SlackRootMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="first-channel",
             thread_ts="1.0",
             message_ts="1.0",
@@ -798,7 +798,7 @@ def test_watcher_search_fallback_runs_again_after_reconcile_work(tmp_path):
         watcher=WatcherSettings(bob_ultimate_mode=True),
         workspaces=[
             WorkspaceConfig(
-                name="oracle",
+                name="bob_company",
                 channels=[ChannelConfig(name="first-channel")],
             )
         ],
@@ -826,9 +826,9 @@ def test_watcher_search_fallback_runs_again_after_reconcile_work(tmp_path):
                 )
                 self.root_calls += 1
                 if self.root_calls >= 1:
-                    self.search_results["oracle"] = [
+                    self.search_results["bob_company"] = [
                         SlackSearchMessage(
-                            workspace_name="oracle",
+                            workspace_name="bob_company",
                             channel_id="C111",
                             message_ts="1777011778.087299",
                             thread_ts="1776987128.600299",
@@ -849,14 +849,14 @@ def test_watcher_search_fallback_runs_again_after_reconcile_work(tmp_path):
         config=config,
     )
     watcher._initialized = True
-    watcher._channel_name_by_id[("oracle", "C111")] = "first-channel"
-    watcher._ultimate_search_cursor["oracle"] = 1777011700.0
+    watcher._channel_name_by_id[("bob_company", "C111")] = "first-channel"
+    watcher._ultimate_search_cursor["bob_company"] = 1777011700.0
 
     watcher.run_cycle()
 
     assert orchestrator.ultimate_calls == [
         {
-            "workspace_name": "oracle",
+            "workspace_name": "bob_company",
             "channel_name": "first-channel",
             "thread_ts": "1776987128.600299",
             "message_ts": "1777011778.087299",
@@ -899,11 +899,11 @@ def test_watcher_stops_between_channel_reconciles_when_requested(tmp_path):
             return messages
 
     browser = StoppingBrowser()
-    browser.channel_ids[("oracle", "first-channel")] = "C111"
-    browser.channel_ids[("oracle", "second-channel")] = "C222"
-    browser.root_messages[("oracle", "first-channel")] = [
+    browser.channel_ids[("bob_company", "first-channel")] = "C111"
+    browser.channel_ids[("bob_company", "second-channel")] = "C222"
+    browser.root_messages[("bob_company", "first-channel")] = [
         SlackRootMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="first-channel",
             thread_ts="1.0",
             message_ts="1.0",
@@ -911,9 +911,9 @@ def test_watcher_stops_between_channel_reconciles_when_requested(tmp_path):
             text="Bob, first",
         )
     ]
-    browser.root_messages[("oracle", "second-channel")] = [
+    browser.root_messages[("bob_company", "second-channel")] = [
         SlackRootMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="second-channel",
             thread_ts="2.0",
             message_ts="2.0",
@@ -926,7 +926,7 @@ def test_watcher_stops_between_channel_reconciles_when_requested(tmp_path):
         defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
         workspaces=[
             WorkspaceConfig(
-                name="oracle",
+                name="bob_company",
                 channels=[
                     ChannelConfig(name="first-channel"),
                     ChannelConfig(name="second-channel"),
@@ -946,7 +946,7 @@ def test_watcher_stops_between_channel_reconciles_when_requested(tmp_path):
 
     assert orchestrator.root_calls == [
         {
-            "workspace_name": "oracle",
+            "workspace_name": "bob_company",
             "channel_name": "first-channel",
             "message_ts": "1.0",
             "author_actor_id": "U123",
@@ -961,8 +961,8 @@ def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-123",
@@ -971,8 +971,8 @@ def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
         status=SessionStatus.CLOSED_IDLE,
     )
     state.upsert_outbound_intent(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         intent_key="final-session-123",
         action="post_thread_reply",
@@ -980,11 +980,11 @@ def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
         delivery_state="pending",
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="10.0",
             message_ts="9999999999.0",
             author_actor_id="U123",
@@ -1002,7 +1002,7 @@ def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
     watcher.run_cycle()
 
     assert orchestrator.reply_calls == []
-    assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") == "9999999999.0"
+    assert state.get_thread_cursor("bob_company", "bob_private_channel", "10.0") == "9999999999.0"
 
 
 def test_watcher_skips_ratelimited_thread_reconcile_without_aborting_cycle(tmp_path):
@@ -1011,8 +1011,8 @@ def test_watcher_skips_ratelimited_thread_reconcile_without_aborting_cycle(tmp_p
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-123",
@@ -1021,8 +1021,8 @@ def test_watcher_skips_ratelimited_thread_reconcile_without_aborting_cycle(tmp_p
         status=SessionStatus.CLOSED_IDLE,
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_reply_errors[("oracle", "yifanche-private", "10.0")] = RuntimeError(
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_reply_errors[("bob_company", "bob_private_channel", "10.0")] = RuntimeError(
         "Slack API conversations.replies failed: ratelimited"
     )
     orchestrator = RecordingOrchestrator()
@@ -1036,7 +1036,7 @@ def test_watcher_skips_ratelimited_thread_reconcile_without_aborting_cycle(tmp_p
     watcher.run_cycle()
 
     assert orchestrator.reply_calls == []
-    assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") is None
+    assert state.get_thread_cursor("bob_company", "bob_private_channel", "10.0") is None
 
 
 def test_watcher_backs_off_workspace_after_ratelimited_thread_reply_call(tmp_path):
@@ -1045,8 +1045,8 @@ def test_watcher_backs_off_workspace_after_ratelimited_thread_reply_call(tmp_pat
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-123",
@@ -1055,8 +1055,8 @@ def test_watcher_backs_off_workspace_after_ratelimited_thread_reply_call(tmp_pat
         status=SessionStatus.CLOSED_IDLE,
     )
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="11.0",
         root_ts="11.0",
         codex_session_id="session-456",
@@ -1065,14 +1065,14 @@ def test_watcher_backs_off_workspace_after_ratelimited_thread_reply_call(tmp_pat
         status=SessionStatus.CLOSED_IDLE,
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_reply_errors[("oracle", "yifanche-private", "10.0")] = RuntimeError(
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_reply_errors[("bob_company", "bob_private_channel", "10.0")] = RuntimeError(
         "Slack API conversations.replies failed: ratelimited"
     )
-    browser.thread_replies[("oracle", "yifanche-private", "11.0")] = [
+    browser.thread_replies[("bob_company", "bob_private_channel", "11.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="11.0",
             message_ts="20.0",
             author_actor_id="U123",
@@ -1090,7 +1090,7 @@ def test_watcher_backs_off_workspace_after_ratelimited_thread_reply_call(tmp_pat
     watcher.run_cycle()
 
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "10.0", None, 200)
+        ("bob_company", "bob_private_channel", "10.0", None, 200)
     ]
     assert orchestrator.reply_calls == []
 
@@ -1101,8 +1101,8 @@ def test_watcher_reconciles_recent_reply_even_when_old_tracked_thread_rate_limit
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-stale",
@@ -1111,8 +1111,8 @@ def test_watcher_reconciles_recent_reply_even_when_old_tracked_thread_rate_limit
         status=SessionStatus.CLOSED_IDLE,
     )
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="11.0",
         root_ts="11.0",
         codex_session_id="session-recent",
@@ -1129,18 +1129,18 @@ def test_watcher_reconciles_recent_reply_even_when_old_tracked_thread_rate_limit
               AND channel_name = ?
               AND thread_ts = ?
             """,
-            (1, 1, "oracle", "yifanche-private", "10.0"),
+            (1, 1, "bob_company", "bob_private_channel", "10.0"),
         )
 
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_reply_errors[("oracle", "yifanche-private", "10.0")] = RuntimeError(
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_reply_errors[("bob_company", "bob_private_channel", "10.0")] = RuntimeError(
         "Slack API conversations.replies failed: ratelimited"
     )
-    browser.thread_replies[("oracle", "yifanche-private", "11.0")] = [
+    browser.thread_replies[("bob_company", "bob_private_channel", "11.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="11.0",
             message_ts="9999999999.0",
             author_actor_id="U123",
@@ -1158,12 +1158,12 @@ def test_watcher_reconciles_recent_reply_even_when_old_tracked_thread_rate_limit
     watcher.run_cycle()
 
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "11.0", None, 200),
+        ("bob_company", "bob_private_channel", "11.0", None, 200),
     ]
     assert orchestrator.reply_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "11.0",
             "message_ts": "9999999999.0",
             "author_actor_id": "U123",
@@ -1180,8 +1180,8 @@ def test_watcher_spaces_terminal_thread_reconcile_across_cycles(tmp_path):
     now_epoch = int(time.time())
     for index, updated_at in ((10, now_epoch - 10), (11, now_epoch - 20), (12, now_epoch - 30)):
         state.upsert_session(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="{0}.0".format(index),
             root_ts="{0}.0".format(index),
             codex_session_id="session-{0}".format(index),
@@ -1201,14 +1201,14 @@ def test_watcher_spaces_terminal_thread_reconcile_across_cycles(tmp_path):
                 (
                     updated_at,
                     updated_at,
-                    "oracle",
-                    "yifanche-private",
+                    "bob_company",
+                    "bob_private_channel",
                     "{0}.0".format(index),
                 ),
             )
 
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
     orchestrator = RecordingOrchestrator()
     watcher = SlackWatcher(
         browser=browser,
@@ -1219,19 +1219,19 @@ def test_watcher_spaces_terminal_thread_reconcile_across_cycles(tmp_path):
 
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "10.0", None, 200)
+        ("bob_company", "bob_private_channel", "10.0", None, 200)
     ]
 
     browser.thread_reply_calls.clear()
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "11.0", None, 200)
+        ("bob_company", "bob_private_channel", "11.0", None, 200)
     ]
 
     browser.thread_reply_calls.clear()
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "12.0", None, 200)
+        ("bob_company", "bob_private_channel", "12.0", None, 200)
     ]
 
 
@@ -1258,8 +1258,8 @@ def test_watcher_eventually_reconciles_old_tracked_terminal_threads(tmp_path, mo
         (17, now_epoch - 5_000),
     ):
         state.upsert_session(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="{0}.0".format(index),
             root_ts="{0}.0".format(index),
             codex_session_id="session-{0}".format(index),
@@ -1279,14 +1279,14 @@ def test_watcher_eventually_reconciles_old_tracked_terminal_threads(tmp_path, mo
                 (
                     updated_at,
                     updated_at,
-                    "oracle",
-                    "yifanche-private",
+                    "bob_company",
+                    "bob_private_channel",
                     "{0}.0".format(index),
                 ),
             )
 
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
     orchestrator = RecordingOrchestrator()
     watcher = SlackWatcher(
         browser=browser,
@@ -1297,22 +1297,22 @@ def test_watcher_eventually_reconciles_old_tracked_terminal_threads(tmp_path, mo
 
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "10.0", None, 200),
-        ("oracle", "yifanche-private", "16.0", None, 200),
+        ("bob_company", "bob_private_channel", "10.0", None, 200),
+        ("bob_company", "bob_private_channel", "16.0", None, 200),
     ]
 
     browser.thread_reply_calls.clear()
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "11.0", None, 200),
+        ("bob_company", "bob_private_channel", "11.0", None, 200),
     ]
 
     monotonic_now += 60.0
     browser.thread_reply_calls.clear()
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "12.0", None, 200),
-        ("oracle", "yifanche-private", "17.0", None, 200),
+        ("bob_company", "bob_private_channel", "12.0", None, 200),
+        ("bob_company", "bob_private_channel", "17.0", None, 200),
     ]
 
 
@@ -1333,8 +1333,8 @@ def test_watcher_revisits_recently_active_terminal_thread_before_historical_wind
         (11, now_epoch - 7_260),
     ):
         state.upsert_session(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="{0}.0".format(index),
             root_ts="{0}.0".format(index),
             codex_session_id="session-{0}".format(index),
@@ -1354,14 +1354,14 @@ def test_watcher_revisits_recently_active_terminal_thread_before_historical_wind
                 (
                     updated_at,
                     updated_at,
-                    "oracle",
-                    "yifanche-private",
+                    "bob_company",
+                    "bob_private_channel",
                     "{0}.0".format(index),
                 ),
             )
 
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
     orchestrator = RecordingOrchestrator()
     watcher = SlackWatcher(
         browser=browser,
@@ -1372,13 +1372,13 @@ def test_watcher_revisits_recently_active_terminal_thread_before_historical_wind
 
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "10.0", None, 200),
+        ("bob_company", "bob_private_channel", "10.0", None, 200),
     ]
 
-    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="10.0",
             message_ts="9999999999.0",
             author_actor_id="U123",
@@ -1390,7 +1390,7 @@ def test_watcher_revisits_recently_active_terminal_thread_before_historical_wind
     browser.thread_reply_calls.clear()
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "11.0", None, 200),
+        ("bob_company", "bob_private_channel", "11.0", None, 200),
     ]
 
     monotonic_now += 30.0
@@ -1398,12 +1398,12 @@ def test_watcher_revisits_recently_active_terminal_thread_before_historical_wind
     watcher.run_cycle()
 
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "10.0", None, 200),
+        ("bob_company", "bob_private_channel", "10.0", None, 200),
     ]
     assert orchestrator.reply_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "10.0",
             "message_ts": "9999999999.0",
             "author_actor_id": "U123",
@@ -1434,8 +1434,8 @@ def test_watcher_historical_sweep_backs_off_after_rate_limit(tmp_path, monkeypat
         (16, now_epoch - 4_000),
     ):
         state.upsert_session(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="{0}.0".format(index),
             root_ts="{0}.0".format(index),
             codex_session_id="session-{0}".format(index),
@@ -1455,15 +1455,15 @@ def test_watcher_historical_sweep_backs_off_after_rate_limit(tmp_path, monkeypat
                 (
                     updated_at,
                     updated_at,
-                    "oracle",
-                    "yifanche-private",
+                    "bob_company",
+                    "bob_private_channel",
                     "{0}.0".format(index),
                 ),
             )
 
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_reply_errors[("oracle", "yifanche-private", "16.0")] = RuntimeError(
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_reply_errors[("bob_company", "bob_private_channel", "16.0")] = RuntimeError(
         "Slack API conversations.replies failed: ratelimited"
     )
     orchestrator = RecordingOrchestrator()
@@ -1476,23 +1476,23 @@ def test_watcher_historical_sweep_backs_off_after_rate_limit(tmp_path, monkeypat
 
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "10.0", None, 200),
-        ("oracle", "yifanche-private", "16.0", None, 200),
+        ("bob_company", "bob_private_channel", "10.0", None, 200),
+        ("bob_company", "bob_private_channel", "16.0", None, 200),
     ]
 
     monotonic_now += 60.0
     browser.thread_reply_calls.clear()
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "11.0", None, 200),
+        ("bob_company", "bob_private_channel", "11.0", None, 200),
     ]
 
     monotonic_now += 60.0
     browser.thread_reply_calls.clear()
     watcher.run_cycle()
     assert browser.thread_reply_calls == [
-        ("oracle", "yifanche-private", "12.0", None, 200),
-        ("oracle", "yifanche-private", "16.0", None, 200),
+        ("bob_company", "bob_private_channel", "12.0", None, 200),
+        ("bob_company", "bob_private_channel", "16.0", None, 200),
     ]
 
 
@@ -1502,8 +1502,8 @@ def test_watcher_periodically_reconciles_follow_up_replies_without_websocket_eve
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-123",
@@ -1512,7 +1512,7 @@ def test_watcher_periodically_reconciles_follow_up_replies_without_websocket_eve
         status=SessionStatus.CLOSED_IDLE,
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
     orchestrator = RecordingOrchestrator()
     watcher = SlackWatcher(
         browser=browser,
@@ -1522,10 +1522,10 @@ def test_watcher_periodically_reconciles_follow_up_replies_without_websocket_eve
     )
 
     watcher.run_cycle()
-    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="10.0",
             message_ts="9999999999.0",
             author_actor_id="U123",
@@ -1537,15 +1537,15 @@ def test_watcher_periodically_reconciles_follow_up_replies_without_websocket_eve
 
     assert orchestrator.reply_calls == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "10.0",
             "message_ts": "9999999999.0",
             "author_actor_id": "U123",
             "text": "follow-up without event",
         }
     ]
-    assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") == "9999999999.0"
+    assert state.get_thread_cursor("bob_company", "bob_private_channel", "10.0") == "9999999999.0"
 
 
 def test_watcher_ignores_empty_text_thread_artifacts(tmp_path):
@@ -1554,8 +1554,8 @@ def test_watcher_ignores_empty_text_thread_artifacts(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-123",
@@ -1564,11 +1564,11 @@ def test_watcher_ignores_empty_text_thread_artifacts(tmp_path):
         status=SessionStatus.CLOSED_IDLE,
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="10.0",
             message_ts="9999999999.0",
             author_actor_id="U123",
@@ -1594,8 +1594,8 @@ def test_watcher_ignores_escaped_thread_reply(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-123",
@@ -1604,11 +1604,11 @@ def test_watcher_ignores_escaped_thread_reply(tmp_path):
         status=SessionStatus.CLOSED_IDLE,
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="10.0",
             message_ts="9999999999.0",
             author_actor_id="U999",
@@ -1633,13 +1633,13 @@ def test_watcher_reconciles_root_messages_across_multiple_history_pages(tmp_path
 
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
-    state.upsert_channel_cursor("oracle", "yifanche-private", "0.0")
+    state.upsert_channel_cursor("bob_company", "bob_private_channel", "0.0")
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.root_messages[("oracle", "yifanche-private")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
         SlackRootMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="{0}.0".format(index),
             message_ts="{0}.0".format(index),
             author_actor_id="U123",
@@ -1659,7 +1659,7 @@ def test_watcher_reconciles_root_messages_across_multiple_history_pages(tmp_path
 
     assert len(orchestrator.root_calls) == 55
     assert orchestrator.root_calls[-1]["message_ts"] == "55.0"
-    assert state.get_channel_cursor("oracle", "yifanche-private") == "55.0"
+    assert state.get_channel_cursor("bob_company", "bob_private_channel") == "55.0"
 
 
 def test_watcher_reconciles_thread_replies_across_multiple_pages(tmp_path):
@@ -1668,8 +1668,8 @@ def test_watcher_reconciles_thread_replies_across_multiple_pages(tmp_path):
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     state.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="10.0",
         root_ts="10.0",
         codex_session_id="session-123",
@@ -1678,11 +1678,11 @@ def test_watcher_reconciles_thread_replies_across_multiple_pages(tmp_path):
         status=SessionStatus.CLOSED_IDLE,
     )
     browser = FakeBrowser()
-    browser.channel_ids[("oracle", "yifanche-private")] = "C123"
-    browser.thread_replies[("oracle", "yifanche-private", "10.0")] = [
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
         SlackThreadReplyMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="10.0",
             message_ts="{0}.0".format(9000000000 + index),
             author_actor_id="U123",
@@ -1702,4 +1702,4 @@ def test_watcher_reconciles_thread_replies_across_multiple_pages(tmp_path):
 
     assert len(orchestrator.reply_calls) == 205
     assert orchestrator.reply_calls[-1]["message_ts"] == "9000000205.0"
-    assert state.get_thread_cursor("oracle", "yifanche-private", "10.0") == "9000000205.0"
+    assert state.get_thread_cursor("bob_company", "bob_private_channel", "10.0") == "9000000205.0"

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a feature-gated Bob ultimate mode that lets Yifan invoke Bob with `bob ...` from any accessible Slack conversation, append Bob status/output into that same Slack message, and reuse the same Codex session on later explicit invocations in the same thread.
+**Goal:** Add a feature-gated Bob ultimate mode that lets Bob owner invoke Bob with `bob ...` from any accessible Slack conversation, append Bob status/output into that same Slack message, and reuse the same Codex session on later explicit invocations in the same thread.
 
 **Architecture:** Keep the existing thread/session store and configured-channel Bob flow, but add a runtime channel layer for unconfigured conversations, a watcher feature flag for workspace-wide explicit invocation, full-thread hydration per explicit invocation, and Slack `chat.update` support for same-message append delivery.
 
@@ -32,7 +32,7 @@ def test_watcher_bob_ultimate_mode_loads_and_dumps(tmp_path):
         bob_ultimate_mode = true
 
         [[workspaces]]
-        name = "oracle"
+        name = "bob_company"
         slack_url = "https://app.slack.com/client/T123/C123"
         slack_api_origin = "https://example.enterprise.slack.com"
         slack_api_token = "xoxc-test"
@@ -137,8 +137,8 @@ def test_update_message_uses_chat_update(api_client_factory):
     adapter = api_client_factory(RecordingApiClient())
 
     adapter.update_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         text="bob can you do it?\nBob is working on it",
     )
@@ -227,12 +227,12 @@ def test_watcher_routes_unconfigured_root_bob_message_when_ultimate_mode_enabled
     state = BobStateStore(tmp_path / "bob.sqlite3")
     state.initialize()
     browser = FakeBrowser()
-    browser.workspace_conversations["oracle"] = {
+    browser.workspace_conversations["bob_company"] = {
         "C999": "proj-random",
     }
-    browser.root_messages[("oracle", "slack:C999")] = [
+    browser.root_messages[("bob_company", "slack:C999")] = [
         SlackRootMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="2.0",
             message_ts="2.0",
@@ -312,7 +312,7 @@ def test_bob_ultimate_reply_invocation_updates_same_message_and_reuses_thread_se
     orchestrator.config.watcher.bob_ultimate_mode = True
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776911047.025189",
         message_ts="1776911050.000200",

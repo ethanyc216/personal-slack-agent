@@ -71,10 +71,10 @@ def test_wrapper_runs_terminal_request_with_explicit_target(monkeypatch, tmp_pat
                 'allowed_actor_ids = ["U123"]',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-bob"',
+                'name = "bob_channel"',
                 'persistent_memory_mode = "disabled"',
                 "post_terminal_threads_here = true",
             ]
@@ -101,9 +101,9 @@ def test_wrapper_runs_terminal_request_with_explicit_target(monkeypatch, tmp_pat
     exit_code = wrapper_main(
         [
             "--workspace",
-            "oracle",
+            "bob_company",
             "--channel",
-            "yifanche-bob",
+            "bob_channel",
             "--timeout-seconds",
             "20",
             "--poll-interval-seconds",
@@ -116,8 +116,8 @@ def test_wrapper_runs_terminal_request_with_explicit_target(monkeypatch, tmp_pat
 
     assert exit_code == 0
     assert calls == {
-        "workspace_name": "oracle",
-        "channel_name": "yifanche-bob",
+        "workspace_name": "bob_company",
+        "channel_name": "bob_channel",
         "text": "Bob, please help",
         "timeout_seconds": 20.0,
         "poll_interval_seconds": 2.0,
@@ -139,10 +139,10 @@ def test_wrapper_uses_unique_terminal_channel_when_not_explicit(monkeypatch, tmp
                 'allowed_actor_ids = ["U123"]',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-bob"',
+                'name = "bob_channel"',
                 'persistent_memory_mode = "disabled"',
                 "post_terminal_threads_here = true",
             ]
@@ -176,7 +176,7 @@ def test_wrapper_uses_workspace_channel_default_terminal_flag_when_not_explicit(
                 'allowed_actor_ids = ["U123"]',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 "",
                 "[workspaces.channel_defaults]",
                 "post_terminal_threads_here = true",
@@ -184,7 +184,7 @@ def test_wrapper_uses_workspace_channel_default_terminal_flag_when_not_explicit(
                 'default_cwd = "{0}"'.format(project_dir),
                 "",
                 "[[workspaces.channels]]",
-                'name = "yifanche-bob"',
+                'name = "bob_channel"',
             ]
         ),
         encoding="utf-8",

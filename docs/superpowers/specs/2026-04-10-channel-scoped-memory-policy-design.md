@@ -2,15 +2,15 @@
 
 ## Goal
 
-Ensure Bob can use the full Codex capability surface in every allowed Slack channel while preventing shared or test channels from updating Yifan Chen's personal durable preference notes.
+Ensure Bob can use the full Codex capability surface in every allowed Slack channel while preventing shared or test channels from updating Bob owner's personal durable preference notes.
 
 ## Problem
 
 Bob currently forwards Slack thread text directly into Codex sessions without any explicit channel-scoped memory policy. That means Codex has no native idea whether a conversation came from:
 
-- `yifanche-private`, where durable personal preference capture is allowed
-- `yifanche-bob-test`, where testing conversation should not update Yifan's personal notes
-- `yifanche-bob`, where coworker conversation should not update Yifan's personal notes
+- `bob_private_channel`, where durable personal preference capture is allowed
+- `bob_test_channel`, where testing conversation should not update Bob owner's personal notes
+- `bob_channel`, where coworker conversation should not update Bob owner's personal notes
 
 The missing boundary is not about capability. Bob users in shared channels should still be able to use the same tools, skills, MCP servers, and agents. The missing boundary is about whose durable preferences may be updated from a given channel context.
 
@@ -20,8 +20,8 @@ The missing boundary is not about capability. Bob users in shared channels shoul
 
 - Bob must attach explicit channel context to every Codex request.
 - Bob must attach explicit durable-memory policy to every new session and every resumed session.
-- `yifanche-private` must allow durable personal preference updates for owner `yifanche`.
-- `yifanche-bob` and `yifanche-bob-test` must forbid updates to Yifan's personal session note or other durable preference files.
+- `bob_private_channel` must allow durable personal preference updates for owner `bob_owner_handle`.
+- `bob_channel` and `bob_test_channel` must forbid updates to Bob owner's personal session note or other durable preference files.
 - Shared/test channels must still allow full normal Bob capabilities, including skills, MCP, agents, and tools.
 - The design must be identity-ready so future channels can target a different durable-memory owner or disable owner updates entirely.
 
@@ -53,12 +53,12 @@ Each configured channel declares a durable-memory policy with two fields:
 
 Example intent:
 
-- `yifanche-private`
+- `bob_private_channel`
   - `persistent_memory_mode = "owner_only"`
-  - `persistent_memory_owner = "yifanche"`
-- `yifanche-bob`
+  - `persistent_memory_owner = "bob_owner_handle"`
+- `bob_channel`
   - `persistent_memory_mode = "disabled"`
-- `yifanche-bob-test`
+- `bob_test_channel`
   - `persistent_memory_mode = "disabled"`
 
 This shape is identity-ready because future channels can point at a different owner without changing orchestration semantics.
@@ -78,32 +78,32 @@ Representative prompt wrapper for a shared/test channel:
 
 ```text
 Bob execution context:
-- workspace: oracle
-- channel: yifanche-bob-test
+- workspace: bob_company
+- channel: bob_test_channel
 - persistent_memory_mode: disabled
 - persistent_memory_owner: none
 
 Rules:
 - You may use all available tools, skills, MCP servers, and agents normally.
-- This Slack channel does not grant permission to update Yifan Chen / Ethan's personal durable preference files.
-- Do not update personal session notes or similar durable preference files for Yifan from this conversation.
+- This Slack channel does not grant permission to update Bob owner's personal durable preference files.
+- Do not update personal session notes or similar durable preference files for Bob owner from this conversation.
 
 User request from Slack:
 <original Slack text>
 ```
 
-Representative prompt wrapper for Yifan's private channel:
+Representative prompt wrapper for Bob owner's private channel:
 
 ```text
 Bob execution context:
-- workspace: oracle
-- channel: yifanche-private
+- workspace: bob_company
+- channel: bob_private_channel
 - persistent_memory_mode: owner_only
-- persistent_memory_owner: yifanche
+- persistent_memory_owner: bob_owner_handle
 
 Rules:
 - You may use all available tools, skills, MCP servers, and agents normally.
-- This Slack channel is allowed to update durable personal preference notes for owner `yifanche` when the conversation reveals a durable preference or workflow rule.
+- This Slack channel is allowed to update durable personal preference notes for owner `bob_owner_handle` when the conversation reveals a durable preference or workflow rule.
 
 User request from Slack:
 <original Slack text>
@@ -113,12 +113,12 @@ Re-sending this wrapper on resume is required. Codex does not natively know what
 
 ### 3. Scope of restricted files
 
-For `disabled` channels, the instruction should explicitly cover Yifan's personal durable preference artifacts, especially:
+For `disabled` channels, the instruction should explicitly cover Bob owner's personal durable preference artifacts, especially:
 
 - `~/.codex/memories/session-note.md`
-- any equivalent personal preference file Bob or Codex would otherwise update for Yifan
+- any equivalent personal preference file Bob or Codex would otherwise update for Bob owner
 
-The restriction is intentionally narrow. It does not block normal execution or collaboration; it only blocks writing shared/test-channel statements into Yifan's personal durable memory.
+The restriction is intentionally narrow. It does not block normal execution or collaboration; it only blocks writing shared/test-channel statements into Bob owner's personal durable memory.
 
 ### 4. Validation behavior
 
@@ -139,7 +139,7 @@ Rejected because it hides policy in code, couples behavior to current channel na
 
 ### Actor-based gating
 
-Rejected because the user's requirement is channel-scoped, not merely author-scoped. Even Yifan's own messages in `yifanche-bob-test` should not update his personal durable notes.
+Rejected because the user's requirement is channel-scoped, not merely author-scoped. Even Bob owner's own messages in `bob_test_channel` should not update his personal durable notes.
 
 ### Restricting tools or skills in shared channels
 
@@ -152,8 +152,8 @@ Rejected because it solves the wrong problem. The user wants full Bob capability
   - valid `disabled` channel config
   - rejection for missing or invalid policy fields
 - Orchestrator tests:
-  - new-session prompt for `yifanche-private` includes `owner_only` policy and `yifanche`
-  - new-session prompt for `yifanche-bob` includes `disabled` policy and explicit no-update rule
+  - new-session prompt for `bob_private_channel` includes `owner_only` policy and `bob_owner_handle`
+  - new-session prompt for `bob_channel` includes `disabled` policy and explicit no-update rule
   - resume prompt for shared/test channels reasserts the no-update rule
   - shared/test prompts still explicitly say all tools, skills, MCP servers, and agents remain available
 - Documentation updates:
@@ -162,4 +162,4 @@ Rejected because it solves the wrong problem. The user wants full Bob capability
 
 ## Expected Outcome
 
-After this change, Bob will remain fully capable in all configured channels, but Codex sessions started from `yifanche-bob` and `yifanche-bob-test` will receive explicit instructions not to update Yifan's personal session note or other durable preference files. `yifanche-private` will remain the channel where Yifan-specific durable preference capture is allowed.
+After this change, Bob will remain fully capable in all configured channels, but Codex sessions started from `bob_channel` and `bob_test_channel` will receive explicit instructions not to update Bob owner's personal session note or other durable preference files. `bob_private_channel` will remain the channel where Bob owner-specific durable preference capture is allowed.

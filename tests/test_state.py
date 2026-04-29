@@ -11,12 +11,12 @@ def test_state_store_persists_thread_mapping_and_session_fields(tmp_path):
     store.initialize()
 
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
-        cwd="/Users/yifanche/Code/OHAI/ctdm",
+        cwd="/Users/bob_owner_handle/Code/OHAI/ctdm",
         owner_actor_id="U123",
         status=SessionStatus.WAITING_FOR_APPROVAL,
         approval_request_id="APR-001",
@@ -25,7 +25,7 @@ def test_state_store_persists_thread_mapping_and_session_fields(tmp_path):
         auto_close_due_at=1711850400,
     )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.codex_session_id == "session-123"
     assert record.owner_actor_id == "U123"
@@ -42,8 +42,8 @@ def test_due_waiting_sessions_are_returned_for_reminder(tmp_path):
     store.initialize()
 
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -64,24 +64,24 @@ def test_processed_messages_support_inbound_dedupe(tmp_path):
     store.initialize()
 
     assert not store.has_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         purpose="root_ingest",
     )
 
     store.record_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         purpose="root_ingest",
     )
     store.record_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         author_actor_id="U123",
@@ -89,8 +89,8 @@ def test_processed_messages_support_inbound_dedupe(tmp_path):
     )
 
     assert store.has_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         purpose="root_ingest",
@@ -103,8 +103,8 @@ def test_claim_processed_message_is_atomic(tmp_path):
     store.initialize()
 
     claimed = store.claim_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         author_actor_id="U123",
@@ -113,8 +113,8 @@ def test_claim_processed_message_is_atomic(tmp_path):
     assert claimed is True
 
     claimed_again = store.claim_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         author_actor_id="U123",
@@ -129,8 +129,8 @@ def test_task_queue_round_trip_and_claim(tmp_path):
     store.initialize()
 
     first_task_id = store.enqueue_task(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         author_actor_id="U123",
@@ -138,8 +138,8 @@ def test_task_queue_round_trip_and_claim(tmp_path):
         prompt_text="Bob, hi there",
     )
     second_task_id = store.enqueue_task(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461001.000001",
         message_ts="1743461001.000001",
         author_actor_id="U123",
@@ -165,8 +165,8 @@ def test_requeue_running_tasks_moves_running_rows_back_to_queue(tmp_path):
     store.initialize()
 
     task_id = store.enqueue_task(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         author_actor_id="U123",
@@ -189,8 +189,8 @@ def test_mark_task_failed_records_error_text(tmp_path):
     store.initialize()
 
     task_id = store.enqueue_task(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461000.000001",
         author_actor_id="U123",
@@ -213,8 +213,8 @@ def test_outbound_intents_support_retry_and_reconciliation(tmp_path):
     store.initialize()
 
     store.upsert_outbound_intent(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
         action="post_reply",
@@ -229,8 +229,8 @@ def test_outbound_intents_support_retry_and_reconciliation(tmp_path):
     assert pending[0].delivery_state == "pending"
 
     store.mark_outbound_intent_attempted(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
     )
@@ -239,8 +239,8 @@ def test_outbound_intents_support_retry_and_reconciliation(tmp_path):
     assert pending_after_attempt[0].delivery_state == "attempted"
 
     store.mark_outbound_intent_delivered(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
         message_ts="1743461005.000001",
@@ -278,8 +278,8 @@ def test_initialize_migrates_legacy_sessions_table(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -298,8 +298,8 @@ def test_due_waiting_sessions_are_returned_for_auto_close(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -309,8 +309,8 @@ def test_due_waiting_sessions_are_returned_for_auto_close(tmp_path):
         auto_close_due_at=1,
     )
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000002",
         root_ts="1743461000.000002",
         codex_session_id="session-456",
@@ -329,8 +329,8 @@ def test_claim_due_reminders_returns_and_clears_due_rows(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -346,7 +346,7 @@ def test_claim_due_reminders_returns_and_clears_due_rows(tmp_path):
     claimed_again = store.claim_due_reminders(now_epoch=5)
     assert claimed_again == []
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.reminder_due_at is None
 
@@ -356,8 +356,8 @@ def test_claim_due_auto_closes_returns_and_clears_due_rows(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -373,7 +373,7 @@ def test_claim_due_auto_closes_returns_and_clears_due_rows(tmp_path):
     claimed_again = store.claim_due_auto_closes(now_epoch=5)
     assert claimed_again == []
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.auto_close_due_at is None
 
@@ -383,24 +383,24 @@ def test_outbound_intent_reupsert_does_not_reopen_delivered_intent(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_outbound_intent(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
         action="post_reply",
         text="Bob needs input",
     )
     store.mark_outbound_intent_delivered(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
         message_ts="1743461005.000001",
     )
 
     store.upsert_outbound_intent(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
         action="post_reply",
@@ -415,23 +415,23 @@ def test_mark_outbound_intent_delivered_keeps_first_message_ts(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_outbound_intent(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
         action="post_reply",
         text="Bob needs input",
     )
     store.mark_outbound_intent_delivered(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
         message_ts="1743461005.000001",
     )
     store.mark_outbound_intent_delivered(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         intent_key="intent-1",
         message_ts="1743461006.000001",
@@ -447,7 +447,7 @@ def test_mark_outbound_intent_delivered_keeps_first_message_ts(tmp_path):
           AND thread_ts = ?
           AND intent_key = ?
         """,
-        ("oracle", "yifanche-private", "1743461000.000001", "intent-1"),
+        ("bob_company", "bob_private_channel", "1743461000.000001", "intent-1"),
     ).fetchone()
     connection.close()
 
@@ -459,8 +459,8 @@ def test_update_status_clears_waiting_metadata_by_default(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -474,13 +474,13 @@ def test_update_status_clears_waiting_metadata_by_default(tmp_path):
     )
 
     store.update_status(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         status=SessionStatus.RUNNING,
     )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.RUNNING
     assert record.approval_request_id is None
@@ -494,23 +494,23 @@ def test_list_delivered_outbound_message_timestamps_returns_only_delivered_entri
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_outbound_intent(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1774999116.837699",
         intent_key="start",
         action="post_thread_reply",
         text="Bob is working on it",
     )
     store.mark_outbound_intent_delivered(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1774999116.837699",
         intent_key="start",
         message_ts="1775022338.395209",
     )
     store.upsert_outbound_intent(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1774999116.837699",
         intent_key="pending",
         action="post_thread_reply",
@@ -518,8 +518,8 @@ def test_list_delivered_outbound_message_timestamps_returns_only_delivered_entri
     )
 
     timestamps = store.list_delivered_outbound_message_timestamps(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1774999116.837699",
     )
 
@@ -531,8 +531,8 @@ def test_upsert_session_rejects_rebinding_existing_thread(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -543,8 +543,8 @@ def test_upsert_session_rejects_rebinding_existing_thread(tmp_path):
 
     try:
         store.upsert_session(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1743461000.000001",
             root_ts="1743461000.000001",
             codex_session_id="session-456",
@@ -557,7 +557,7 @@ def test_upsert_session_rejects_rebinding_existing_thread(tmp_path):
     except ValueError:
         pass
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.codex_session_id == "session-123"
     assert record.cwd == "/tmp/project-a"
@@ -570,8 +570,8 @@ def test_delete_session_removes_existing_thread_mapping(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -581,12 +581,12 @@ def test_delete_session_removes_existing_thread_mapping(tmp_path):
     )
 
     store.delete_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
     )
 
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
 
 
 def test_set_waiting_state_updates_wait_fields_safely(tmp_path):
@@ -594,8 +594,8 @@ def test_set_waiting_state_updates_wait_fields_safely(tmp_path):
     store = BobStateStore(db_path)
     store.initialize()
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -605,8 +605,8 @@ def test_set_waiting_state_updates_wait_fields_safely(tmp_path):
     )
 
     store.set_waiting_state(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         status=SessionStatus.WAITING_FOR_APPROVAL,
         waiting_message_ts="1743461002.000001",
@@ -615,7 +615,7 @@ def test_set_waiting_state_updates_wait_fields_safely(tmp_path):
         reminder_due_at=10,
         auto_close_due_at=20,
     )
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.WAITING_FOR_APPROVAL
     assert record.waiting_message_ts == "1743461002.000001"
@@ -626,8 +626,8 @@ def test_set_waiting_state_updates_wait_fields_safely(tmp_path):
 
     try:
         store.set_waiting_state(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1743461000.000001",
             status=SessionStatus.RUNNING,
             waiting_message_ts=None,

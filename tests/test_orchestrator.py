@@ -219,12 +219,12 @@ def fake_environment(tmp_path):
         ),
         workspaces=[
             WorkspaceConfig(
-                name="oracle",
+                name="bob_company",
                 channels=[
                     ChannelConfig(
-                        name="yifanche-private",
+                        name="bob_private_channel",
                         persistent_memory_mode="owner_only",
-                        persistent_memory_owner="yifanche",
+                        persistent_memory_owner="bob_owner_handle",
                         effective_default_cwd=str(tmp_path),
                         effective_additional_roots=[str(tmp_path / "roots")],
                         effective_accept_root_bob_requests=True,
@@ -246,8 +246,8 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     orchestrator, browser, store, runner = fake_environment
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
@@ -256,8 +256,8 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     thread_posts = browser.thread_posts["1743461000.000001"]
     assert browser.reactions == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "message_ts": "1743461000.000001",
             "emoji_name": "ack",
         }
@@ -268,7 +268,7 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     )
     assert thread_posts[1] == "_*codex Bob :white_check_mark::*_ Final answer"
     assert len(runner.new_session_calls) == 1
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
     assert runner.new_session_calls[0]["sandbox_mode"] is None
@@ -279,24 +279,24 @@ def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_enviro
     orchestrator, _browser, _store, runner = fake_environment
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, remember that I prefer reviewer passes",
     )
 
     prompt = runner.new_session_calls[0]["prompt"]
-    assert "Bob is Ethan's personal assistant" in prompt
+    assert "personal assistant" in prompt
     assert "CTDM tickets" in prompt
     assert "internal topics" in prompt
     assert "checking work status" in prompt
     assert "approved Slack channels" in prompt
     assert "always use `Bob`" in prompt
     assert "Do not tell the user to use `Codex` as the default name" in prompt
-    assert "channel: yifanche-private" in prompt
+    assert "channel: bob_private_channel" in prompt
     assert "persistent_memory_mode: owner_only" in prompt
-    assert "persistent_memory_owner: yifanche" in prompt
+    assert "persistent_memory_owner: bob_owner_handle" in prompt
     assert "may use all available tools, skills, MCP servers, and agents" in prompt
     assert "When passing `sh -lc` through another shell layer" in prompt
     assert "escape `$` as `\\$`" in prompt
@@ -308,8 +308,8 @@ def test_new_root_message_passes_channel_sandbox_mode_to_runner(fake_environment
     channel.effective_codex_sandbox_mode = "danger-full-access"
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
@@ -323,22 +323,22 @@ def test_new_root_message_passes_channel_workspace_write_writable_roots_to_runne
     channel = orchestrator.config.workspaces[0].channels[0]
     channel.effective_codex_sandbox_mode = "workspace-write"
     channel.effective_codex_workspace_write_writable_roots = [
-        "/Users/yifanche/workspace",
-        "/Users/yifanche/scratch",
+        "/Users/bob_owner_handle/workspace",
+        "/Users/bob_owner_handle/scratch",
         "/tmp",
     ]
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
     )
 
     assert runner.new_session_calls[0]["workspace_write_writable_roots"] == [
-        "/Users/yifanche/workspace",
-        "/Users/yifanche/scratch",
+        "/Users/bob_owner_handle/workspace",
+        "/Users/bob_owner_handle/scratch",
         "/tmp",
     ]
 
@@ -349,7 +349,7 @@ def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_ch
     orchestrator, _browser, _store, runner = fake_environment
     orchestrator.config.workspaces[0].channels.append(
         ChannelConfig(
-            name="yifanche-bob",
+            name="bob_channel",
             persistent_memory_mode="disabled",
             effective_default_cwd=orchestrator.config.defaults.default_cwd,
             effective_accept_root_bob_requests=True,
@@ -357,15 +357,15 @@ def test_new_root_message_wraps_prompt_with_disabled_memory_policy_for_shared_ch
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-bob",
+        workspace_name="bob_company",
+        channel_name="bob_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, help my coworker debug this test",
     )
 
     prompt = runner.new_session_calls[0]["prompt"]
-    assert "channel: yifanche-bob" in prompt
+    assert "channel: bob_channel" in prompt
     assert "persistent_memory_mode: disabled" in prompt
     assert "do not update personal session notes" in prompt.lower()
     assert "do not modify" in prompt.lower()
@@ -381,7 +381,7 @@ def test_new_root_message_uses_isolated_runner_for_isolated_channel(fake_environ
     orchestrator.isolated_codex_runner = isolated_runner
     orchestrator.config.workspaces[0].channels.append(
         ChannelConfig(
-            name="yifanche-bob",
+            name="bob_channel",
             codex_home_mode="isolated",
             persistent_memory_mode="disabled",
             effective_default_cwd=orchestrator.config.defaults.default_cwd,
@@ -391,8 +391,8 @@ def test_new_root_message_uses_isolated_runner_for_isolated_channel(fake_environ
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-bob",
+        workspace_name="bob_company",
+        channel_name="bob_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, use isolated runner",
@@ -417,8 +417,8 @@ def test_final_output_with_generated_files_posts_summary_and_uploads_snippets(fa
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
@@ -426,8 +426,8 @@ def test_final_output_with_generated_files_posts_summary_and_uploads_snippets(fa
 
     assert browser.uploaded_snippets == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "1743461000.000001",
             "filename": "scripts/shepherd/README.md",
             "content": "# Shepherd\nHello",
@@ -437,7 +437,7 @@ def test_final_output_with_generated_files_posts_summary_and_uploads_snippets(fa
     assert "Use this set as a repo-local starter package." in final_post
     assert "scripts/shepherd/README.md" in final_post
     assert "# Shepherd" not in final_post
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
 
@@ -457,8 +457,8 @@ def test_final_output_with_bulleted_generated_files_uploads_snippets(fake_enviro
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, build a shepherd skill set",
@@ -466,8 +466,8 @@ def test_final_output_with_bulleted_generated_files_uploads_snippets(fake_enviro
 
     assert browser.uploaded_snippets == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "thread_ts": "1743461000.000001",
             "filename": "skills/shepherd/SKILL.md",
             "content": "# Shepherd Deploy\nUse this skill.",
@@ -485,8 +485,8 @@ def test_final_output_normalizes_code_fence_language_for_slack(fake_environment)
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, show markdown",
@@ -506,15 +506,15 @@ def test_waiting_for_input_posts_wait_message_and_saves_wait_state(fake_environm
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, choose an option",
     )
 
     assert browser.thread_posts["1743461000.000001"][-1] == "_*Bob needs input :exclamation::*_ Which option do you want?"
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.WAITING_FOR_INPUT
 
@@ -531,15 +531,15 @@ def test_waiting_for_input_schedules_reminder_and_auto_close(fake_environment):
     before = int(time.time())
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, choose an option",
     )
 
     after = int(time.time())
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.reminder_due_at is not None
     assert record.auto_close_due_at is not None
@@ -551,8 +551,8 @@ def test_unauthorized_actor_is_ignored(fake_environment):
     orchestrator, browser, store, runner = fake_environment
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U999",
         text="Bob, hi there",
@@ -560,7 +560,7 @@ def test_unauthorized_actor_is_ignored(fake_environment):
 
     assert browser.thread_posts == {}
     assert len(runner.new_session_calls) == 0
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
 
 
 def test_empty_allowed_actor_ids_allows_any_actor(fake_environment):
@@ -569,8 +569,8 @@ def test_empty_allowed_actor_ids_allows_any_actor(fake_environment):
     orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = []
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U999",
         text="Bob, hi there",
@@ -578,7 +578,7 @@ def test_empty_allowed_actor_ids_allows_any_actor(fake_environment):
 
     assert len(runner.new_session_calls) == 1
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is not None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is not None
 
 
 def test_channel_allowed_actor_ids_override_workspace_channel_default_allowed_actor_ids(fake_environment):
@@ -587,22 +587,22 @@ def test_channel_allowed_actor_ids_override_workspace_channel_default_allowed_ac
     orchestrator.config.workspaces[0].channels[0].allowed_actor_ids = ["U999"]
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
     )
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461001.000001",
         author_actor_id="U999",
         text="Bob, hi there",
     )
 
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461001.000001") is not None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461001.000001") is not None
     assert len(runner.new_session_calls) == 1
     assert browser.thread_posts["1743461001.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
 
@@ -612,22 +612,22 @@ def test_workspace_channel_default_allowed_actor_ids_are_used_when_channel_overr
     orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = ["U123"]
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U999",
         text="Bob, hi there",
     )
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461001.000001",
         author_actor_id="U123",
         text="Bob, hi there",
     )
 
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461001.000001") is not None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461001.000001") is not None
     assert len(runner.new_session_calls) == 1
     assert browser.thread_posts["1743461001.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
 
@@ -636,15 +636,15 @@ def test_duplicate_root_message_is_not_processed_twice(fake_environment):
     orchestrator, browser, store, runner = fake_environment
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
     )
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
@@ -658,8 +658,8 @@ def test_non_bob_root_message_is_ignored(fake_environment):
     orchestrator, browser, store, runner = fake_environment
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="hello there",
@@ -667,14 +667,14 @@ def test_non_bob_root_message_is_ignored(fake_environment):
 
     assert browser.thread_posts == {}
     assert runner.new_session_calls == []
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
 
 
 def test_stale_approval_id_is_rejected(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -686,8 +686,8 @@ def test_stale_approval_id_is_rejected(fake_environment):
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461010.000001",
         author_actor_id="U123",
@@ -704,8 +704,8 @@ def test_new_root_message_failure_releases_processed_claim(fake_environment):
 
     with pytest.raises(RuntimeError):
         orchestrator.handle_new_root_message(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             message_ts="1743461000.000001",
             author_actor_id="U123",
             text="Bob, hi there",
@@ -713,15 +713,15 @@ def test_new_root_message_failure_releases_processed_claim(fake_environment):
 
     assert (
         store.has_processed_message(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1743461000.000001",
             message_ts="1743461000.000001",
             purpose="root_request",
         )
         is False
     )
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
 
 
 def test_root_message_claim_is_released_if_session_persistence_fails(fake_environment, monkeypatch):
@@ -735,8 +735,8 @@ def test_root_message_claim_is_released_if_session_persistence_fails(fake_enviro
 
     with pytest.raises(RuntimeError):
         orchestrator.handle_new_root_message(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             message_ts="1743461000.000001",
             author_actor_id="U123",
             text="Bob, hi there",
@@ -744,22 +744,22 @@ def test_root_message_claim_is_released_if_session_persistence_fails(fake_enviro
 
     assert (
         store.has_processed_message(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1743461000.000001",
             message_ts="1743461000.000001",
             purpose="root_request",
         )
         is False
     )
-    assert store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is None
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
 
 
 def test_waiting_reply_resume_failure_keeps_waiting_state_and_releases_claim(fake_environment):
     orchestrator, _browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -772,21 +772,21 @@ def test_waiting_reply_resume_failure_keeps_waiting_state_and_releases_claim(fak
 
     with pytest.raises(RuntimeError):
         orchestrator.handle_thread_reply(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1743461000.000001",
             message_ts="1743461010.000001",
             author_actor_id="U123",
             text="Option A",
         )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.WAITING_FOR_INPUT
     assert (
         store.has_processed_message(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1743461000.000001",
             message_ts="1743461010.000001",
             purpose="thread_reply",
@@ -798,8 +798,8 @@ def test_waiting_reply_resume_failure_keeps_waiting_state_and_releases_claim(fak
 def test_bob_close_marks_session_closed_without_resuming(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -810,15 +810,15 @@ def test_bob_close_marks_session_closed_without_resuming(fake_environment):
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461010.000001",
         author_actor_id="U123",
         text="bob close",
     )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_MANUAL
     assert runner.resume_calls == []
@@ -831,14 +831,14 @@ def test_post_failure_marks_session_failed_instead_of_leaving_it_running(fake_en
 
     with pytest.raises(RuntimeError):
         orchestrator.handle_new_root_message(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             message_ts="1743461000.000001",
             author_actor_id="U123",
             text="Bob, hi there",
         )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.FAILED
 
@@ -848,8 +848,8 @@ def test_new_root_message_dispatches_immediately_with_worker_pool(fake_environme
     orchestrator._max_concurrent_tasks = 5  # type: ignore[attr-defined]
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
@@ -874,9 +874,9 @@ def test_ultimate_invocation_dispatches_immediately_with_worker_pool(fake_enviro
     orchestrator, browser, store, _runner = fake_environment
     orchestrator._max_concurrent_tasks = 5  # type: ignore[attr-defined]
     orchestrator.config.watcher.bob_ultimate_mode = True
-    browser.thread_messages[("oracle", "slack:C999", "1776915000.000001")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776915000.000001")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776915000.000001",
             message_ts="1776915000.000001",
@@ -886,7 +886,7 @@ def test_ultimate_invocation_dispatches_immediately_with_worker_pool(fake_enviro
     ]
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776915000.000001",
         message_ts="1776915000.000001",
@@ -910,9 +910,9 @@ def test_ultimate_invocation_dispatches_immediately_with_worker_pool(fake_enviro
 def test_ultimate_root_message_updates_same_message_and_includes_thread_context(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
-    browser.thread_messages[("oracle", "slack:C999", "1776911047.025189")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776911047.025189")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776911047.025189",
             message_ts="1776911047.025189",
@@ -922,7 +922,7 @@ def test_ultimate_root_message_updates_same_message_and_includes_thread_context(
     ]
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         message_ts="1776911047.025189",
         author_actor_id="U123",
@@ -934,7 +934,7 @@ def test_ultimate_root_message_updates_same_message_and_includes_thread_context(
     assert browser.updated_messages["1776911047.025189"][-1].endswith("_*codex Bob :white_check_mark::*_ Final answer")
     assert "Slack thread transcript:" in runner.new_session_calls[0]["prompt"]
     assert "bob review this" in runner.new_session_calls[0]["prompt"]
-    record = store.get_by_thread("oracle", "slack:C999", "1776911047.025189")
+    record = store.get_by_thread("bob_company", "slack:C999", "1776911047.025189")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
 
@@ -943,7 +943,7 @@ def test_ultimate_reply_invocation_reuses_session_and_updates_same_message(fake_
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
     store.upsert_session(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776911047.025189",
         root_ts="1776911047.025189",
@@ -952,9 +952,9 @@ def test_ultimate_reply_invocation_reuses_session_and_updates_same_message(fake_
         owner_actor_id="U123",
         status=SessionStatus.CLOSED_IDLE,
     )
-    browser.thread_messages[("oracle", "slack:C999", "1776911047.025189")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776911047.025189")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776911047.025189",
             message_ts="1776911047.025189",
@@ -962,7 +962,7 @@ def test_ultimate_reply_invocation_reuses_session_and_updates_same_message(fake_
             text="can you say no?",
         ),
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776911047.025189",
             message_ts="1776911050.000200",
@@ -972,7 +972,7 @@ def test_ultimate_reply_invocation_reuses_session_and_updates_same_message(fake_
     ]
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776911047.025189",
         message_ts="1776911050.000200",
@@ -992,7 +992,7 @@ def test_ultimate_reply_invocation_marks_working_before_resume_returns(fake_envi
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
     store.upsert_session(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776911047.025189",
         root_ts="1776911047.025189",
@@ -1005,9 +1005,9 @@ def test_ultimate_reply_invocation_marks_working_before_resume_returns(fake_envi
         session_id="session-123",
         final_output="Final answer",
     )
-    browser.thread_messages[("oracle", "slack:C999", "1776911047.025189")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776911047.025189")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776911047.025189",
             message_ts="1776911047.025189",
@@ -1015,7 +1015,7 @@ def test_ultimate_reply_invocation_marks_working_before_resume_returns(fake_envi
             text="can you say no?",
         ),
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776911047.025189",
             message_ts="1776911050.000200",
@@ -1026,14 +1026,14 @@ def test_ultimate_reply_invocation_marks_working_before_resume_returns(fake_envi
     observed = {}
 
     def _record_working_state(_call):
-        record = store.get_by_thread("oracle", "slack:C999", "1776911047.025189")
+        record = store.get_by_thread("bob_company", "slack:C999", "1776911047.025189")
         observed["status"] = record.status if record is not None else None
         observed["updates"] = list(browser.updated_messages.get("1776911050.000200", []))
 
     runner.on_resume = _record_working_state
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776911047.025189",
         message_ts="1776911050.000200",
@@ -1049,7 +1049,7 @@ def test_ultimate_invocation_dispatch_drains_completed_same_thread_worker(fake_e
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
     store.upsert_session(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776915000.000001",
         root_ts="1776915000.000001",
@@ -1058,9 +1058,9 @@ def test_ultimate_invocation_dispatch_drains_completed_same_thread_worker(fake_e
         owner_actor_id="U123",
         status=SessionStatus.CLOSED_IDLE,
     )
-    browser.thread_messages[("oracle", "slack:C999", "1776915000.000001")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776915000.000001")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776915000.000001",
             message_ts="1776915000.000001",
@@ -1068,7 +1068,7 @@ def test_ultimate_invocation_dispatch_drains_completed_same_thread_worker(fake_e
             text="old context",
         ),
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776915000.000001",
             message_ts="1776915001.000001",
@@ -1078,13 +1078,13 @@ def test_ultimate_invocation_dispatch_drains_completed_same_thread_worker(fake_e
     ]
     completed_future = Future()
     completed_future.set_result(None)
-    thread_key = ("oracle", "slack:C999", "1776915000.000001")
+    thread_key = ("bob_company", "slack:C999", "1776915000.000001")
     orchestrator._active_tasks[999] = completed_future
     orchestrator._active_task_threads[999] = thread_key
     orchestrator._thread_active_counts[thread_key] = 1
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776915000.000001",
         message_ts="1776915001.000001",
@@ -1102,9 +1102,9 @@ def test_ultimate_invocation_falls_back_to_thread_reply_if_message_update_fails(
     orchestrator, browser, _store, _runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
     browser.update_error = RuntimeError("chat.update failed")
-    browser.thread_messages[("oracle", "slack:C999", "1776911047.025189")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776911047.025189")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776911047.025189",
             message_ts="1776911047.025189",
@@ -1114,7 +1114,7 @@ def test_ultimate_invocation_falls_back_to_thread_reply_if_message_update_fails(
     ]
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         message_ts="1776911047.025189",
         author_actor_id="U123",
@@ -1128,10 +1128,10 @@ def test_ultimate_invocation_falls_back_to_thread_reply_if_message_update_fails(
 def test_configured_channel_root_messages_keep_legacy_thread_reply_behavior(fake_environment):
     orchestrator, browser, _store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
-    browser.thread_messages[("oracle", "yifanche-private", "1776912000.000001")] = [
+    browser.thread_messages[("bob_company", "bob_private_channel", "1776912000.000001")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1776912000.000001",
             message_ts="1776912000.000001",
             author_actor_id="U123",
@@ -1140,8 +1140,8 @@ def test_configured_channel_root_messages_keep_legacy_thread_reply_behavior(fake
     ]
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1776912000.000001",
         author_actor_id="U123",
         text="bob review this configured channel",
@@ -1160,18 +1160,18 @@ def test_configured_channel_thread_reply_without_existing_session_can_use_ultima
 ):
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
-    browser.thread_messages[("oracle", "yifanche-private", "1776912100.000001")] = [
+    browser.thread_messages[("bob_company", "bob_private_channel", "1776912100.000001")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1776912100.000001",
             message_ts="1776912100.000001",
             author_actor_id="U999",
             text="hello there",
         ),
         SlackThreadMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1776912100.000001",
             message_ts="1776912105.000001",
             author_actor_id="U123",
@@ -1180,8 +1180,8 @@ def test_configured_channel_thread_reply_without_existing_session_can_use_ultima
     ]
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1776912100.000001",
         message_ts="1776912105.000001",
         author_actor_id="U123",
@@ -1194,7 +1194,7 @@ def test_configured_channel_thread_reply_without_existing_session_can_use_ultima
     assert browser.updated_messages["1776912105.000001"][-1].endswith(
         "_*codex Bob :white_check_mark::*_ Final answer"
     )
-    record = store.get_by_thread("oracle", "yifanche-private", "1776912100.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1776912100.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
     assert len(runner.new_session_calls) == 1
@@ -1210,9 +1210,9 @@ def test_ultimate_invocation_uses_default_runner_when_ultimate_codex_home_mode_i
     orchestrator.isolated_codex_runner = isolated_runner
     orchestrator.config.watcher.bob_ultimate_mode = True
     orchestrator.config.watcher.bob_ultimate_mode_codex_home_mode = "default"
-    browser.thread_messages[("oracle", "slack:C999", "1776912200.000001")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776912200.000001")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776912200.000001",
             message_ts="1776912200.000001",
@@ -1222,7 +1222,7 @@ def test_ultimate_invocation_uses_default_runner_when_ultimate_codex_home_mode_i
     ]
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         message_ts="1776912200.000001",
         author_actor_id="U123",
@@ -1231,7 +1231,7 @@ def test_ultimate_invocation_uses_default_runner_when_ultimate_codex_home_mode_i
 
     assert len(runner.new_session_calls) == 1
     assert isolated_runner.new_session_calls == []
-    record = store.get_by_thread("oracle", "slack:C999", "1776912200.000001")
+    record = store.get_by_thread("bob_company", "slack:C999", "1776912200.000001")
     assert record is not None
     assert record.codex_session_id == "session-123"
 
@@ -1246,18 +1246,18 @@ def test_ultimate_invocation_uses_isolated_runner_when_ultimate_codex_home_mode_
     orchestrator.isolated_codex_runner = isolated_runner
     orchestrator.config.watcher.bob_ultimate_mode = True
     orchestrator.config.watcher.bob_ultimate_mode_codex_home_mode = "isolated"
-    browser.thread_messages[("oracle", "yifanche-private", "1776912300.000001")] = [
+    browser.thread_messages[("bob_company", "bob_private_channel", "1776912300.000001")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1776912300.000001",
             message_ts="1776912300.000001",
             author_actor_id="U999",
             text="hello there",
         ),
         SlackThreadMessage(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1776912300.000001",
             message_ts="1776912305.000001",
             author_actor_id="U123",
@@ -1266,8 +1266,8 @@ def test_ultimate_invocation_uses_isolated_runner_when_ultimate_codex_home_mode_
     ]
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1776912300.000001",
         message_ts="1776912305.000001",
         author_actor_id="U123",
@@ -1276,7 +1276,7 @@ def test_ultimate_invocation_uses_isolated_runner_when_ultimate_codex_home_mode_
 
     assert runner.new_session_calls == []
     assert len(isolated_runner.new_session_calls) == 1
-    record = store.get_by_thread("oracle", "yifanche-private", "1776912300.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1776912300.000001")
     assert record is not None
     assert record.codex_session_id == "isolated-session"
 
@@ -1285,7 +1285,7 @@ def test_ultimate_waiting_approval_accepts_bob_prefixed_approve(fake_environment
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
     store.upsert_session(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776913000.000001",
         root_ts="1776913000.000001",
@@ -1300,9 +1300,9 @@ def test_ultimate_waiting_approval_accepts_bob_prefixed_approve(fake_environment
         session_id="session-123",
         final_output="approved",
     )
-    browser.thread_messages[("oracle", "slack:C999", "1776913000.000001")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776913000.000001")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776913000.000001",
             message_ts="1776913000.000001",
@@ -1310,7 +1310,7 @@ def test_ultimate_waiting_approval_accepts_bob_prefixed_approve(fake_environment
             text="please approve",
         ),
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776913000.000001",
             message_ts="1776913001.000001",
@@ -1320,7 +1320,7 @@ def test_ultimate_waiting_approval_accepts_bob_prefixed_approve(fake_environment
     ]
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776913000.000001",
         message_ts="1776913001.000001",
@@ -1338,7 +1338,7 @@ def test_ultimate_invocation_restarts_with_new_session_when_resume_rollout_is_mi
     orchestrator, browser, store, runner = fake_environment
     orchestrator.config.watcher.bob_ultimate_mode = True
     store.upsert_session(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776914000.000001",
         root_ts="1776914000.000001",
@@ -1355,9 +1355,9 @@ def test_ultimate_invocation_restarts_with_new_session_when_resume_rollout_is_mi
         session_id="fresh-session",
         final_output="recovered",
     )
-    browser.thread_messages[("oracle", "slack:C999", "1776914000.000001")] = [
+    browser.thread_messages[("bob_company", "slack:C999", "1776914000.000001")] = [
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776914000.000001",
             message_ts="1776914000.000001",
@@ -1365,7 +1365,7 @@ def test_ultimate_invocation_restarts_with_new_session_when_resume_rollout_is_mi
             text="old context",
         ),
         SlackThreadMessage(
-            workspace_name="oracle",
+            workspace_name="bob_company",
             channel_name="slack:C999",
             thread_ts="1776914000.000001",
             message_ts="1776914001.000001",
@@ -1375,7 +1375,7 @@ def test_ultimate_invocation_restarts_with_new_session_when_resume_rollout_is_mi
     ]
 
     orchestrator.handle_ultimate_invocation(
-        workspace_name="oracle",
+        workspace_name="bob_company",
         channel_name="slack:C999",
         thread_ts="1776914000.000001",
         message_ts="1776914001.000001",
@@ -1385,7 +1385,7 @@ def test_ultimate_invocation_restarts_with_new_session_when_resume_rollout_is_mi
 
     assert len(runner.resume_calls) == 1
     assert len(runner.new_session_calls) == 1
-    record = store.get_by_thread("oracle", "slack:C999", "1776914000.000001")
+    record = store.get_by_thread("bob_company", "slack:C999", "1776914000.000001")
     assert record is not None
     assert record.codex_session_id == "fresh-session"
     assert record.status is SessionStatus.CLOSED_IDLE
@@ -1411,12 +1411,12 @@ def test_process_scheduled_actions_runs_up_to_global_concurrency_limit(tmp_path)
         ),
         workspaces=[
             WorkspaceConfig(
-                name="oracle",
+                name="bob_company",
                 channels=[
                     ChannelConfig(
-                        name="yifanche-private",
+                        name="bob_private_channel",
                         persistent_memory_mode="owner_only",
-                        persistent_memory_owner="yifanche",
+                        persistent_memory_owner="bob_owner_handle",
                         effective_default_cwd=str(tmp_path),
                         effective_additional_roots=[str(tmp_path / "roots")],
                         effective_accept_root_bob_requests=True,
@@ -1464,8 +1464,8 @@ def test_process_scheduled_actions_runs_up_to_global_concurrency_limit(tmp_path)
     for index in range(6):
         thread_ts = "174346100{0}.000001".format(index)
         orchestrator.handle_new_root_message(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             message_ts=thread_ts,
             author_actor_id="U123",
             text="Bob, task {0}".format(index),
@@ -1516,12 +1516,12 @@ def test_same_thread_tasks_do_not_overlap(tmp_path):
         ),
         workspaces=[
             WorkspaceConfig(
-                name="oracle",
+                name="bob_company",
                 channels=[
                     ChannelConfig(
-                        name="yifanche-private",
+                        name="bob_private_channel",
                         persistent_memory_mode="owner_only",
-                        persistent_memory_owner="yifanche",
+                        persistent_memory_owner="bob_owner_handle",
                         effective_default_cwd=str(tmp_path),
                         effective_additional_roots=[str(tmp_path / "roots")],
                         effective_accept_root_bob_requests=True,
@@ -1587,8 +1587,8 @@ def test_same_thread_tasks_do_not_overlap(tmp_path):
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, first",
@@ -1596,13 +1596,13 @@ def test_same_thread_tasks_do_not_overlap(tmp_path):
     deadline = time.time() + 5
     while time.time() < deadline:
         orchestrator.process_scheduled_actions()
-        if store.get_by_thread("oracle", "yifanche-private", "1743461000.000001") is not None:
+        if store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is not None:
             break
         time.sleep(0.01)
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461001.000001",
         author_actor_id="U123",
@@ -1631,8 +1631,8 @@ def test_same_thread_tasks_do_not_overlap(tmp_path):
 def test_closed_idle_reply_resumes_same_session(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1646,8 +1646,8 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461020.000001",
         author_actor_id="U123",
@@ -1658,8 +1658,8 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
     assert runner.resume_calls[0]["cwd"] == "/tmp/project"
     assert browser.reactions == [
         {
-            "workspace_name": "oracle",
-            "channel_name": "yifanche-private",
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
             "message_ts": "1743461020.000001",
             "emoji_name": "ack",
         }
@@ -1670,8 +1670,8 @@ def test_closed_idle_reply_resumes_same_session(fake_environment):
 def test_closed_idle_reply_marks_running_before_resume_returns(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1686,15 +1686,15 @@ def test_closed_idle_reply_marks_running_before_resume_returns(fake_environment)
     observed = {}
 
     def _record_running_state(_call):
-        record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+        record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
         observed["status"] = record.status if record is not None else None
         observed["posts"] = list(browser.thread_posts.get("1743461000.000001", []))
 
     runner.on_resume = _record_running_state
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461020.000001",
         author_actor_id="U123",
@@ -1710,14 +1710,14 @@ def test_root_message_continues_when_ack_reaction_fails(fake_environment):
     browser.reaction_error = RuntimeError("reaction failed")
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob, hi there",
     )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
@@ -1726,8 +1726,8 @@ def test_root_message_continues_when_ack_reaction_fails(fake_environment):
 def test_approval_accept_posts_final_message_without_working_status(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1743,8 +1743,8 @@ def test_approval_accept_posts_final_message_without_working_status(fake_environ
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461050.000001",
         author_actor_id="U123",
@@ -1757,8 +1757,8 @@ def test_approval_accept_posts_final_message_without_working_status(fake_environ
 def test_approval_accept_marks_running_before_resume_returns(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1775,15 +1775,15 @@ def test_approval_accept_marks_running_before_resume_returns(fake_environment):
     observed = {}
 
     def _record_running_state(_call):
-        record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+        record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
         observed["status"] = record.status if record is not None else None
         observed["posts"] = list(browser.thread_posts.get("1743461000.000001", []))
 
     runner.on_resume = _record_running_state
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461050.000001",
         author_actor_id="U123",
@@ -1798,15 +1798,15 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
     orchestrator, _browser, store, runner = fake_environment
     orchestrator.config.workspaces[0].channels.append(
         ChannelConfig(
-            name="yifanche-bob-test",
+            name="bob_test_channel",
             persistent_memory_mode="disabled",
             effective_default_cwd=orchestrator.config.defaults.default_cwd,
             effective_accept_root_bob_requests=True,
         )
     )
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-bob-test",
+        workspace_name="bob_company",
+        channel_name="bob_test_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1816,8 +1816,8 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-bob-test",
+        workspace_name="bob_company",
+        channel_name="bob_test_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461010.000001",
         author_actor_id="U123",
@@ -1825,14 +1825,14 @@ def test_closed_idle_reply_resume_reasserts_disabled_memory_policy(fake_environm
     )
 
     prompt = runner.resume_calls[0]["prompt"]
-    assert "Bob is Ethan's personal assistant" in prompt
+    assert "personal assistant" in prompt
     assert "CTDM tickets" in prompt
     assert "internal topics" in prompt
     assert "checking work status" in prompt
     assert "approved Slack channels" in prompt
     assert "always use `Bob`" in prompt
     assert "Do not tell the user to use `Codex` as the default name" in prompt
-    assert "channel: yifanche-bob-test" in prompt
+    assert "channel: bob_test_channel" in prompt
     assert "persistent_memory_mode: disabled" in prompt
     assert "do not update personal session notes" in prompt.lower()
 
@@ -1842,8 +1842,8 @@ def test_closed_idle_reply_from_non_owner_resumes_when_workspace_is_unrestricted
     orchestrator.config.defaults.allowed_actor_ids = []
     orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = []
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1857,8 +1857,8 @@ def test_closed_idle_reply_from_non_owner_resumes_when_workspace_is_unrestricted
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461020.000001",
         author_actor_id="U999",
@@ -1872,8 +1872,8 @@ def test_closed_idle_reply_from_non_owner_resumes_when_workspace_is_unrestricted
 def test_waiting_reply_deletes_previous_wait_prompt_before_resuming(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1888,8 +1888,8 @@ def test_waiting_reply_deletes_previous_wait_prompt_before_resuming(fake_environ
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461020.000001",
         author_actor_id="U123",
@@ -1905,8 +1905,8 @@ def test_waiting_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fak
     orchestrator.config.defaults.allowed_actor_ids = []
     orchestrator.config.workspaces[0].channel_defaults.allowed_actor_ids = []
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1921,8 +1921,8 @@ def test_waiting_reply_from_non_owner_resumes_when_workspace_is_unrestricted(fak
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461020.000001",
         author_actor_id="U999",
@@ -1937,8 +1937,8 @@ def test_process_due_reminders_posts_reminder_and_schedules_next_one(fake_enviro
     orchestrator, browser, store, _runner = fake_environment
     orchestrator.config.lifecycle.reminder_minutes = [30, 60]
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1952,7 +1952,7 @@ def test_process_due_reminders_posts_reminder_and_schedules_next_one(fake_enviro
 
     orchestrator.process_scheduled_actions(now_epoch=5)
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.WAITING_FOR_INPUT
     assert record.reminder_count == 1
@@ -1963,8 +1963,8 @@ def test_process_due_reminders_posts_reminder_and_schedules_next_one(fake_enviro
 def test_process_due_auto_closes_closes_waiting_session_and_deletes_prompt(fake_environment):
     orchestrator, browser, store, _runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -1977,7 +1977,7 @@ def test_process_due_auto_closes_closes_waiting_session_and_deletes_prompt(fake_
 
     orchestrator.process_scheduled_actions(now_epoch=5)
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_TIMEOUT
     assert browser.deleted_messages == ["1743461001.000001"]
@@ -1987,8 +1987,8 @@ def test_process_due_auto_closes_closes_waiting_session_and_deletes_prompt(fake_
 def test_failed_reply_resumes_same_session(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2002,8 +2002,8 @@ def test_failed_reply_resumes_same_session(fake_environment):
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461021.000001",
         author_actor_id="U123",
@@ -2020,8 +2020,8 @@ def test_closed_idle_reply_timeout_marks_session_closed_timeout_and_posts_resume
 ):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2035,15 +2035,15 @@ def test_closed_idle_reply_timeout_marks_session_closed_timeout_and_posts_resume
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461021.000001",
         author_actor_id="U123",
         text="Try again",
     )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_TIMEOUT
     assert record.last_error == "codex exec timed out after 600s"
@@ -2058,8 +2058,8 @@ def test_closed_idle_reply_non_timeout_failure_marks_session_failed_and_posts_er
 ):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2073,15 +2073,15 @@ def test_closed_idle_reply_non_timeout_failure_marks_session_failed_and_posts_er
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461021.000001",
         author_actor_id="U123",
         text="Try again",
     )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.FAILED
     assert record.last_error == "Command failed with exit code 1"
@@ -2095,8 +2095,8 @@ def test_closed_idle_reply_resume_exception_restores_previous_status_and_release
 ):
     orchestrator, _browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2108,20 +2108,20 @@ def test_closed_idle_reply_resume_exception_restores_previous_status_and_release
 
     with pytest.raises(RuntimeError, match="resume failed"):
         orchestrator.handle_thread_reply(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1743461000.000001",
             message_ts="1743461020.000001",
             author_actor_id="U123",
             text="Try again",
         )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.CLOSED_IDLE
     assert not store.has_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461020.000001",
         purpose="thread_reply",
@@ -2133,8 +2133,8 @@ def test_approval_accept_resume_exception_restores_waiting_status_and_releases_c
 ):
     orchestrator, _browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2148,21 +2148,21 @@ def test_approval_accept_resume_exception_restores_waiting_status_and_releases_c
 
     with pytest.raises(RuntimeError, match="resume failed"):
         orchestrator.handle_thread_reply(
-            workspace_name="oracle",
-            channel_name="yifanche-private",
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
             thread_ts="1743461000.000001",
             message_ts="1743461050.000001",
             author_actor_id="U123",
             text="approve APR-001",
         )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.WAITING_FOR_APPROVAL
     assert record.approval_request_id == "APR-001"
     assert not store.has_processed_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461050.000001",
         purpose="thread_reply",
@@ -2177,8 +2177,8 @@ def test_second_waiting_input_prompt_is_posted(fake_environment):
         wait_message="First question?",
     )
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob start",
@@ -2189,8 +2189,8 @@ def test_second_waiting_input_prompt_is_posted(fake_environment):
         wait_message="Second question?",
     )
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461030.000001",
         author_actor_id="U123",
@@ -2201,7 +2201,7 @@ def test_second_waiting_input_prompt_is_posted(fake_environment):
     assert "_*Bob needs input :exclamation::*_ First question?" in posts
     assert "_*Bob needs input :exclamation::*_ Second question?" in posts
     assert posts.count("_*Bob needs input :exclamation::*_ Second question?") == 1
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.waiting_message_ts is not None
 
@@ -2215,14 +2215,14 @@ def test_generated_approval_id_is_included_in_prompt(fake_environment):
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob run command",
     )
 
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.approval_request_id is not None
     last_post = browser.thread_posts["1743461000.000001"][-1]
@@ -2244,8 +2244,8 @@ def test_low_risk_approval_is_auto_approved_without_slack_prompt(fake_environmen
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob run safe command",
@@ -2255,7 +2255,7 @@ def test_low_risk_approval_is_auto_approved_without_slack_prompt(fake_environmen
         {
             "session_id": "session-123",
             "prompt": "approve APR-001",
-            "cwd": str(store.get_by_thread("oracle", "yifanche-private", "1743461000.000001").cwd),
+            "cwd": str(store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001").cwd),
             "sandbox_mode": None,
             "workspace_write_writable_roots": None,
         }
@@ -2274,15 +2274,15 @@ def test_high_risk_approval_still_requires_slack_prompt(fake_environment):
     )
 
     orchestrator.handle_new_root_message(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         message_ts="1743461000.000001",
         author_actor_id="U123",
         text="Bob run risky command",
     )
 
     assert runner.resume_calls == []
-    record = store.get_by_thread("oracle", "yifanche-private", "1743461000.000001")
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
     assert record is not None
     assert record.status is SessionStatus.WAITING_FOR_APPROVAL
     assert browser.thread_posts["1743461000.000001"][-1].startswith(
@@ -2293,8 +2293,8 @@ def test_high_risk_approval_still_requires_slack_prompt(fake_environment):
 def test_approval_accept_resumes_same_session_with_cwd(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2310,8 +2310,8 @@ def test_approval_accept_resumes_same_session_with_cwd(fake_environment):
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461050.000001",
         author_actor_id="U123",
@@ -2335,8 +2335,8 @@ def test_approval_accept_preserves_channel_sandbox_mode_on_resume(fake_environme
     channel = orchestrator.config.workspaces[0].channels[0]
     channel.effective_codex_sandbox_mode = "danger-full-access"
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2352,8 +2352,8 @@ def test_approval_accept_preserves_channel_sandbox_mode_on_resume(fake_environme
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461050.000001",
         author_actor_id="U123",
@@ -2376,13 +2376,13 @@ def test_approval_accept_preserves_channel_workspace_write_writable_roots_on_res
     channel = orchestrator.config.workspaces[0].channels[0]
     channel.effective_codex_sandbox_mode = "workspace-write"
     channel.effective_codex_workspace_write_writable_roots = [
-        "/Users/yifanche/workspace",
-        "/Users/yifanche/scratch",
+        "/Users/bob_owner_handle/workspace",
+        "/Users/bob_owner_handle/scratch",
         "/tmp",
     ]
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2398,8 +2398,8 @@ def test_approval_accept_preserves_channel_workspace_write_writable_roots_on_res
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461050.000001",
         author_actor_id="U123",
@@ -2413,8 +2413,8 @@ def test_approval_accept_preserves_channel_workspace_write_writable_roots_on_res
             "cwd": "/tmp/project",
             "sandbox_mode": "workspace-write",
             "workspace_write_writable_roots": [
-                "/Users/yifanche/workspace",
-                "/Users/yifanche/scratch",
+                "/Users/bob_owner_handle/workspace",
+                "/Users/bob_owner_handle/scratch",
                 "/tmp",
             ],
         }
@@ -2424,8 +2424,8 @@ def test_approval_accept_preserves_channel_workspace_write_writable_roots_on_res
 def test_deny_and_cancel_have_distinct_audit_messages(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     store.upsert_session(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         root_ts="1743461000.000001",
         codex_session_id="session-123",
@@ -2437,8 +2437,8 @@ def test_deny_and_cancel_have_distinct_audit_messages(fake_environment):
     )
 
     orchestrator.handle_thread_reply(
-        workspace_name="oracle",
-        channel_name="yifanche-private",
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
         thread_ts="1743461000.000001",
         message_ts="1743461040.000001",
         author_actor_id="U123",

@@ -78,7 +78,7 @@ def test_discover_slack_auth_updates_workspace_config(tmp_path, monkeypatch):
                 'allowed_actor_ids = ["U123"]',
                 "",
                 "[[workspaces]]",
-                'name = "oracle"',
+                'name = "bob_company"',
                 'slack_url = "https://app.slack.com/client/T12345678/C12345678"',
             ]
         ),
@@ -93,7 +93,7 @@ def test_discover_slack_auth_updates_workspace_config(tmp_path, monkeypatch):
             self.workspace_urls = dict(workspace_urls)
 
         def discover_api_session(self, workspace_name):
-            assert workspace_name == "oracle"
+            assert workspace_name == "bob_company"
             return ("xoxc-demo-token", "https://example.enterprise.slack.com")
 
         def close(self):
@@ -105,7 +105,7 @@ def test_discover_slack_auth_updates_workspace_config(tmp_path, monkeypatch):
         [
             "--discover-slack-auth",
             "--workspace",
-            "oracle",
+            "bob_company",
             "--config",
             str(config_file),
         ]
