@@ -234,14 +234,14 @@ def test_reactions_add_uses_expected_private_api_post_shape():
         call_api=fake_call,
     )
 
-    client.reactions_add(channel_id="C123", name="ack", timestamp="123.456")
+    client.reactions_add(channel_id="C123", name="ok_hand", timestamp="123.456")
 
     assert calls == [
         (
             "reactions.add",
             {
                 "channel": "C123",
-                "name": "ack",
+                "name": "ok_hand",
                 "timestamp": "123.456",
             },
         )

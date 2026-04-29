@@ -28,6 +28,7 @@ config/bob.sample.toml
 
 The file is divided into these main sections:
 
+- `[defaults]`: global owner identity and fallback runtime defaults
 - `[browser]`: how Bob attaches to Chrome and Slack Web
 - `[runner]`: how Bob launches child Codex sessions
 - `[lifecycle]`: reminder and auto-close behavior for waiting states
@@ -41,6 +42,7 @@ The file is divided into these main sections:
 
 For a usable setup, you typically need:
 
+- one `[defaults]` section with `owner_name` and `owner_preferred_name`
 - one `[browser]` section with a reachable `cdp_url`
 - one `[[workspaces]]` section with `name` and `slack_url`
 - one `[workspaces.channel_defaults]` section with at least `default_cwd`
@@ -48,6 +50,20 @@ For a usable setup, you typically need:
 - `persistent_memory_owner` on any channel using `owner_only`
 
 ## Section-by-Section Guide
+
+### `[defaults]`
+
+This defines global values Bob uses when wrapping Slack requests for Codex.
+
+Common fields:
+
+- `owner_name`
+  The owner's full display name for durable preference guardrails.
+
+- `owner_preferred_name`
+  The owner's preferred name for Bob's role prompt.
+
+Keep committed examples anonymized. Put real owner values only in local config files that are not committed.
 
 ### `[browser]`
 

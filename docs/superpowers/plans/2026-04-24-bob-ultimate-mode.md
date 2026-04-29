@@ -326,7 +326,7 @@ def test_bob_ultimate_reply_invocation_updates_same_message_and_reuses_thread_se
 
     assert browser.reactions[-1]["message_ts"] == "1776911050.000200"
     assert browser.updated_messages["1776911050.000200"][0].endswith("thread=`1776911047.025189`")
-    assert browser.updated_messages["1776911050.000200"][-1].endswith("_*codex Bob :white_check_mark::*_ Final answer")
+    assert browser.updated_messages["1776911050.000200"][-1].endswith("_*Bob :white_check_mark::*_ Final answer")
     assert len(runner.new_session_calls) == 1
 ```
 
@@ -463,7 +463,7 @@ def test_bob_ultimate_mode_falls_back_to_thread_reply_when_message_update_fails(
 
     orchestrator.handle_ultimate_invocation(...)
 
-    assert browser.thread_posts["1776911047.025189"][-1] == "_*codex Bob :white_check_mark::*_ Final answer"
+    assert browser.thread_posts["1776911047.025189"][-1] == "_*Bob :white_check_mark::*_ Final answer"
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**

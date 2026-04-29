@@ -913,7 +913,7 @@ def _is_bob_generated_reply_text(normalized_text: str) -> bool:
     lowered = normalized_text.lower()
     return lowered.startswith(
         (
-            "codex bob ",
+            "bob :white_check_mark:",
             "bob is working on it",
             "bob queued it",
             "bob needs input",

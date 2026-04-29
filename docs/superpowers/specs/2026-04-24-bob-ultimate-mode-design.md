@@ -18,7 +18,7 @@ Bob currently assumes all supported conversations are explicitly listed in `bob.
 - Treat each explicit `bob ...` message as a one-time invocation.
 - Reuse the same Codex session for later explicit `bob ...` messages in the same Slack thread.
 - Before each explicit invocation, hydrate the full current Slack thread and include it in the prompt so Codex sees replies that may have happened outside the local session.
-- For the new mode, Bob must add `:ack:` to the invoking message and then edit that same message to append the working line and the final `codex Bob` line instead of posting separate Bob replies.
+- For the new mode, Bob must add `:ok_hand:` to the invoking message and then edit that same message to append the working line and the final `Bob` line instead of posting separate Bob replies.
 - After an invocation completes, Bob does not keep monitoring the thread for non-`bob` replies. A later explicit `bob ...` message from Bob owner triggers the next one-shot run.
 
 ## Out of Scope
@@ -127,11 +127,11 @@ The full thread must be refreshed for each explicit invocation because the local
 
 For ultimate-mode invocations, Bob’s Slack behavior is:
 
-1. add `:ack:` reaction to the invoking message
+1. add `:ok_hand:` reaction to the invoking message
 2. edit the invoking message and append a new line:
    - `Bob is working on it :arrows_counterclockwise:: session=... thread=...`
 3. after completion, edit the same message again and append a new line:
-   - `codex Bob :white_check_mark:: ...`
+   - `Bob :white_check_mark:: ...`
 
 The original user text stays intact at the top of the message.
 
@@ -185,7 +185,7 @@ The existing Bob prompt wrapper should remain, but ultimate mode needs extra con
 - current invocation message timestamp
 - instruction that the Slack-facing output will be appended into the invoking message
 
-The final text returned by Codex should still be plain answer text. Bob adds the `codex Bob` label in Slack, not inside the prompt contract.
+The final text returned by Codex should still be plain answer text. Bob adds the `Bob` label in Slack, not inside the prompt contract.
 
 ## Data Flow
 
@@ -194,7 +194,7 @@ The final text returned by Codex should still be plain answer text. Bob adds the
 1. watcher sees an accessible root message starting with `bob`
 2. watcher resolves or synthesizes runtime channel config
 3. orchestrator verifies actor is allowed
-4. Bob adds `:ack:` to the invoking message
+4. Bob adds `:ok_hand:` to the invoking message
 5. Bob hydrates the full thread transcript
 6. orchestrator creates or reuses the thread session
 7. Bob appends the working line into the invoking message
@@ -207,7 +207,7 @@ The final text returned by Codex should still be plain answer text. Bob adds the
 1. watcher sees a reply message inside any accessible thread
 2. if trimmed text does not start with `bob`, ignore it
 3. if it starts with `bob`, resolve runtime channel config and actor authorization
-4. add `:ack:` to that reply
+4. add `:ok_hand:` to that reply
 5. hydrate the full current thread transcript
 6. create or resume the session keyed by that thread
 7. append working/final lines into that same reply message

@@ -84,6 +84,8 @@ docs/bob-config-setup.md
 
 ```toml
 [defaults]
+owner_name = "Bob Owner"
+owner_preferred_name = "Owner"
 
 [browser]
 slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
@@ -151,6 +153,10 @@ docs/bob-config-setup.md
 - `allowed_actor_ids`
   At `[workspaces.channel_defaults]`, this defines who may trigger or resume Bob work in that workspace's channels by default.
   Optionally set it again on `[[workspaces.channels]]` to override that workspace default for one channel.
+
+- `owner_name` / `owner_preferred_name`
+  At `[defaults]`, these define how Bob refers to the human owner in runtime prompts.
+  For committed examples, keep these anonymized.
 
 - `workspaces.channel_defaults`
   Use this to define the default cwd, roots, Bob acceptance policy, and Codex sandbox/home behavior
@@ -314,7 +320,7 @@ Bob will:
 3. post:
    - `_*Bob is working on it :arrows_counterclockwise::*_ <session-id>`
 4. post final output as:
-   - `_*codex Bob :white_check_mark::*_ ...`
+   - `_*Bob :white_check_mark::*_ ...`
 
 If you reply in the thread later, Bob resumes the same local Codex session.
 

@@ -9,6 +9,8 @@ def test_repo_sample_config_loads_successfully():
 
     config = load_config(sample_path)
 
+    assert config.defaults.owner_name == "Bob Owner"
+    assert config.defaults.owner_preferred_name == "Owner"
     assert config.workspaces
     assert config.workspaces[0].channel_defaults.default_cwd
     assert config.workspaces[0].channels
@@ -711,6 +713,43 @@ def test_channel_memory_policy_owner_only_is_loaded(tmp_path):
     assert channel.persistent_memory_mode == "owner_only"
     assert channel.persistent_memory_owner == "bob_owner_handle"
     assert channel.effective_codex_home_mode == "default"
+
+
+def test_owner_names_load_from_defaults_and_round_trip_with_workspaces(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "owner-names.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        owner_name = "Bob Owner"
+        owner_preferred_name = "Owner"
+
+        [[workspaces]]
+        name = "bob_company"
+
+        [workspaces.channel_defaults]
+        persistent_memory_mode = "disabled"
+
+        [[workspaces.channels]]
+        name = "bob_channel"
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+    rendered = dump_config(loaded)
+    rewritten = tmp_path / "rewritten.toml"
+    rewritten.write_text(rendered, encoding="utf-8")
+    reloaded = load_config(rewritten)
+
+    assert reloaded.defaults.owner_name == "Bob Owner"
+    assert reloaded.defaults.owner_preferred_name == "Owner"
+    assert 'owner_name = "Bob Owner"' in rendered
+    assert 'owner_preferred_name = "Owner"' in rendered
 
 
 def test_channel_memory_policy_can_default_from_workspace_channel_defaults(tmp_path):

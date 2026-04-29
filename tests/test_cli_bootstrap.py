@@ -93,7 +93,7 @@ def test_wrapper_runs_terminal_request_with_explicit_target(monkeypatch, tmp_pat
         return {
             "thread_ts": "1775718000.000001",
             "session_id": "session-123",
-            "final_message": "_*codex Bob :white_check_mark::*_ wrapper ok",
+            "final_message": "_*Bob :white_check_mark::*_ wrapper ok",
         }
 
     monkeypatch.setattr("personal_slack_agent.cli.wrapper._run_smoke_test", fake_run_smoke_test)

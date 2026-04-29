@@ -40,6 +40,8 @@ def _starter_config(default_cwd: Path) -> str:
     return "\n".join(
         [
             "[defaults]",
+            'owner_name = "Bob Owner"',
+            'owner_preferred_name = "Owner"',
             "",
             "[browser]",
             'slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"',

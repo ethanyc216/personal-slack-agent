@@ -88,6 +88,8 @@ This launcher is for the browser only. Bob itself still must be started or resta
 
 At minimum:
 
+- `owner_name`
+- `owner_preferred_name`
 - `allowed_actor_ids`
 - `slack_url`
 - one `[[workspaces.channels]]` `name`
@@ -139,7 +141,7 @@ Bob, test
 Bob should create a thread and reply with:
 
 - working: `_*Bob is working on it :arrows_counterclockwise::*_ ...`
-- done: `_*codex Bob :white_check_mark::*_ ...`
+- done: `_*Bob :white_check_mark::*_ ...`
 
 If you want terminal-originated Bob requests without specifying the channel each time, mark exactly one channel with:
 
@@ -167,6 +169,7 @@ Recommended validation sequence:
 ## Notes
 
 - `slack_api_token` is sensitive. Do not commit your personal config.
+- Keep committed examples anonymized, but set `defaults.owner_name` and `defaults.owner_preferred_name` in your local config so Bob's runtime prompt names the correct owner.
 - Every configured channel must declare `persistent_memory_mode`. Use `owner_only` plus `persistent_memory_owner` for a private owner channel, or `disabled` for shared/test channels that must not update personal durable notes.
 - If a configured channel is not visible in Slack's rendered sidebar for Bob's browser session, add `slack_channel_id` for that channel to seed its route directly.
 - Bob currently uses Slack Web realtime sockets for detection and private browser-session-backed Slack web APIs for hydration and posting, not a public Slack app install flow.

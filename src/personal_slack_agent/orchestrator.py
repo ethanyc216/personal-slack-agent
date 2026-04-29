@@ -54,7 +54,7 @@ class BobOrchestrator:
     _LABEL_INPUT = "_*Bob needs input :exclamation::*_"
     _LABEL_APPROVAL = "_*Bob needs approval :exclamation::*_"
     _LABEL_TIMED_OUT = "_*Bob timed out :hourglass_flowing_sand::*_"
-    _LABEL_DONE = "_*codex Bob :white_check_mark::*_"
+    _LABEL_DONE = "_*Bob :white_check_mark::*_"
     _LABEL_ERROR = "_*Bob hit an error :exclamation::*_"
 
     def __init__(
@@ -1874,6 +1874,8 @@ class BobOrchestrator:
         if channel is None:
             return user_text
 
+        owner_name = self.config.defaults.owner_name
+        owner_preferred_name = self.config.defaults.owner_preferred_name
         effective_mode = channel.effective_persistent_memory_mode or channel.persistent_memory_mode
         owner = channel.effective_persistent_memory_owner or channel.persistent_memory_owner or "none"
         if effective_mode == "owner_only":
@@ -1883,12 +1885,12 @@ class BobOrchestrator:
             ).format(owner)
         else:
             memory_rule = (
-                "This Slack channel does not grant permission to update Yifan Chen / Ethan's "
+                "This Slack channel does not grant permission to update {0} / {1}'s "
                 "personal durable preference files. Do not update personal session notes or "
-                "similar durable preference files for Yifan from this conversation. Do not "
+                "similar durable preference files for {0} from this conversation. Do not "
                 "modify repo-local or global skill files such as `.codex/skills/**`, `SKILL.md`, "
                 "or similar skill definitions unless the user explicitly asks you to create or edit them."
-            )
+            ).format(owner_name, owner_preferred_name)
 
         return (
             "Bob execution context:\n"
@@ -1897,7 +1899,7 @@ class BobOrchestrator:
             "- persistent_memory_mode: {2}\n"
             "- persistent_memory_owner: {3}\n\n"
             "Bob role:\n"
-            "- Bob is Ethan's personal assistant.\n"
+            "- Bob is {4}'s personal assistant.\n"
             "- Bob specializes in working on CTDM tickets.\n"
             "- Bob helps with research on internal topics.\n"
             "- Bob helps with checking work status.\n"
@@ -1907,14 +1909,15 @@ class BobOrchestrator:
             "Rules:\n"
             "- You may use all available tools, skills, MCP servers, and agents normally.\n"
             "- When passing `sh -lc` through another shell layer, keep the inner script in single quotes or escape `$` as `\\$` so loop variables and shell parameters are not expanded by the outer shell.\n"
-            "- {4}\n\n"
+            "- {5}\n\n"
             "User request from Slack:\n"
-            "{5}"
+            "{6}"
         ).format(
             workspace_name,
             channel_name,
             effective_mode,
             owner,
+            owner_preferred_name,
             memory_rule,
             user_text,
         )
@@ -2123,7 +2126,7 @@ class BobOrchestrator:
                 workspace_name=workspace_name,
                 channel_name=channel_name,
                 message_ts=message_ts,
-                emoji_name="ack",
+                emoji_name="ok_hand",
             )
         except Exception:
             return

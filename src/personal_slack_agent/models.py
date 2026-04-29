@@ -13,6 +13,8 @@ CODEX_HOME_MODE_ISOLATED = "isolated"
 CODEX_SANDBOX_MODE_READ_ONLY = "read-only"
 CODEX_SANDBOX_MODE_WORKSPACE_WRITE = "workspace-write"
 CODEX_SANDBOX_MODE_DANGER_FULL_ACCESS = "danger-full-access"
+DEFAULT_OWNER_NAME = "Bob Owner"
+DEFAULT_OWNER_PREFERRED_NAME = "Owner"
 
 
 @dataclass
@@ -21,6 +23,8 @@ class DefaultSettings:
     additional_roots: List[str] = field(default_factory=list)
     accept_root_bob_requests: bool = True
     allowed_actor_ids: List[str] = field(default_factory=list)
+    owner_name: str = DEFAULT_OWNER_NAME
+    owner_preferred_name: str = DEFAULT_OWNER_PREFERRED_NAME
     codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     codex_sandbox_mode: Optional[str] = None
     codex_workspace_write_writable_roots: Optional[List[str]] = None

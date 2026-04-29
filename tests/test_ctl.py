@@ -550,7 +550,7 @@ def test_smoke_test_reports_success(tmp_path, monkeypatch, capsys):
         return {
             "thread_ts": "1775717794.417429",
             "session_id": "session-123",
-            "final_message": "_*codex Bob :white_check_mark::*_ smoke ok",
+            "final_message": "_*Bob :white_check_mark::*_ smoke ok",
         }
 
     monkeypatch.setattr(ctl_module, "_run_smoke_test", fake_run_smoke_test)
@@ -605,7 +605,7 @@ def test_wait_for_smoke_result_returns_session_and_final_message(tmp_path):
         thread_ts="1775717794.417429",
         intent_key="final-session-123",
         action="post_thread_reply",
-        text="_*codex Bob :white_check_mark::*_ smoke ok",
+        text="_*Bob :white_check_mark::*_ smoke ok",
         delivered=True,
         message_ts="1775717816.033009",
     )
@@ -622,7 +622,7 @@ def test_wait_for_smoke_result_returns_session_and_final_message(tmp_path):
 
     assert result["thread_ts"] == "1775717794.417429"
     assert result["session_id"] == "session-123"
-    assert result["final_message"] == "_*codex Bob :white_check_mark::*_ smoke ok"
+    assert result["final_message"] == "_*Bob :white_check_mark::*_ smoke ok"
 
 
 def test_tail_log_prints_useful_message_when_log_is_missing(tmp_path, monkeypatch, capsys):

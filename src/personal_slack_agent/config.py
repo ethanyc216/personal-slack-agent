@@ -10,6 +10,8 @@ from .models import (
     CODEX_SANDBOX_MODE_READ_ONLY,
     CODEX_SANDBOX_MODE_WORKSPACE_WRITE,
     DEDICATED_BROWSER_MODE,
+    DEFAULT_OWNER_NAME,
+    DEFAULT_OWNER_PREFERRED_NAME,
     DEFAULT_SLACK_SIGNIN_URL,
     PERSISTENT_MEMORY_MODE_DISABLED,
     PERSISTENT_MEMORY_MODE_OWNER_ONLY,
@@ -193,6 +195,12 @@ def load_config(config_path: Union[str, Path]) -> AppConfig:
 
 def dump_config(config: AppConfig) -> str:
     lines = ["[defaults]"]
+    lines.append('owner_name = "{0}"'.format(_toml_escape(config.defaults.owner_name)))
+    lines.append(
+        'owner_preferred_name = "{0}"'.format(
+            _toml_escape(config.defaults.owner_preferred_name)
+        )
+    )
     if not config.workspaces and config.defaults.allowed_actor_ids:
         lines.append(
             "allowed_actor_ids = [{0}]".format(
@@ -492,6 +500,17 @@ def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
         raw_defaults = {}
     if not isinstance(raw_defaults, Mapping):
         raise ConfigError("defaults must be a table.")
+    owner_name = (
+        _optional_string(raw_defaults.get("owner_name"), "defaults.owner_name")
+        or DEFAULT_OWNER_NAME
+    )
+    owner_preferred_name = (
+        _optional_string(
+            raw_defaults.get("owner_preferred_name"),
+            "defaults.owner_preferred_name",
+        )
+        or DEFAULT_OWNER_PREFERRED_NAME
+    )
 
     return DefaultSettings(
         default_cwd=_optional_directory_path(
@@ -506,6 +525,8 @@ def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
         ),
         accept_root_bob_requests=_optional_bool(raw_defaults.get("accept_root_bob_requests"), "defaults.accept_root_bob_requests", default=True),
         allowed_actor_ids=_string_list(raw_defaults.get("allowed_actor_ids"), "defaults.allowed_actor_ids"),
+        owner_name=owner_name,
+        owner_preferred_name=owner_preferred_name,
         codex_home_mode=_codex_home_mode(
             raw_defaults.get("codex_home_mode"),
             "defaults.codex_home_mode",

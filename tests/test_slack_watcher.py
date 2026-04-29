@@ -976,7 +976,7 @@ def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
         thread_ts="10.0",
         intent_key="final-session-123",
         action="post_thread_reply",
-        text="_*codex Bob :white_check_mark::*_ Final answer",
+        text="_*Bob :white_check_mark::*_ Final answer",
         delivery_state="pending",
     )
     browser = FakeBrowser()
@@ -988,7 +988,7 @@ def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
             thread_ts="10.0",
             message_ts="9999999999.0",
             author_actor_id="U123",
-            text="codex Bob :white_check_mark: Final answer",
+            text="Bob :white_check_mark: Final answer",
         )
     ]
     orchestrator = RecordingOrchestrator()
