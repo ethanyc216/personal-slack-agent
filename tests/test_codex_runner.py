@@ -435,3 +435,20 @@ def test_default_exec_command_returns_timeout_failure_text(monkeypatch):
     result = runner.resume_session("session-123", "continue", "/tmp/project")
 
     assert result.failure_text == "codex exec timed out after 42s"
+
+
+def test_default_exec_command_returns_exit_code_when_process_has_no_output(monkeypatch):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout):
+        class CompletedProcess:
+            returncode = 70
+            stdout = ""
+            stderr = ""
+
+        return CompletedProcess()
+
+    monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.run", fake_run)
+    runner = SubprocessCodexRunner()
+
+    result = runner.resume_session("session-123", "continue", "/tmp/project")
+
+    assert result.failure_text == "codex exec failed with exit code 70"

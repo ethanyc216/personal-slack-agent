@@ -327,6 +327,45 @@ class BobStateStore:
             return None
         return self._task_record_from_row(row)
 
+    def get_latest_task_for_thread(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        task_kind: Optional[str] = None,
+    ) -> Optional[TaskRecord]:
+        with self._connect() as connection:
+            if task_kind is None:
+                row = connection.execute(
+                    """
+                    SELECT *
+                    FROM task_queue
+                    WHERE workspace_name = ?
+                      AND channel_name = ?
+                      AND thread_ts = ?
+                    ORDER BY created_at DESC, task_id DESC
+                    LIMIT 1
+                    """,
+                    (workspace_name, channel_name, thread_ts),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT *
+                    FROM task_queue
+                    WHERE workspace_name = ?
+                      AND channel_name = ?
+                      AND thread_ts = ?
+                      AND task_kind = ?
+                    ORDER BY created_at DESC, task_id DESC
+                    LIMIT 1
+                    """,
+                    (workspace_name, channel_name, thread_ts, task_kind),
+                ).fetchone()
+        if row is None:
+            return None
+        return self._task_record_from_row(row)
+
     def list_tasks(
         self,
         status: Optional[TaskStatus] = None,

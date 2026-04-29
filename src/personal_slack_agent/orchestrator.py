@@ -48,6 +48,7 @@ class BobOrchestrator:
     _TASK_KIND_NEW_ROOT = "new_root"
     _TASK_KIND_THREAD_REPLY = "thread_reply"
     _TASK_KIND_ULTIMATE_INVOCATION = "ultimate_invocation"
+    _STARTUP_FAILED_SESSION_PREFIX = "startup-failed-"
     _LABEL_WORKING = "_*Bob is working on it :arrows_counterclockwise::*_"
     _LABEL_QUEUED = "_*Bob queued it :hourglass_flowing_sand::*_"
     _LABEL_INPUT = "_*Bob needs input :exclamation::*_"
@@ -883,71 +884,16 @@ class BobOrchestrator:
             )
             return
 
-        cwd = self._resolve_default_cwd(workspace_name, channel_name)
-        prompt = self._build_codex_prompt(workspace_name, channel_name, task.prompt_text)
-        started_session_id: Optional[str] = None
-
-        def _on_session_started(session_id: str) -> None:
-            nonlocal started_session_id
-            started_session_id = session_id
-            self.state_store.upsert_session(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=message_ts,
-                root_ts=message_ts,
-                codex_session_id=session_id,
-                cwd=cwd,
-                owner_actor_id=author_actor_id,
-                status=SessionStatus.RUNNING,
-            )
-            self._try_deliver_working_message(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=message_ts,
-                intent_key="start-status-{0}".format(session_id),
-                session_id=session_id,
-            )
-
         try:
-            run_result = self._runner_for_channel(workspace_name, channel_name).run_new_session(
-                prompt=prompt,
-                cwd=cwd,
-                additional_roots=list(
-                    self._find_channel(self._find_workspace(workspace_name), channel_name).effective_additional_roots
-                ),
-                sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
-                workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
-                    workspace_name,
-                    channel_name,
-                ),
-                on_session_started=_on_session_started,
-            )
-            session_id = run_result.session_id or started_session_id or "unknown-session"
-            self.state_store.upsert_session(
+            self._start_root_session(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
                 thread_ts=message_ts,
                 root_ts=message_ts,
-                codex_session_id=session_id,
-                cwd=cwd,
+                message_ts=message_ts,
+                prompt_text=task.prompt_text,
                 owner_actor_id=author_actor_id,
-                status=SessionStatus.RUNNING,
-            )
-            if started_session_id is None:
-                self._try_deliver_working_message(
-                    workspace_name=workspace_name,
-                    channel_name=channel_name,
-                    thread_ts=message_ts,
-                    intent_key="start-status-{0}".format(session_id),
-                    session_id=session_id,
-                )
-            self._process_run_result(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=message_ts,
-                session_id=session_id,
-                run_result=run_result,
-                result_key_suffix=message_ts,
+                cwd=self._resolve_default_cwd(workspace_name, channel_name),
             )
         except Exception:
             record = self.state_store.get_by_thread(workspace_name, channel_name, message_ts)
@@ -967,6 +913,102 @@ class BobOrchestrator:
                     status=SessionStatus.FAILED,
                 )
             raise
+
+    def _start_root_session(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        root_ts: str,
+        message_ts: str,
+        prompt_text: str,
+        owner_actor_id: str,
+        cwd: str,
+    ) -> None:
+        channel = self._find_channel(self._find_workspace(workspace_name), channel_name)
+        assert channel is not None
+        started_session_id: Optional[str] = None
+
+        def _on_session_started(session_id: str) -> None:
+            nonlocal started_session_id
+            started_session_id = session_id
+            self.state_store.upsert_session(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                root_ts=root_ts,
+                codex_session_id=session_id,
+                cwd=cwd,
+                owner_actor_id=owner_actor_id,
+                status=SessionStatus.RUNNING,
+            )
+            self._try_deliver_working_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="start-status-{0}".format(session_id),
+                session_id=session_id,
+            )
+
+        run_result = self._runner_for_channel(workspace_name, channel_name).run_new_session(
+            prompt=self._build_codex_prompt(workspace_name, channel_name, prompt_text),
+            cwd=cwd,
+            additional_roots=list(channel.effective_additional_roots),
+            sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
+            workspace_write_writable_roots=self._workspace_write_writable_roots_for_channel(
+                workspace_name,
+                channel_name,
+            ),
+            on_session_started=_on_session_started,
+        )
+        session_id = run_result.session_id or started_session_id
+        if session_id is None:
+            session_id = self._startup_failed_session_id(message_ts)
+            self.state_store.upsert_session(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                root_ts=root_ts,
+                codex_session_id=session_id,
+                cwd=cwd,
+                owner_actor_id=owner_actor_id,
+                status=SessionStatus.RUNNING,
+            )
+            self._process_run_result(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                session_id=session_id,
+                run_result=run_result,
+                result_key_suffix=message_ts,
+            )
+            return
+        self.state_store.upsert_session(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            root_ts=root_ts,
+            codex_session_id=session_id,
+            cwd=cwd,
+            owner_actor_id=owner_actor_id,
+            status=SessionStatus.RUNNING,
+        )
+        if started_session_id is None:
+            self._try_deliver_working_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                intent_key="start-status-{0}".format(session_id),
+                session_id=session_id,
+            )
+        self._process_run_result(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            session_id=session_id,
+            run_result=run_result,
+            result_key_suffix=message_ts,
+        )
 
     def _execute_thread_reply_task(self, task: TaskRecord) -> None:
         record = self.state_store.get_by_thread(
@@ -1005,6 +1047,10 @@ class BobOrchestrator:
                 text=task.prompt_text,
                 author_actor_id=task.author_actor_id,
             )
+            return
+
+        if self._is_startup_failed_session_id(record.codex_session_id):
+            self._restart_startup_failed_root(task, record)
             return
 
         if record.status is SessionStatus.WAITING_FOR_INPUT:
@@ -1218,7 +1264,30 @@ class BobOrchestrator:
                 ),
                 on_session_started=_on_session_started,
             )
-            session_id = run_result.session_id or started_session_id or "unknown-session"
+            session_id = run_result.session_id or started_session_id
+            if session_id is None:
+                session_id = self._startup_failed_session_id(task.message_ts)
+                self.state_store.upsert_session(
+                    workspace_name=task.workspace_name,
+                    channel_name=task.channel_name,
+                    thread_ts=task.thread_ts,
+                    root_ts=task.thread_ts,
+                    codex_session_id=session_id,
+                    cwd=cwd,
+                    owner_actor_id=task.author_actor_id,
+                    status=SessionStatus.RUNNING,
+                )
+                self._process_ultimate_run_result(
+                    workspace_name=task.workspace_name,
+                    channel_name=task.channel_name,
+                    thread_ts=task.thread_ts,
+                    message_ts=task.message_ts,
+                    original_text=task.prompt_text,
+                    session_id=session_id,
+                    run_result=run_result,
+                    result_key_suffix=task.message_ts,
+                )
+                return
             self.state_store.upsert_session(
                 workspace_name=task.workspace_name,
                 channel_name=task.channel_name,
@@ -1340,6 +1409,13 @@ class BobOrchestrator:
             )
             self._execute_new_ultimate_session(task, prompt)
             return
+        if run_result.session_id and run_result.session_id != record.codex_session_id:
+            self._rebind_session_id(record, run_result.session_id)
+            record = self.state_store.get_by_thread(
+                task.workspace_name,
+                task.channel_name,
+                task.thread_ts,
+            ) or record
         self._process_ultimate_run_result(
             workspace_name=task.workspace_name,
             channel_name=task.channel_name,
@@ -1415,6 +1491,9 @@ class BobOrchestrator:
                 thread_ts=thread_ts,
                 status=SessionStatus.RUNNING,
             )
+        if run_result.session_id and run_result.session_id != session_id:
+            self._rebind_session_id(record, run_result.session_id)
+            session_id = run_result.session_id
         try:
             self._process_run_result(
                 workspace_name=workspace_name,
@@ -1432,6 +1511,60 @@ class BobOrchestrator:
                 status=SessionStatus.FAILED,
             )
             raise
+
+    def _restart_startup_failed_root(
+        self,
+        task: TaskRecord,
+        record: SessionRecord,
+    ) -> None:
+        root_task = self.state_store.get_latest_task_for_thread(
+            task.workspace_name,
+            task.channel_name,
+            task.thread_ts,
+            self._TASK_KIND_NEW_ROOT,
+        )
+        prompt_text = root_task.prompt_text if root_task is not None else task.prompt_text
+        self.state_store.delete_session(task.workspace_name, task.channel_name, task.thread_ts)
+        self._start_root_session(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            root_ts=record.root_ts,
+            message_ts=task.message_ts,
+            prompt_text=prompt_text,
+            owner_actor_id=record.owner_actor_id,
+            cwd=record.cwd,
+        )
+
+    def _rebind_session_id(self, record: SessionRecord, session_id: str) -> None:
+        if session_id == record.codex_session_id:
+            return
+        self.state_store.delete_session(
+            record.workspace_name,
+            record.channel_name,
+            record.thread_ts,
+        )
+        self.state_store.upsert_session(
+            workspace_name=record.workspace_name,
+            channel_name=record.channel_name,
+            thread_ts=record.thread_ts,
+            root_ts=record.root_ts,
+            codex_session_id=session_id,
+            cwd=record.cwd,
+            owner_actor_id=record.owner_actor_id,
+            status=SessionStatus.RUNNING,
+        )
+
+    def _startup_failed_session_id(self, message_ts: str) -> str:
+        return "{0}{1}".format(
+            self._STARTUP_FAILED_SESSION_PREFIX,
+            message_ts.replace(".", "-"),
+        )
+
+    def _is_startup_failed_session_id(self, session_id: str) -> bool:
+        return session_id == "unknown-session" or session_id.startswith(
+            self._STARTUP_FAILED_SESSION_PREFIX
+        )
 
     def _deliver_thread_message(
         self,

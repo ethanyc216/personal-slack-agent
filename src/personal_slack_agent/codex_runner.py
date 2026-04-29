@@ -85,7 +85,7 @@ class SubprocessCodexRunner:
 
         stderr = (completed.stderr or "").strip()
         combined = "\n".join(part for part in [output.strip(), stderr] if part).strip()
-        raise RuntimeError(combined or "codex exec failed")
+        raise RuntimeError(combined or _exit_code_failure_text(completed.returncode))
 
     def _streaming_exec_command(
         self,
@@ -149,7 +149,7 @@ class SubprocessCodexRunner:
 
         stderr = (stderr_output or "").strip()
         combined = "\n".join(part for part in [output.strip(), stderr] if part).strip()
-        raise RuntimeError(combined or "codex exec failed")
+        raise RuntimeError(combined or _exit_code_failure_text(returncode))
 
     def _run_and_parse(
         self,
@@ -334,3 +334,9 @@ def _timeout_failure_text(timeout_seconds: Optional[float]) -> str:
     else:
         rendered = "{0:.1f}".format(timeout_seconds)
     return "codex exec timed out after {0}s".format(rendered)
+
+
+def _exit_code_failure_text(returncode: Optional[int]) -> str:
+    if returncode is None:
+        return "codex exec failed"
+    return "codex exec failed with exit code {0}".format(returncode)

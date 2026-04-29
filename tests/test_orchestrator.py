@@ -724,6 +724,62 @@ def test_new_root_message_failure_releases_processed_claim(fake_environment):
     assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
 
 
+def test_new_root_startup_failure_without_session_id_does_not_post_unknown_session(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    runner.next_result = CodexRunResult(failure_text="codex exec failed")
+
+    orchestrator.handle_new_root_message(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, hi there",
+    )
+
+    thread_posts = browser.thread_posts["1743461000.000001"]
+    assert thread_posts == ["_*Bob hit an error :exclamation::*_ Reply again in this thread to retry."]
+    assert "unknown-session" not in "\n".join(thread_posts)
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
+    assert record is not None
+    assert record.codex_session_id.startswith("startup-failed-")
+    assert record.status is SessionStatus.FAILED
+    assert record.last_error == "codex exec failed"
+
+
+def test_thread_retry_after_startup_failure_restarts_original_root_prompt(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    runner.next_result = CodexRunResult(failure_text="codex exec failed")
+    orchestrator.handle_new_root_message(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="Bob, research Hermes",
+    )
+    runner.next_result = CodexRunResult(session_id="session-456", final_output="recovered")
+
+    orchestrator.handle_thread_reply(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        message_ts="1743461010.000001",
+        author_actor_id="U123",
+        text="retry",
+    )
+
+    assert len(runner.new_session_calls) == 2
+    assert "Bob, research Hermes" in runner.new_session_calls[1]["prompt"]
+    assert "User request from Slack:\nretry" not in runner.new_session_calls[1]["prompt"]
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
+    assert record is not None
+    assert record.codex_session_id == "session-456"
+    assert record.status is SessionStatus.CLOSED_IDLE
+    assert browser.thread_posts["1743461000.000001"][-2:] == [
+        "_*Bob is working on it :arrows_counterclockwise::*_ session=`session-456` thread=`1743461000.000001`",
+        "_*codex Bob :white_check_mark::*_ recovered",
+    ]
+
+
 def test_root_message_claim_is_released_if_session_persistence_fails(fake_environment, monkeypatch):
     orchestrator, _browser, store, _runner = fake_environment
 
@@ -2013,6 +2069,42 @@ def test_failed_reply_resumes_same_session(fake_environment):
     assert len(runner.resume_calls) == 1
     assert runner.resume_calls[0]["cwd"] == "/tmp/project"
     assert browser.thread_posts["1743461000.000001"][-1] == "_*codex Bob :white_check_mark::*_ Recovered answer"
+
+
+def test_closed_idle_reply_rebinds_when_resume_returns_new_session_id(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    store.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="stale-session",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    runner.next_resume_result = CodexRunResult(
+        session_id="fresh-session",
+        final_output="resumed on a fresh thread",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        message_ts="1743461010.000001",
+        author_actor_id="U123",
+        text="continue",
+    )
+
+    assert len(runner.resume_calls) == 1
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
+    assert record is not None
+    assert record.codex_session_id == "fresh-session"
+    assert record.status is SessionStatus.CLOSED_IDLE
+    assert browser.thread_posts["1743461000.000001"][-1] == (
+        "_*codex Bob :white_check_mark::*_ resumed on a fresh thread"
+    )
 
 
 def test_closed_idle_reply_timeout_marks_session_closed_timeout_and_posts_resume_hint(
