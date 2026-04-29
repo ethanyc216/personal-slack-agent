@@ -7,7 +7,11 @@ name = "personal-slack-agent"
 version = "0.1.0"
 description = "Local Slack Web to Codex bridge for Bob."
 readme = "README.md"
+license = { text = "MIT License" }
 requires-python = ">=3.9"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+]
 dependencies = [
     "playwright>=1.54.0",
     "tomli>=2.0.1; python_version < '3.11'",

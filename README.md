@@ -33,6 +33,10 @@ Current constraints:
 - Slack integration uses Slack Web realtime sockets plus private browser-session-backed `/api/...` calls, not Slack’s official public app API
 - only targeted waiting-prompt cleanup is implemented; broader Slack message edit/delete flows are still limited
 
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
 ## Install
 
 ### Requirements
