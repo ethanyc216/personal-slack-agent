@@ -438,6 +438,46 @@ def test_doctor_reports_terminal_codex_exec_failure_without_crashing(tmp_path, m
     assert "terminal_codex_exec_error: sandbox-exec: sandbox_apply: Operation not permitted" in captured.out
 
 
+def test_doctor_codex_exec_command_preserves_stdin_prompt():
+    calls = []
+
+    class FakeBaseRunner:
+        def _default_exec_command(self, command, cwd=None, input_text=None):
+            calls.append(
+                {
+                    "command": command,
+                    "cwd": cwd,
+                    "input_text": input_text,
+                }
+            )
+            return "doctor exec ok"
+
+    run = ctl_module._doctor_codex_exec_command(FakeBaseRunner())
+
+    output = run(
+        ["codex", "exec", "--json", "--skip-git-repo-check", "-"],
+        cwd="/tmp/project",
+        input_text="doctor prompt",
+    )
+
+    assert output == "doctor exec ok"
+    assert calls == [
+        {
+            "command": [
+                "codex",
+                "exec",
+                "-c",
+                'model_reasoning_effort="low"',
+                "--json",
+                "--skip-git-repo-check",
+                "-",
+            ],
+            "cwd": "/tmp/project",
+            "input_text": "doctor prompt",
+        }
+    ]
+
+
 def test_doctor_reports_browser_probe_failure_without_crashing(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     workspace_root = tmp_path / "work"

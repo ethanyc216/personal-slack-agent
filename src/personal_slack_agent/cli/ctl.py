@@ -687,9 +687,13 @@ def _doctor_exec_timeout_seconds(config: AppConfig) -> float:
 
 
 def _doctor_codex_exec_command(base_runner: SubprocessCodexRunner):
-    def _run(command: list[str], cwd: Optional[str] = None) -> str:
+    def _run(
+        command: list[str],
+        cwd: Optional[str] = None,
+        input_text: Optional[str] = None,
+    ) -> str:
         adjusted_command = list(command[:2]) + ["-c", 'model_reasoning_effort="low"'] + list(command[2:])
-        return base_runner._default_exec_command(adjusted_command, cwd)
+        return base_runner._default_exec_command(adjusted_command, cwd, input_text)
 
     return _run
 

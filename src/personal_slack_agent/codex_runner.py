@@ -18,7 +18,7 @@ class CodexRunResult:
 class SubprocessCodexRunner:
     def __init__(
         self,
-        exec_command: Optional[Callable[[List[str], Optional[str]], str]] = None,
+        exec_command: Optional[Callable[[List[str], Optional[str], Optional[str]], str]] = None,
         env_overrides: Optional[Mapping[str, str]] = None,
         sandbox_mode: Optional[str] = None,
         exec_timeout_seconds: Optional[float] = 600.0,
@@ -44,7 +44,12 @@ class SubprocessCodexRunner:
             sandbox_mode=sandbox_mode or self._sandbox_mode,
             workspace_write_writable_roots=workspace_write_writable_roots,
         )
-        return self._run_and_parse(command, cwd=cwd, on_session_started=on_session_started)
+        return self._run_and_parse(
+            command,
+            cwd=cwd,
+            input_text=prompt,
+            on_session_started=on_session_started,
+        )
 
     def resume_session(
         self,
@@ -60,9 +65,14 @@ class SubprocessCodexRunner:
             sandbox_mode=sandbox_mode or self._sandbox_mode,
             workspace_write_writable_roots=workspace_write_writable_roots,
         )
-        return self._run_and_parse(command, cwd=cwd)
+        return self._run_and_parse(command, cwd=cwd, input_text=prompt)
 
-    def _default_exec_command(self, command: List[str], cwd: Optional[str] = None) -> str:
+    def _default_exec_command(
+        self,
+        command: List[str],
+        cwd: Optional[str] = None,
+        input_text: Optional[str] = None,
+    ) -> str:
         env = None
         if self._env_overrides:
             env = os.environ.copy()
@@ -76,6 +86,7 @@ class SubprocessCodexRunner:
                 cwd=cwd,
                 env=env,
                 timeout=self._exec_timeout_seconds,
+                input=input_text,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(_timeout_failure_text(exc.timeout)) from exc
@@ -91,6 +102,7 @@ class SubprocessCodexRunner:
         self,
         command: List[str],
         cwd: Optional[str] = None,
+        input_text: Optional[str] = None,
         on_session_started: Optional[Callable[[str], None]] = None,
     ) -> str:
         env = None
@@ -102,6 +114,7 @@ class SubprocessCodexRunner:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE,
             cwd=cwd,
             env=env,
         )
@@ -124,6 +137,18 @@ class SubprocessCodexRunner:
             timer.start()
 
         try:
+            if process.stdin is not None:
+                try:
+                    if input_text is not None:
+                        process.stdin.write(input_text)
+                except BrokenPipeError:
+                    pass
+                finally:
+                    try:
+                        process.stdin.close()
+                    except BrokenPipeError:
+                        pass
+
             for line in process.stdout:
                 stdout_lines.append(line)
                 if session_started_notified or on_session_started is None:
@@ -155,15 +180,17 @@ class SubprocessCodexRunner:
         self,
         command: List[str],
         cwd: Optional[str] = None,
+        input_text: Optional[str] = None,
         on_session_started: Optional[Callable[[str], None]] = None,
     ) -> CodexRunResult:
         try:
             if on_session_started is None:
-                output = self._exec_command(command, cwd)
+                output = self._exec_command(command, cwd, input_text)
             else:
                 output = self._streaming_exec_command(
                     command,
                     cwd=cwd,
+                    input_text=input_text,
                     on_session_started=on_session_started,
                 )
         except Exception as exc:
@@ -194,7 +221,7 @@ def build_new_session_command(
     command.extend(["--cd", cwd])
     for root in additional_roots:
         command.extend(["--add-dir", root])
-    command.append(prompt)
+    command.append("-")
     return command
 
 
@@ -217,7 +244,7 @@ def build_resume_command(
                 ),
             ]
         )
-    command.extend([session_id, prompt])
+    command.extend([session_id, "-"])
     return command
 
 

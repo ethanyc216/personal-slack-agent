@@ -51,6 +51,12 @@ These instructions apply to the `personal_slack_agent` repository.
   - then treat the problem as Bob-session-specific browser/MCP access failure, not proof that the shared browser session or Jira site is globally unavailable.
 - In that case, debug the Bob session/tooling path separately from the browser login state.
 
+- Distinguish prompt-argv cancellation from Bob daemon or sandbox failures:
+  - If Bob records `codex exec failed with exit code -9` or a startup-failed session before any real Codex session id exists,
+  - and the Slack prompt contains a token that also makes a trivial local command fail when the token is passed in argv,
+  - then suspect local command/argv cancellation rather than a broken Bob restart or Codex-home migration.
+- Bob should pass Slack prompt text to `codex exec` through stdin using prompt argument `-`; do not put arbitrary Slack user text directly in the `codex exec` argv.
+
 ## Bob Control
 
 - `bobctl restart` is cooperative: it writes a stop request and may race if the old agent has not exited yet.

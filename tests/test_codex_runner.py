@@ -16,7 +16,8 @@ def test_build_new_session_command_includes_json_and_roots():
     )
 
     assert command[:4] == ["codex", "exec", "--json", "--skip-git-repo-check"]
-    assert command[-1] == "Bob, hi there"
+    assert command[-1] == "-"
+    assert "Bob, hi there" not in command
     assert command.count("--add-dir") == 2
     assert "--cd" in command
     assert command[command.index("--cd") + 1] == "/Users/bob_owner_handle/Code/OHAI/ctdm"
@@ -36,7 +37,7 @@ def test_build_resume_session_command_includes_session_and_prompt():
         "--json",
         "--skip-git-repo-check",
         "session-123",
-        "Continue with the fix",
+        "-",
     ]
 
 
@@ -64,7 +65,7 @@ def test_build_commands_include_explicit_sandbox_mode_when_requested():
         "-c",
         'sandbox_mode="danger-full-access"',
         "session-123",
-        "Continue with the fix",
+        "-",
     ]
 
 
@@ -96,7 +97,7 @@ def test_build_commands_include_workspace_write_writable_roots_override_when_req
         'sandbox_workspace_write.writable_roots=["/Users/bob_owner_handle/workspace", "/Users/bob_owner_handle/scratch", "/tmp"]',
         "--cd",
         "/Users/bob_owner_handle/Code/OHAI/ctdm",
-        "Bob, hi there",
+        "-",
     ]
     assert resume_command == [
         "codex",
@@ -109,7 +110,7 @@ def test_build_commands_include_workspace_write_writable_roots_override_when_req
         "-c",
         'sandbox_workspace_write.writable_roots=["/Users/bob_owner_handle/workspace", "/Users/bob_owner_handle/scratch", "/tmp"]',
         "session-123",
-        "Continue with the fix",
+        "-",
     ]
 
 
@@ -186,8 +187,8 @@ def test_parse_jsonl_events_prefers_response_item_final_over_item_completed_mess
 def test_subprocess_codex_runner_executes_new_session_and_parses_result():
     calls = []
 
-    def fake_exec(command, _cwd=None):
-        calls.append(command)
+    def fake_exec(command, _cwd=None, input_text=None):
+        calls.append((command, input_text))
         return '\n'.join(
             [
                 '{"type":"session_meta","payload":{"id":"session-123"}}',
@@ -203,17 +204,22 @@ def test_subprocess_codex_runner_executes_new_session_and_parses_result():
         additional_roots=["/Users/bob_owner_handle/Code"],
     )
 
-    assert calls == [[
-        "codex",
-        "exec",
-        "--json",
-        "--skip-git-repo-check",
-        "--cd",
-        "/Users/bob_owner_handle/Code/OHAI/ctdm",
-        "--add-dir",
-        "/Users/bob_owner_handle/Code",
-        "Bob, hi there",
-    ]]
+    assert calls == [
+        (
+            [
+                "codex",
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--cd",
+                "/Users/bob_owner_handle/Code/OHAI/ctdm",
+                "--add-dir",
+                "/Users/bob_owner_handle/Code",
+                "-",
+            ],
+            "Bob, hi there",
+        )
+    ]
     assert result.session_id == "session-123"
     assert result.final_output == "Final answer"
 
@@ -221,8 +227,8 @@ def test_subprocess_codex_runner_executes_new_session_and_parses_result():
 def test_subprocess_codex_runner_executes_resume_and_parses_result():
     calls = []
 
-    def fake_exec(command, _cwd=None):
-        calls.append(command)
+    def fake_exec(command, _cwd=None, input_text=None):
+        calls.append((command, input_text))
         return '\n'.join(
             [
                 '{"type":"session_meta","payload":{"id":"session-123"}}',
@@ -234,22 +240,27 @@ def test_subprocess_codex_runner_executes_resume_and_parses_result():
 
     result = runner.resume_session("session-123", "continue", "/tmp/project")
 
-    assert calls == [[
-        "codex",
-        "exec",
-        "resume",
-        "--json",
-        "--skip-git-repo-check",
-        "session-123",
-        "continue",
-    ]]
+    assert calls == [
+        (
+            [
+                "codex",
+                "exec",
+                "resume",
+                "--json",
+                "--skip-git-repo-check",
+                "session-123",
+                "-",
+            ],
+            "continue",
+        )
+    ]
     assert result.session_id == "session-123"
     assert result.wait_kind == "input"
     assert result.wait_message == "Need more detail"
 
 
 def test_subprocess_codex_runner_returns_failure_text_for_nonzero_exit_without_json():
-    def fake_exec(_command, _cwd=None):
+    def fake_exec(_command, _cwd=None, input_text=None):
         raise RuntimeError("Not inside a trusted directory and --skip-git-repo-check was not specified.")
 
     runner = SubprocessCodexRunner(exec_command=fake_exec)
@@ -262,7 +273,7 @@ def test_subprocess_codex_runner_returns_failure_text_for_nonzero_exit_without_j
 def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd, env, timeout):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout, input):
         calls.append(
             {
                 "command": command,
@@ -272,6 +283,7 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
                 "cwd": cwd,
                 "env": env,
                 "timeout": timeout,
+                "input": input,
             }
         )
 
@@ -297,7 +309,7 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
                 "--json",
                 "--skip-git-repo-check",
                 "session-123",
-                "continue",
+                "-",
             ],
             "check": False,
             "capture_output": True,
@@ -305,6 +317,7 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
             "cwd": "/tmp/project",
             "env": None,
             "timeout": 600.0,
+            "input": "continue",
         }
     ]
 
@@ -312,7 +325,7 @@ def test_default_exec_command_runs_subprocess_from_requested_cwd(monkeypatch):
 def test_default_exec_command_merges_env_overrides(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd, env, timeout):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout, input):
         calls.append(
             {
                 "command": command,
@@ -322,6 +335,7 @@ def test_default_exec_command_merges_env_overrides(monkeypatch):
                 "cwd": cwd,
                 "env": env,
                 "timeout": timeout,
+                "input": input,
             }
         )
 
@@ -346,14 +360,15 @@ def test_default_exec_command_merges_env_overrides(monkeypatch):
         "--json",
         "--skip-git-repo-check",
         "session-123",
-        "continue",
+        "-",
     ]
+    assert calls[0]["input"] == "continue"
 
 
 def test_subprocess_codex_runner_uses_configured_sandbox_mode(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd, env, timeout):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout, input):
         calls.append(command)
 
         class CompletedProcess:
@@ -378,14 +393,14 @@ def test_subprocess_codex_runner_uses_configured_sandbox_mode(monkeypatch):
         "-c",
         'sandbox_mode="danger-full-access"',
         "session-123",
-        "continue",
+        "-",
     ]]
 
 
 def test_subprocess_codex_runner_includes_workspace_write_writable_roots(monkeypatch):
     calls = []
 
-    def fake_run(command, check, capture_output, text, cwd, env, timeout):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout, input):
         calls.append(command)
 
         class CompletedProcess:
@@ -421,12 +436,201 @@ def test_subprocess_codex_runner_includes_workspace_write_writable_roots(monkeyp
         "-c",
         'sandbox_workspace_write.writable_roots=["/Users/bob_owner_handle/workspace", "/Users/bob_owner_handle/scratch", "/tmp"]',
         "session-123",
-        "continue",
+        "-",
     ]]
 
 
+def test_streaming_exec_command_sends_prompt_over_stdin(monkeypatch):
+    calls = []
+    stdin_writes = []
+
+    class FakeStdin:
+        def write(self, value):
+            stdin_writes.append(value)
+
+        def close(self):
+            stdin_writes.append("<closed>")
+
+    class FakeStdout:
+        def __iter__(self):
+            return iter(
+                [
+                    '{"type":"thread.started","thread_id":"session-123"}\n',
+                    '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Final answer"}],"phase":"final"}}\n',
+                ]
+            )
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        stdout = FakeStdout()
+        stderr = FakeStderr()
+        stdin = FakeStdin()
+
+        def wait(self):
+            return 0
+
+        def kill(self):
+            raise AssertionError("process should not be killed")
+
+    def fake_popen(command, text, stdout, stderr, stdin, cwd, env):
+        calls.append(
+            {
+                "command": command,
+                "text": text,
+                "stdout": stdout,
+                "stderr": stderr,
+                "stdin": stdin,
+                "cwd": cwd,
+                "env": env,
+            }
+        )
+        return FakeProcess()
+
+    monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.Popen", fake_popen)
+    runner = SubprocessCodexRunner(env_overrides={"CODEX_HOME": "/tmp/bob-codex-home"})
+
+    result = runner.run_new_session(
+        prompt="Bob, hi there",
+        cwd="/tmp/project",
+        additional_roots=[],
+        on_session_started=lambda _session_id: None,
+    )
+
+    assert result.session_id == "session-123"
+    assert result.final_output == "Final answer"
+    assert calls[0]["command"][-1] == "-"
+    assert calls[0]["stdin"] == subprocess.PIPE
+    assert calls[0]["env"]["CODEX_HOME"] == "/tmp/bob-codex-home"
+    assert stdin_writes == ["Bob, hi there", "<closed>"]
+
+
+def test_streaming_exec_command_starts_timeout_before_writing_stdin(monkeypatch):
+    events = []
+
+    class FakeTimer:
+        daemon = False
+
+        def __init__(self, interval, function):
+            self.interval = interval
+            self.function = function
+
+        def start(self):
+            events.append("timer_start")
+
+        def cancel(self):
+            events.append("timer_cancel")
+
+    class FakeStdin:
+        def write(self, value):
+            del value
+            events.append("stdin_write")
+
+        def close(self):
+            events.append("stdin_close")
+
+    class FakeStdout:
+        def __iter__(self):
+            return iter([])
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakeProcess:
+        stdout = FakeStdout()
+        stderr = FakeStderr()
+        stdin = FakeStdin()
+
+        def wait(self):
+            return 0
+
+        def kill(self):
+            raise AssertionError("process should not be killed")
+
+    def fake_popen(command, text, stdout, stderr, stdin, cwd, env):
+        del command
+        del text
+        del stdout
+        del stderr
+        del stdin
+        del cwd
+        del env
+        return FakeProcess()
+
+    monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("personal_slack_agent.codex_runner.threading.Timer", FakeTimer)
+    runner = SubprocessCodexRunner(exec_timeout_seconds=60)
+
+    runner.run_new_session(
+        prompt="large prompt",
+        cwd="/tmp/project",
+        additional_roots=[],
+        on_session_started=lambda _session_id: None,
+    )
+
+    assert events[:3] == ["timer_start", "stdin_write", "stdin_close"]
+
+
+def test_streaming_exec_command_drains_child_output_after_broken_stdin_pipe(monkeypatch):
+    stdin_events = []
+
+    class FakeStdin:
+        def write(self, value):
+            del value
+            stdin_events.append("write")
+            raise BrokenPipeError("child closed stdin")
+
+        def close(self):
+            stdin_events.append("close")
+
+    class FakeStdout:
+        def __iter__(self):
+            return iter([])
+
+    class FakeStderr:
+        def read(self):
+            return "codex exited before reading stdin"
+
+    class FakeProcess:
+        stdout = FakeStdout()
+        stderr = FakeStderr()
+        stdin = FakeStdin()
+
+        def wait(self):
+            return 70
+
+        def kill(self):
+            raise AssertionError("process should not be killed")
+
+    def fake_popen(command, text, stdout, stderr, stdin, cwd, env):
+        del command
+        del text
+        del stdout
+        del stderr
+        del stdin
+        del cwd
+        del env
+        return FakeProcess()
+
+    monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.Popen", fake_popen)
+    runner = SubprocessCodexRunner()
+
+    result = runner.run_new_session(
+        prompt="large prompt",
+        cwd="/tmp/project",
+        additional_roots=[],
+        on_session_started=lambda _session_id: None,
+    )
+
+    assert result.failure_text == "codex exited before reading stdin"
+    assert stdin_events == ["write", "close"]
+
+
 def test_default_exec_command_returns_timeout_failure_text(monkeypatch):
-    def fake_run(command, check, capture_output, text, cwd, env, timeout):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout, input):
         raise subprocess.TimeoutExpired(cmd=command, timeout=timeout)
 
     monkeypatch.setattr("personal_slack_agent.codex_runner.subprocess.run", fake_run)
@@ -438,7 +642,7 @@ def test_default_exec_command_returns_timeout_failure_text(monkeypatch):
 
 
 def test_default_exec_command_returns_exit_code_when_process_has_no_output(monkeypatch):
-    def fake_run(command, check, capture_output, text, cwd, env, timeout):
+    def fake_run(command, check, capture_output, text, cwd, env, timeout, input):
         class CompletedProcess:
             returncode = 70
             stdout = ""
