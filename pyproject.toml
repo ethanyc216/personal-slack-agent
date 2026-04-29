@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,15 +7,28 @@ name = "personal-slack-agent"
 version = "0.1.0"
 description = "Local Slack Web to Codex bridge for Bob."
 readme = "README.md"
-license = { text = "MIT License" }
+license = "MIT"
+authors = [
+    { name = "Yifan Chen", email = "ethanyc216@gmail.com" },
+]
 requires-python = ">=3.9"
 classifiers = [
-    "License :: OSI Approved :: MIT License",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Topic :: Communications :: Chat",
 ]
 dependencies = [
     "playwright>=1.54.0",
     "tomli>=2.0.1; python_version < '3.11'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ethanyc216/personal-slack-agent"
+Repository = "https://github.com/ethanyc216/personal-slack-agent"
+Issues = "https://github.com/ethanyc216/personal-slack-agent/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
