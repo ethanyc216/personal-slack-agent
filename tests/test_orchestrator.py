@@ -1,5 +1,5 @@
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 import threading
 from typing import Callable, Dict, List, Optional
@@ -133,9 +133,11 @@ class FakeSlackBrowser:
 
 @dataclass
 class FakeCodexRunner:
-    next_result: CodexRunResult = CodexRunResult(
-        session_id="session-123",
-        final_output="Final answer",
+    next_result: CodexRunResult = field(
+        default_factory=lambda: CodexRunResult(
+            session_id="session-123",
+            final_output="Final answer",
+        )
     )
 
     def __post_init__(self) -> None:
