@@ -192,6 +192,19 @@ Common fields:
 
 - `allowed_actor_ids`
   Restricts who may invoke Bob in those channels. Empty means no restriction.
+  Values are Slack member/user IDs such as `U12345678`, not Slack handles or display names.
+
+  To find a person's Slack member/user ID:
+  1. Open the person's Slack profile in the target workspace.
+  2. Click `More` or the `...` menu.
+  3. Choose `Copy member ID`.
+  4. Paste that value into `allowed_actor_ids`.
+
+  Example:
+
+  ```toml
+  allowed_actor_ids = ["U12345678"]
+  ```
 
 - `default_cwd`
   Default working directory for Bob tasks in this workspace.
@@ -241,6 +254,11 @@ Common fields:
 
 - `persistent_memory_owner`
   Required when `persistent_memory_mode = "owner_only"`.
+
+- `allowed_actor_ids`
+  Optional per-channel override for who may invoke Bob in this channel.
+  Use Slack member/user IDs copied from the user's Slack profile, for example `["U12345678"]`.
+  Set `[]` to allow any actor who can post in that channel.
 
 - `slack_channel_id`
   Optional direct id seed for this specific channel.

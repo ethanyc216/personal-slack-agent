@@ -160,6 +160,8 @@ docs/bob-config-setup.md
 - `allowed_actor_ids`
   At `[workspaces.channel_defaults]`, this defines who may trigger or resume Bob work in that workspace's channels by default.
   Optionally set it again on `[[workspaces.channels]]` to override that workspace default for one channel.
+  Use Slack member/user IDs such as `U12345678`, not Slack handles or display names.
+  To get the ID, open the person's Slack profile in the target workspace, click `More` or the `...` menu, and choose `Copy member ID`.
 
 - `owner_name` / `owner_preferred_name`
   At `[defaults]`, these define how Bob refers to the human owner in runtime prompts.
