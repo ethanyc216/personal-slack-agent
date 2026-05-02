@@ -15,7 +15,7 @@ agent named `Bob` on your machine, watches approved Slack conversations, starts
 or resumes local Codex sessions, and posts status plus results back into Slack
 threads.
 
-![Sanitized Slack thread showing Bob working in a Slack conversation](docs/assets/bob-slack-interaction.png)
+![Slack thread showing Bob working in a Slack conversation](docs/assets/bob-slack-interaction.png)
 
 ## Why Bob Exists
 
@@ -75,7 +75,8 @@ Working pieces include:
 - waiting-state reminders and auto-close handling
 - `bob close` thread closure with later resume support
 - process control through `bobctl start|stop|restart|status|tail-log|show-config|doctor`
-- GitHub Actions CI, generated GitHub Releases, and manual TestPyPI publishing
+- GitHub Actions CI, generated GitHub Releases, manual TestPyPI publishing, and
+  PyPI publishing from generated release artifacts
 
 Current constraints:
 
@@ -92,12 +93,41 @@ Current constraints:
 
 For a full first-time setup, use [docs/setup.md](docs/setup.md).
 
-Local development install:
+### Local Development
+
+Use an editable install when working from a repo checkout:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -U pip
 .venv/bin/python -m pip install -e '.[dev]'
+```
+
+### TestPyPI Install
+
+Use TestPyPI only for release testing. Install in a throwaway virtual
+environment so the package does not conflict with an editable local Bob install:
+
+```bash
+python3 -m venv /tmp/bob-testpypi
+/tmp/bob-testpypi/bin/python -m pip install --upgrade pip
+/tmp/bob-testpypi/bin/python -m pip install \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  personal-slack-agent
+```
+
+`--extra-index-url` lets pip resolve normal dependencies such as Playwright from
+PyPI when they are not available on TestPyPI.
+
+### PyPI Install
+
+After the project has a real public PyPI release, install from PyPI with:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install personal-slack-agent
 ```
 
 Generate local config:
@@ -140,9 +170,15 @@ GitHub Releases are generated automatically from successful pushes to `main`.
 Each generated release uploads a wheel and source distribution as downloadable
 release assets.
 
-TestPyPI publishing is configured but manual. Real PyPI publishing is not
-configured yet. See [docs/publishing.md](docs/publishing.md) for the current
-workflow and future publishing options.
+TestPyPI publishing is configured but manual. PyPI publishing is wired to run
+after each generated GitHub Release once the PyPI Trusted Publisher and GitHub
+`pypi` environment are configured. The PyPI job publishes the exact wheel and
+source distribution built by the release job, so the PyPI package version
+matches the GitHub Release tag. A manual PyPI workflow can also publish an
+existing GitHub Release tag as a fallback.
+
+See [docs/publishing.md](docs/publishing.md) for the setup values and release
+workflow details.
 
 The CI badge above updates when GitHub renders the README. The latest-release
 link resolves through GitHub to the current latest release. Literal version
@@ -162,7 +198,7 @@ numbers in README prose only change when a commit changes them.
 - `tests/`: automated tests
 - `config/bob.sample.toml`: anonymized sample config
 - `docs/`: setup, operation, architecture, and publishing docs
-- `.github/workflows/`: CI, release, and TestPyPI workflows
+- `.github/workflows/`: CI, release, TestPyPI, and PyPI workflows
 - `pyproject.toml`: package metadata
 
 ## Testing
