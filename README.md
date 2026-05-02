@@ -171,11 +171,11 @@ Each generated release uploads a wheel and source distribution as downloadable
 release assets.
 
 TestPyPI publishing is configured but manual. PyPI publishing is wired to run
-after each generated GitHub Release once the PyPI Trusted Publisher and GitHub
-`pypi` environment are configured. The PyPI job publishes the exact wheel and
-source distribution built by the release job, so the PyPI package version
-matches the GitHub Release tag. A manual PyPI workflow can also publish an
-existing GitHub Release tag as a fallback.
+after each successful generated GitHub Release once the PyPI Trusted Publisher
+and GitHub `pypi` environment are configured. The PyPI workflow downloads the
+exact wheel and source distribution from the GitHub Release, so the PyPI package
+version matches the release tag. The same workflow can also publish an existing
+GitHub Release tag manually as a fallback.
 
 See [docs/publishing.md](docs/publishing.md) for the setup values and release
 workflow details.

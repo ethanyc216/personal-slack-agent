@@ -9,20 +9,18 @@ This page captures the current release and package-publishing setup for
 - Pushes to `main` run the test matrix, generate a package version, create a
   Git tag, create a GitHub Release, and upload wheel plus source distribution
   artifacts.
-- After the GitHub Release job succeeds, the CI workflow is wired to publish
-  the same wheel and source distribution artifacts to PyPI from the `pypi`
-  environment.
+- After the GitHub Release job succeeds, `.github/workflows/pypi.yml` is wired
+  to publish the same wheel and source distribution artifacts to PyPI from the
+  `pypi` environment.
 - GitHub Release versions are generated from the base `pyproject.toml` version
   and the CI workflow run number. For example, base version `0.1.0` can produce
   release `v0.1.7`.
 - TestPyPI publishing is configured in `.github/workflows/testpypi.yml`.
 - TestPyPI publishing is manual-only through `workflow_dispatch`.
-- PyPI publishing is configured in `.github/workflows/ci.yml` for automatic
-  main-branch releases.
-- `.github/workflows/pypi.yml` is a manual fallback that publishes the
-  distribution files attached to an existing GitHub Release tag.
+- PyPI publishing is configured in `.github/workflows/pypi.yml` for automatic
+  main-branch releases and for manual fallback publishing by tag.
 - Real PyPI publishing requires account-side PyPI Trusted Publisher setup before
-  either PyPI workflow can publish successfully.
+  the PyPI workflow can publish successfully.
 
 The committed `pyproject.toml` version remains the base version. The workflows
 temporarily rewrite that version inside GitHub Actions before building package
@@ -62,27 +60,20 @@ a newer or matching unused version.
 
 ## PyPI Trusted Publisher Setup
 
-For automatic PyPI publishing from generated GitHub Releases, create a PyPI
-Trusted Publisher using:
+For automatic PyPI publishing from generated GitHub Releases and manual fallback
+publishing by tag, create a PyPI Trusted Publisher using:
 
 ```text
 Project name: personal-slack-agent
 Owner: ethanyc216
 Repository name: personal-slack-agent
-Workflow name: ci.yml
+Workflow name: pypi.yml
 Environment name: pypi
 ```
 
 Also create the `pypi` GitHub environment in the repository settings. Consider
 adding environment protection rules if you want a human approval gate before
 the public PyPI upload runs.
-
-For the manual fallback workflow, add a second PyPI Trusted Publisher using the
-same project, owner, repository, and environment values, but with:
-
-```text
-Workflow name: pypi.yml
-```
 
 Package indexes do not allow overwriting an already-uploaded version. If a
 publish succeeds with the wrong version, leave that version in place and publish
@@ -158,13 +149,13 @@ main push -> CI -> GitHub Release -> PyPI publish
 ```
 
 This is the current configured path once PyPI Trusted Publisher setup is in
-place. It is convenient because every main-branch release becomes publicly
-installable from PyPI, and the PyPI version is the same version generated for
-the GitHub Release.
+place. It is convenient because every successful main-branch release becomes
+publicly installable from PyPI, and the PyPI version is the same version
+generated for the GitHub Release.
 
-The automatic job uses the same distribution artifact uploaded by the release
-job. For example, if CI creates GitHub Release `v0.1.9`, the PyPI upload uses
-the already-built files for package version `0.1.9`.
+The automatic job downloads the distribution files attached to the GitHub
+Release. For example, if CI creates GitHub Release `v0.1.9`, the PyPI upload
+uses the release files for package version `0.1.9`.
 
 ### 5. Private Distribution Instead Of PyPI
 
