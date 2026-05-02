@@ -279,6 +279,44 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     assert runner.new_session_calls[0]["workspace_write_writable_roots"] is None
 
 
+def test_new_root_message_uses_exact_configured_alias_in_replies(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.assistant_names = ["Bob", "Bobby"]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="bObBy, hi there",
+    )
+
+    thread_posts = browser.thread_posts["1743461000.000001"]
+    assert thread_posts[0].startswith("_*bObBy is working on it")
+    assert thread_posts[1] == "_*bObBy :white_check_mark::*_ Final answer"
+    assert len(runner.new_session_calls) == 1
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
+    assert record is not None
+    assert record.assistant_name == "bObBy"
+
+
+def test_new_root_message_does_not_trigger_on_partial_alias_boundary(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.assistant_names = ["Bob"]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="bobcat run tests",
+    )
+
+    assert browser.thread_posts == {}
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
+    assert runner.new_session_calls == []
+
+
 def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_environment):
     orchestrator, _browser, _store, runner = fake_environment
 
@@ -297,6 +335,7 @@ def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_enviro
     assert "checking work status" in prompt
     assert "approved Slack channels" in prompt
     assert "always use `Bob`" in prompt
+    assert "Accepted Slack call signs: Bob" in prompt
     assert "Do not tell the user to use `Codex` as the default name" in prompt
     assert "channel: bob_private_channel" in prompt
     assert "persistent_memory_mode: owner_only" in prompt
@@ -887,6 +926,38 @@ def test_bob_close_marks_session_closed_without_resuming(fake_environment):
     assert "closed" in browser.thread_posts["1743461000.000001"][-1].lower()
 
 
+def test_alias_close_marks_session_closed_and_uses_exact_alias(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.assistant_names = ["Bob", "Bobby"]
+    store.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_INPUT,
+        assistant_name="Bob",
+        waiting_message_ts="1743461001.000001",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        message_ts="1743461010.000001",
+        author_actor_id="U123",
+        text="close bObBy",
+    )
+
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_MANUAL
+    assert runner.resume_calls == []
+    assert browser.thread_posts["1743461000.000001"][-1].startswith("_*bObBy :white_check_mark::*_")
+
+
 def test_post_failure_marks_session_failed_instead_of_leaving_it_running(fake_environment):
     orchestrator, browser, store, runner = fake_environment
     browser.post_error = RuntimeError("slack unavailable")
@@ -992,8 +1063,8 @@ def test_ultimate_root_message_updates_same_message_and_includes_thread_context(
     )
 
     assert browser.reactions[-1]["message_ts"] == "1776911047.025189"
-    assert browser.updated_messages["1776911047.025189"][0].startswith("bob review this\n_*Bob is working on it")
-    assert browser.updated_messages["1776911047.025189"][-1].endswith("_*Bob :white_check_mark::*_ Final answer")
+    assert browser.updated_messages["1776911047.025189"][0].startswith("bob review this\n_*bob is working on it")
+    assert browser.updated_messages["1776911047.025189"][-1].endswith("_*bob :white_check_mark::*_ Final answer")
     assert "Slack thread transcript:" in runner.new_session_calls[0]["prompt"]
     assert "bob review this" in runner.new_session_calls[0]["prompt"]
     record = store.get_by_thread("bob_company", "slack:C999", "1776911047.025189")
@@ -1043,8 +1114,8 @@ def test_ultimate_reply_invocation_reuses_session_and_updates_same_message(fake_
     )
 
     assert browser.reactions[-1]["message_ts"] == "1776911050.000200"
-    assert browser.updated_messages["1776911050.000200"][0].startswith("bob can you do it?\n_*Bob is working on it")
-    assert browser.updated_messages["1776911050.000200"][-1].endswith("_*Bob :white_check_mark::*_ Final answer")
+    assert browser.updated_messages["1776911050.000200"][0].startswith("bob can you do it?\n_*bob is working on it")
+    assert browser.updated_messages["1776911050.000200"][-1].endswith("_*bob :white_check_mark::*_ Final answer")
     assert len(runner.resume_calls) == 1
     assert "Slack thread transcript:" in runner.resume_calls[0]["prompt"]
     assert "can you say no?" in runner.resume_calls[0]["prompt"]
@@ -1104,7 +1175,7 @@ def test_ultimate_reply_invocation_marks_working_before_resume_returns(fake_envi
     )
 
     assert observed["status"] is SessionStatus.RUNNING
-    assert observed["updates"][0].startswith("bob can you do it?\n_*Bob is working on it")
+    assert observed["updates"][0].startswith("bob can you do it?\n_*bob is working on it")
 
 
 def test_ultimate_invocation_dispatch_drains_completed_same_thread_worker(fake_environment):
@@ -1156,7 +1227,7 @@ def test_ultimate_invocation_dispatch_drains_completed_same_thread_worker(fake_e
 
     assert len(runner.resume_calls) == 1
     assert browser.updated_messages["1776915001.000001"][-1].endswith(
-        "_*Bob :white_check_mark::*_ Final answer"
+        "_*bob :white_check_mark::*_ Final answer"
     )
 
 
@@ -1183,8 +1254,8 @@ def test_ultimate_invocation_falls_back_to_thread_reply_if_message_update_fails(
         text="bob review this",
     )
 
-    assert browser.thread_posts["1776911047.025189"][0].startswith("_*Bob is working on it :arrows_counterclockwise::*_")
-    assert browser.thread_posts["1776911047.025189"][-1] == "_*Bob :white_check_mark::*_ Final answer"
+    assert browser.thread_posts["1776911047.025189"][0].startswith("_*bob is working on it :arrows_counterclockwise::*_")
+    assert browser.thread_posts["1776911047.025189"][-1] == "_*bob :white_check_mark::*_ Final answer"
 
 
 def test_configured_channel_root_messages_keep_legacy_thread_reply_behavior(fake_environment):
@@ -1211,9 +1282,9 @@ def test_configured_channel_root_messages_keep_legacy_thread_reply_behavior(fake
 
     assert browser.updated_messages == {}
     assert browser.thread_posts["1776912000.000001"][0].startswith(
-        "_*Bob is working on it :arrows_counterclockwise::*_"
+        "_*bob is working on it :arrows_counterclockwise::*_"
     )
-    assert browser.thread_posts["1776912000.000001"][-1] == "_*Bob :white_check_mark::*_ Final answer"
+    assert browser.thread_posts["1776912000.000001"][-1] == "_*bob :white_check_mark::*_ Final answer"
     assert len(runner.new_session_calls) == 1
 
 
@@ -1251,10 +1322,10 @@ def test_configured_channel_thread_reply_without_existing_session_can_use_ultima
     )
 
     assert browser.updated_messages["1776912105.000001"][0].startswith(
-        "bob can you do it here?\n_*Bob is working on it"
+        "bob can you do it here?\n_*bob is working on it"
     )
     assert browser.updated_messages["1776912105.000001"][-1].endswith(
-        "_*Bob :white_check_mark::*_ Final answer"
+        "_*bob :white_check_mark::*_ Final answer"
     )
     record = store.get_by_thread("bob_company", "bob_private_channel", "1776912100.000001")
     assert record is not None
@@ -1392,7 +1463,7 @@ def test_ultimate_waiting_approval_accepts_bob_prefixed_approve(fake_environment
 
     assert runner.resume_calls[-1]["prompt"] == "approve APR-001"
     assert browser.updated_messages["1776913001.000001"][-1].endswith(
-        "_*Bob :white_check_mark::*_ approved"
+        "_*bob :white_check_mark::*_ approved"
     )
 
 
@@ -1452,7 +1523,7 @@ def test_ultimate_invocation_restarts_with_new_session_when_resume_rollout_is_mi
     assert record.codex_session_id == "fresh-session"
     assert record.status is SessionStatus.CLOSED_IDLE
     assert browser.updated_messages["1776914001.000001"][-1].endswith(
-        "_*Bob :white_check_mark::*_ recovered"
+        "_*bob :white_check_mark::*_ recovered"
     )
 
 

@@ -202,6 +202,92 @@ def test_wrapper_uses_workspace_channel_default_terminal_flag_when_not_explicit(
     assert wrapper_main(["hello"]) == 0
 
 
+def test_wrapper_prefixes_with_first_configured_assistant_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(project_dir),
+                'allowed_actor_ids = ["U123"]',
+                'assistant_names = ["Ada", "Bob"]',
+                "",
+                "[[workspaces]]",
+                'name = "bob_company"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "bob_channel"',
+                'persistent_memory_mode = "disabled"',
+                "post_terminal_threads_here = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {}
+
+    def fake_run_smoke_test(**kwargs):
+        calls.update(kwargs)
+        return {
+            "thread_ts": "1775718000.000001",
+            "session_id": "session-123",
+            "final_message": "done",
+        }
+
+    monkeypatch.setattr("personal_slack_agent.cli.wrapper._run_smoke_test", fake_run_smoke_test)
+
+    assert wrapper_main(["hello"]) == 0
+
+    assert calls["text"] == "Ada, hello"
+
+
+def test_wrapper_preserves_explicit_configured_assistant_alias(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(project_dir),
+                'allowed_actor_ids = ["U123"]',
+                'assistant_names = ["Ada", "Bob"]',
+                "",
+                "[[workspaces]]",
+                'name = "bob_company"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "bob_channel"',
+                'persistent_memory_mode = "disabled"',
+                "post_terminal_threads_here = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {}
+
+    def fake_run_smoke_test(**kwargs):
+        calls.update(kwargs)
+        return {
+            "thread_ts": "1775718000.000001",
+            "session_id": "session-123",
+            "final_message": "done",
+        }
+
+    monkeypatch.setattr("personal_slack_agent.cli.wrapper._run_smoke_test", fake_run_smoke_test)
+
+    assert wrapper_main(["bOB", "please", "help"]) == 0
+
+    assert calls["text"] == "bOB please help"
+
+
 def test_agent_default_config_path_is_expanded(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 

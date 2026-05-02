@@ -66,6 +66,17 @@ Common fields:
 - `owner_preferred_name`
   The owner's preferred name for Bob's role prompt.
 
+- `assistant_names`
+  Optional list of Slack callsigns that can invoke Bob. The default is `["Bob"]`.
+  Matching is case-insensitive and boundary-aware, so `bobcat` does not invoke `Bob`.
+  Bob replies using the exact alias typed by the user for that interaction. For example:
+
+  ```toml
+  assistant_names = ["Bob", "Bobby", "Copilot"]
+  ```
+
+  The terminal executable remains `bob`; terminal requests use the first configured callsign when they need to prefix a prompt.
+
 Keep committed examples anonymized. Put real owner values only in local config files that are not committed.
 
 ### `[browser]`
@@ -149,7 +160,7 @@ Useful fields:
 
 You usually do not need to change these unless you are tuning performance or investigating Slack reconciliation behavior.
 
-`bob_ultimate_mode = false` preserves the current configured-channel Bob behavior. `bob_ultimate_mode = true` enables explicit `bob ...` invocation from any accessible public/private channel, DM, or group DM, still gated by `allowed_actor_ids`, and appends Bob status/output into the invoking message.
+`bob_ultimate_mode = false` preserves the current configured-channel Bob behavior. `bob_ultimate_mode = true` enables explicit configured-callsign invocation from any accessible public/private channel, DM, or group DM, still gated by `allowed_actor_ids`, and appends Bob status/output into the invoking message.
 
 ## `[[workspaces]]`
 

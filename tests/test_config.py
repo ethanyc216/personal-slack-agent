@@ -50,6 +50,88 @@ def test_config_loads_without_defaults_when_workspace_channel_defaults_provide_r
     assert config.workspaces[0].channels[0].effective_persistent_memory_mode == "disabled"
 
 
+def test_defaults_assistant_names_default_to_bob(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "assistant-defaults.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.defaults.assistant_names == ["Bob"]
+
+
+def test_defaults_assistant_names_load_and_dump_round_trip(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "assistant-names.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        assistant_names = ["Bob", "Bobby", "Copilot"]
+        """,
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    rendered = dump_config(config)
+    round_tripped_path = tmp_path / "round-trip.toml"
+    round_tripped_path.write_text(rendered, encoding="utf-8")
+    round_tripped = load_config(round_tripped_path)
+
+    assert config.defaults.assistant_names == ["Bob", "Bobby", "Copilot"]
+    assert round_tripped.defaults.assistant_names == ["Bob", "Bobby", "Copilot"]
+
+
+def test_defaults_assistant_names_reject_empty_list(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "assistant-empty.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        assistant_names = []
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="defaults.assistant_names"):
+        load_config(config_path)
+
+
+def test_defaults_assistant_names_reject_case_insensitive_duplicates(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "assistant-duplicates.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+        assistant_names = ["Bob", "bob"]
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="defaults.assistant_names"):
+        load_config(config_path)
+
+
 def test_browser_settings_use_defaults_when_omitted(tmp_path):
     root = tmp_path / "project"
     root.mkdir()

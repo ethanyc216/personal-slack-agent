@@ -105,6 +105,7 @@ class FakeBrowser:
         self.accessible_conversation_ids = {}
         self.root_messages = {}
         self.search_results = {}
+        self.search_queries = []
         self.thread_messages = {}
         self.thread_replies = {}
         self.thread_reply_errors = {}
@@ -132,7 +133,7 @@ class FakeBrowser:
         sort: str = None,
         sort_dir: str = None,
     ):
-        del query
+        self.search_queries.append(query)
         del count
         del page
         del sort
@@ -234,6 +235,80 @@ def _ultimate_mode_config(tmp_path):
     config = _config(tmp_path)
     config.watcher = WatcherSettings(bob_ultimate_mode=True)
     return config
+
+
+def test_reply_filter_ignores_generated_configured_alias_status():
+    from personal_slack_agent.slack.watcher import _should_route_reply
+
+    reply = SlackThreadReplyMessage(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1.0",
+        message_ts="10.0",
+        author_actor_id="U123",
+        text="_*bObBy is working on it :arrows_counterclockwise::*_ session=`abc`",
+    )
+
+    assert not _should_route_reply(reply, 1, set(), set(), ["Bob", "Bobby"])
+
+
+def test_watcher_ignores_generated_reply_from_stored_alias_after_config_alias_changes(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1.0",
+        root_ts="1.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+        assistant_name="Bob",
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_replies[("bob_company", "bob_private_channel", "1.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="1.0",
+            message_ts="10.0",
+            author_actor_id="U123",
+            text="_*Bob is working on it :arrows_counterclockwise::*_ session=`abc`",
+        )
+    ]
+    config = _config(tmp_path)
+    config.defaults.assistant_names = ["Arctic"]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=config,
+    )
+    watcher._initialized = True
+
+    watcher.reconcile_thread_since_cursor("bob_company", "bob_private_channel", "1.0")
+
+    assert orchestrator.reply_calls == []
+
+
+def test_reply_filter_does_not_ignore_user_text_that_mentions_working_on_it():
+    from personal_slack_agent.slack.watcher import _should_route_reply
+
+    reply = SlackThreadReplyMessage(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1.0",
+        message_ts="10.0",
+        author_actor_id="U123",
+        text="the other tool is working on it",
+    )
+
+    assert _should_route_reply(reply, 1, set(), set(), ["Bob", "Bobby"])
 
 
 def test_watcher_reconciles_root_messages_since_channel_cursor(tmp_path):
@@ -705,6 +780,52 @@ def test_watcher_search_fallback_routes_recent_ultimate_reply(tmp_path):
             "message_ts": "1777007562.458519",
             "author_actor_id": "U123",
             "text": "bob please reply with exactly ultimate mode test 1 ok and nothing else.",
+        }
+    ]
+
+
+def test_watcher_search_fallback_routes_configured_alias(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.search_results["bob_company"] = [
+        SlackSearchMessage(
+            workspace_name="bob_company",
+            channel_id="C123",
+            message_ts="1777007562.458519",
+            thread_ts="1777006365.616769",
+            author_actor_id="U123",
+            text="Bobby please reply with exactly alias mode ok and nothing else.",
+        )
+    ]
+    config = _ultimate_mode_config(tmp_path)
+    config.defaults.assistant_names = ["Bob", "Bobby"]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=config,
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("bob_company", "C123")] = "bob_private_channel"
+    watcher._ultimate_search_cursor["bob_company"] = 1777007560.0
+
+    watcher.run_cycle()
+
+    assert browser.search_queries[:2] == ["Bob", "Bobby"]
+    assert set(browser.search_queries) == {"Bob", "Bobby"}
+    assert orchestrator.ultimate_calls == [
+        {
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
+            "thread_ts": "1777006365.616769",
+            "message_ts": "1777007562.458519",
+            "author_actor_id": "U123",
+            "text": "Bobby please reply with exactly alias mode ok and nothing else.",
         }
     ]
 

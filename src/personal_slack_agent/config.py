@@ -2,8 +2,10 @@ from pathlib import Path
 from typing import Any, List, Mapping, Optional, Union
 from urllib.parse import urlparse
 
+from .callsign import normalize_assistant_names
 from .models import (
     DEFAULT_BROWSER_CDP_URL,
+    DEFAULT_ASSISTANT_NAMES,
     CODEX_HOME_MODE_DEFAULT,
     CODEX_HOME_MODE_ISOLATED,
     CODEX_SANDBOX_MODE_DANGER_FULL_ACCESS,
@@ -233,8 +235,17 @@ def dump_config(config: AppConfig) -> str:
                         '"{}"'.format(_toml_escape(item))
                         for item in config.defaults.codex_workspace_write_writable_roots
                     )
+            )
+        )
+    if config.defaults.assistant_names != DEFAULT_ASSISTANT_NAMES:
+        lines.append(
+            "assistant_names = [{0}]".format(
+                ", ".join(
+                    '"{}"'.format(_toml_escape(item))
+                    for item in config.defaults.assistant_names
                 )
             )
+        )
 
     lines.extend(
         [
@@ -527,6 +538,10 @@ def _parse_defaults(raw_defaults: Any, base_dir: Path) -> DefaultSettings:
         allowed_actor_ids=_string_list(raw_defaults.get("allowed_actor_ids"), "defaults.allowed_actor_ids"),
         owner_name=owner_name,
         owner_preferred_name=owner_preferred_name,
+        assistant_names=_assistant_names(
+            raw_defaults.get("assistant_names"),
+            "defaults.assistant_names",
+        ),
         codex_home_mode=_codex_home_mode(
             raw_defaults.get("codex_home_mode"),
             "defaults.codex_home_mode",
@@ -1034,6 +1049,14 @@ def _string_list(value: Any, field_name: str) -> List[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
         raise ConfigError("{0} must be a list of strings.".format(field_name))
     return list(value)
+
+
+def _assistant_names(value: Any, field_name: str) -> List[str]:
+    raw_names = DEFAULT_ASSISTANT_NAMES if value is None else _string_list(value, field_name)
+    try:
+        return normalize_assistant_names(raw_names)
+    except ValueError as exc:
+        raise ConfigError("{0}: {1}.".format(field_name, exc)) from exc
 
 
 def _int_list(value: Any, field_name: str) -> List[int]:

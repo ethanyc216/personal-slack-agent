@@ -49,7 +49,7 @@ What it does:
 
 1. Loads `bob.toml`.
 2. Resolves the target workspace/channel.
-3. Ensures the prompt starts with `Bob` by prefixing `Bob, ` when needed.
+3. Ensures the prompt starts with a configured callsign by prefixing the first `defaults.assistant_names` value when needed.
 4. Posts a real root Bob message into Slack.
 5. Waits for Bob to finish the backing Codex session.
 6. Prints the Slack thread timestamp, Codex session id, and final Bob reply.

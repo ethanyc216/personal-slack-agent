@@ -22,7 +22,7 @@ Working pieces:
 - thread/session mapping to local Codex sessions
 - thread reply resume for existing sessions
 - waiting-state reminders and auto-close handling
-- manual `bob close` thread closure with later resume support
+- manual `<callsign> close` thread closure with later resume support
 - cleanup of obsolete waiting prompts after resolution
 - local process control with `bobctl start|stop|restart|status|tail-log|show-config|doctor`
 
@@ -92,6 +92,8 @@ docs/command-reference.md
 [defaults]
 owner_name = "Bob Owner"
 owner_preferred_name = "Owner"
+# Optional Slack callsigns. Bob replies using the exact alias typed by the user.
+assistant_names = ["Bob"]
 
 [browser]
 slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
@@ -147,7 +149,9 @@ codex_sandbox_mode = "workspace-write"
 persistent_memory_mode = "disabled"
 ```
 
-`watcher.bob_ultimate_mode = false` preserves the current configured-channel Bob behavior. Set `watcher.bob_ultimate_mode = true` to allow explicit `bob ...` invocation from any accessible public/private channel, DM, or group DM, still restricted by `allowed_actor_ids`; in that mode Bob appends working and final status into the invoking message instead of posting a separate Bob reply for that invocation.
+`watcher.bob_ultimate_mode = false` preserves the current configured-channel Bob behavior. Set `watcher.bob_ultimate_mode = true` to allow explicit configured-callsign invocation from any accessible public/private channel, DM, or group DM, still restricted by `allowed_actor_ids`; in that mode Bob appends working and final status into the invoking message instead of posting a separate Bob reply for that invocation.
+
+`defaults.assistant_names` controls Slack-facing callsigns. The default is `["Bob"]`, but you can configure aliases such as `["Bob", "Bobby", "Copilot"]`. Matching is case-insensitive with a name boundary, and Bob replies using the exact alias typed in that Slack message. The terminal executable remains `bob`; terminal requests use the first configured callsign when they need to prefix a prompt.
 
 ### Important config notes
 
@@ -164,6 +168,10 @@ docs/bob-config-setup.md
 - `owner_name` / `owner_preferred_name`
   At `[defaults]`, these define how Bob refers to the human owner in runtime prompts.
   For committed examples, keep these anonymized.
+
+- `assistant_names`
+  At `[defaults]`, this defines the Slack callsigns that can invoke Bob. Bob replies using
+  the exact alias the user typed for that interaction. The default is `["Bob"]`.
 
 - `workspaces.channel_defaults`
   Use this to define the default cwd, roots, Bob acceptance policy, and Codex sandbox/home behavior
@@ -316,7 +324,7 @@ For debugging:
 
 ### Triggering work from Slack
 
-Send a message in a watched channel that starts with `Bob` or `bob`, for example:
+Send a message in a watched channel that starts with a configured callsign, for example:
 
 ```text
 Bob, summarize this repo
@@ -337,7 +345,7 @@ If Bob is waiting for input or approval:
 
 - configured reminders apply only to those waiting states
 - auto-close applies only to those waiting states
-- reply with `bob close` to close the thread without losing the underlying Codex session
+- reply with `<callsign> close` to close the thread without losing the underlying Codex session
 - reply again later in the same thread to resume
 
 ### Terminal Requests

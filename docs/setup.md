@@ -146,7 +146,7 @@ bobctl tail-log --lines 50
 
 ## 7. Test from Slack
 
-In your configured channel, send:
+In your configured channel, send a message that starts with a configured callsign:
 
 ```text
 Bob, test
