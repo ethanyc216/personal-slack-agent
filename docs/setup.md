@@ -41,6 +41,12 @@ For a command-by-command operator reference, see:
 docs/command-reference.md
 ```
 
+For the architecture and Slack interaction model, see:
+
+```text
+docs/how-it-works.md
+```
+
 ## 3. Start Chrome for Bob
 
 ```bash
@@ -188,3 +194,11 @@ Recommended validation sequence:
 - If a configured channel is not visible in Slack's rendered sidebar for Bob's browser session, add `slack_channel_id` for that channel to seed its route directly.
 - Bob currently uses Slack Web realtime sockets for detection and private browser-session-backed Slack web APIs for hydration and posting, not a public Slack app install flow.
 - Per-channel message scraping through the Slack DOM is not part of the normal read path anymore. The browser is used for auth/bootstrap, channel-id discovery, and realtime websocket attachment.
+
+## Related Docs
+
+- [README](../README.md)
+- [How Bob works](how-it-works.md)
+- [Config guide](bob-config-setup.md)
+- [Command reference](command-reference.md)
+- [Publishing guide](publishing.md)

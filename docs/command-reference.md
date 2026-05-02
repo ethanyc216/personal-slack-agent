@@ -243,6 +243,8 @@ Because this is a personal shell alias, it may not exist in non-interactive shel
 ## Related Docs
 
 - [Setup guide](setup.md)
+- [How Bob works](how-it-works.md)
 - [Bob config setup](bob-config-setup.md)
+- [Publishing guide](publishing.md)
 - [Sample config](../config/bob.sample.toml)
 - [README](../README.md)

@@ -355,5 +355,7 @@ Usually means Slack did not expose the channel in the rendered sidebar. Add `sla
 
 - [README.md](../README.md)
 - [docs/setup.md](setup.md)
+- [docs/how-it-works.md](how-it-works.md)
 - [docs/command-reference.md](command-reference.md)
+- [docs/publishing.md](publishing.md)
 - [config/bob.sample.toml](../config/bob.sample.toml)
