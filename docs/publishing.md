@@ -37,6 +37,31 @@ TestPyPI or PyPI until the package contents are acceptable for public download.
 The current built artifacts include runtime package source and the packaged
 AppleScript resource. They do not include `docs/` or `docs/superpowers/`.
 
+## Installing From Package Indexes
+
+Use TestPyPI only for release testing. Install in a throwaway virtual
+environment so the package does not conflict with an editable local Bob install:
+
+```bash
+python3 -m venv /tmp/bob-testpypi
+/tmp/bob-testpypi/bin/python -m pip install --upgrade pip
+/tmp/bob-testpypi/bin/python -m pip install \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  personal-slack-agent
+```
+
+`--extra-index-url` lets pip resolve normal dependencies such as Playwright from
+PyPI when they are not available on TestPyPI.
+
+For a normal user install from PyPI:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install personal-slack-agent
+```
+
 ## Version Alignment
 
 The GitHub Release workflow and the TestPyPI workflow currently generate
