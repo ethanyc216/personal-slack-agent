@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import sys
 
+from ..callsign import match_assistant_invocation
 from ..config import load_config
+from ..models import DEFAULT_ASSISTANT_NAMES
 from .ctl import _resolve_smoke_target, _run_smoke_test, build_runtime_paths
 
 
@@ -39,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         workspace_name=args.workspace,
         channel_name=args.channel,
     )
-    text = _ensure_bob_prefix(" ".join(args.prompt))
+    text = _ensure_assistant_prefix(" ".join(args.prompt), config.defaults.assistant_names)
     result = _run_smoke_test(
         paths=paths,
         workspace_name=workspace_name,
@@ -77,11 +79,12 @@ def _resolve_terminal_target(config, workspace_name: str | None, channel_name: s
     return candidates[0]
 
 
-def _ensure_bob_prefix(prompt: str) -> str:
+def _ensure_assistant_prefix(prompt: str, assistant_names: list[str]) -> str:
     stripped = prompt.strip()
-    if stripped.lower().startswith("bob"):
+    effective_names = assistant_names or DEFAULT_ASSISTANT_NAMES
+    if match_assistant_invocation(stripped, effective_names) is not None:
         return stripped
-    return "Bob, {0}".format(stripped)
+    return "{0}, {1}".format(effective_names[0], stripped)
 
 
 if __name__ == "__main__":

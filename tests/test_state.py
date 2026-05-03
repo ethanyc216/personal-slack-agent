@@ -19,6 +19,7 @@ def test_state_store_persists_thread_mapping_and_session_fields(tmp_path):
         cwd="/Users/bob_owner_handle/Code/OHAI/ctdm",
         owner_actor_id="U123",
         status=SessionStatus.WAITING_FOR_APPROVAL,
+        assistant_name="Bobby",
         approval_request_id="APR-001",
         approval_command_summary="git status -sb",
         reminder_due_at=1711846800,
@@ -29,11 +30,41 @@ def test_state_store_persists_thread_mapping_and_session_fields(tmp_path):
     assert record is not None
     assert record.codex_session_id == "session-123"
     assert record.owner_actor_id == "U123"
+    assert record.assistant_name == "Bobby"
     assert record.status is SessionStatus.WAITING_FOR_APPROVAL
     assert record.approval_request_id == "APR-001"
     assert record.approval_command_summary == "git status -sb"
     assert record.reminder_due_at == 1711846800
     assert record.auto_close_due_at == 1711850400
+
+
+def test_state_store_updates_session_assistant_name(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    store.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.RUNNING,
+        assistant_name="Bob",
+    )
+
+    store.update_assistant_name(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        assistant_name="bObBy",
+    )
+
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
+    assert record is not None
+    assert record.assistant_name == "bObBy"
 
 
 def test_due_waiting_sessions_are_returned_for_reminder(tmp_path):

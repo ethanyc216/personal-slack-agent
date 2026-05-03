@@ -6,9 +6,10 @@ import re
 import time
 from typing import Callable, Deque, Dict, Optional, Set, Tuple
 
+from ..callsign import match_assistant_invocation
 from ..config import runtime_channel_name, slack_channel_id_from_runtime_channel_name
 from ..generated_files import normalize_slack_markdown
-from ..models import AppConfig, SessionStatus
+from ..models import AppConfig, DEFAULT_ASSISTANT_NAMES, SessionStatus
 from ..state import BobStateStore
 from .browser import SlackBrowserAdapter, SlackRootMessage, SlackThreadReplyMessage
 from .events import SlackRealtimeEvent
@@ -368,6 +369,7 @@ class SlackWatcher:
                     record.created_at,
                     delivered_timestamps,
                     pending_outbound_texts,
+                    self._assistant_names_for_record(record),
                 ):
                     continue
                 if self._should_route_ultimate_invocation(reply.text) and (
@@ -493,6 +495,7 @@ class SlackWatcher:
             record.created_at,
             delivered_timestamps,
             pending_outbound_texts,
+            self._assistant_names_for_record(record),
         ):
             self.state_store.upsert_thread_cursor(
                 workspace_name,
@@ -617,23 +620,30 @@ class SlackWatcher:
             self._ultimate_search_cursor[workspace_name] = floor
         if self._stop_requested():
             return
-        try:
-            messages = self.browser.search_messages(
-                workspace_name=workspace_name,
-                query="bob",
-                count=50,
-                page=1,
-                sort="timestamp",
-                sort_dir="desc",
-            )
-        except Exception as exc:
-            self._log_warning(
-                "ultimate search fallback failed workspace=%s error=%s",
-                workspace_name,
-                exc,
-            )
-            return
-        for message in reversed(messages):
+        messages_by_key = {}
+        for assistant_name in self._configured_assistant_names():
+            if self._stop_requested():
+                return
+            try:
+                messages = self.browser.search_messages(
+                    workspace_name=workspace_name,
+                    query=assistant_name,
+                    count=50,
+                    page=1,
+                    sort="timestamp",
+                    sort_dir="desc",
+                )
+            except Exception as exc:
+                self._log_warning(
+                    "ultimate search fallback failed workspace=%s query=%s error=%s",
+                    workspace_name,
+                    assistant_name,
+                    exc,
+                )
+                continue
+            for message in messages:
+                messages_by_key[(message.channel_id, message.message_ts)] = message
+        for message in sorted(messages_by_key.values(), key=lambda item: item.message_ts):
             if self._stop_requested():
                 return
             try:
@@ -717,7 +727,20 @@ class SlackWatcher:
         )
 
     def _should_route_ultimate_invocation(self, text: str) -> bool:
-        return self.config.watcher.bob_ultimate_mode and text.strip().lower().startswith("bob")
+        return (
+            self.config.watcher.bob_ultimate_mode
+            and match_assistant_invocation(text, self._configured_assistant_names())
+            is not None
+        )
+
+    def _assistant_names_for_record(self, record) -> List[str]:
+        names = self._configured_assistant_names()
+        if record.assistant_name.casefold() not in {name.casefold() for name in names}:
+            names.append(record.assistant_name)
+        return names
+
+    def _configured_assistant_names(self) -> List[str]:
+        return list(self.config.defaults.assistant_names or DEFAULT_ASSISTANT_NAMES)
 
     def _sessions_for_periodic_thread_reconcile(
         self,
@@ -885,6 +908,7 @@ def _should_route_reply(
     session_created_at: int,
     delivered_timestamps: Set[str],
     pending_outbound_texts: Set[str],
+    assistant_names: List[str],
 ) -> bool:
     normalized_text = _normalize_reply_text(reply.text)
     if not normalized_text:
@@ -893,7 +917,7 @@ def _should_route_reply(
         return False
     if normalized_text in pending_outbound_texts:
         return False
-    if _is_bob_generated_reply_text(normalized_text):
+    if _is_assistant_generated_reply_text(normalized_text, assistant_names):
         return False
     if _is_escaped_thread_reply(reply.text):
         return False
@@ -909,21 +933,26 @@ def _normalize_reply_text(text: str) -> str:
     return normalized
 
 
-def _is_bob_generated_reply_text(normalized_text: str) -> bool:
-    lowered = normalized_text.lower()
-    return lowered.startswith(
-        (
-            "bob :white_check_mark:",
-            "bob is working on it",
-            "bob queued it",
-            "bob needs input",
-            "bob needs approval",
-            "bob timed out",
-            "bob hit an error",
-            "bob denied command request",
-            "bob canceled command request",
-        )
+def _is_assistant_generated_reply_text(
+    normalized_text: str,
+    assistant_names: List[str],
+) -> bool:
+    match = match_assistant_invocation(normalized_text, assistant_names)
+    if match is None:
+        return False
+    lowered = match.remainder.casefold()
+    generated_phrases = (
+        "white_check_mark:",
+        "is working on it",
+        "queued it",
+        "needs input",
+        "needs approval",
+        "timed out",
+        "hit an error",
+        "denied command request",
+        "canceled command request",
     )
+    return lowered.startswith(generated_phrases)
 
 
 def _is_escaped_thread_reply(text: str) -> bool:

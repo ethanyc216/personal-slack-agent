@@ -2,12 +2,19 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import time
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
+from .callsign import (
+    assistant_label_from_text,
+    is_manual_close_request,
+    match_assistant_invocation,
+    strip_assistant_prefix,
+)
 from .config import build_runtime_channel, slack_channel_id_from_runtime_channel_name
 from .codex_runner import CodexRunResult
 from .generated_files import GeneratedFile, extract_generated_files, normalize_slack_markdown
 from .models import (
     AppConfig,
     ChannelConfig,
+    DEFAULT_ASSISTANT_NAMES,
     OutboundIntentRecord,
     SessionRecord,
     SessionStatus,
@@ -49,14 +56,6 @@ class BobOrchestrator:
     _TASK_KIND_THREAD_REPLY = "thread_reply"
     _TASK_KIND_ULTIMATE_INVOCATION = "ultimate_invocation"
     _STARTUP_FAILED_SESSION_PREFIX = "startup-failed-"
-    _LABEL_WORKING = "_*Bob is working on it :arrows_counterclockwise::*_"
-    _LABEL_QUEUED = "_*Bob queued it :hourglass_flowing_sand::*_"
-    _LABEL_INPUT = "_*Bob needs input :exclamation::*_"
-    _LABEL_APPROVAL = "_*Bob needs approval :exclamation::*_"
-    _LABEL_TIMED_OUT = "_*Bob timed out :hourglass_flowing_sand::*_"
-    _LABEL_DONE = "_*Bob :white_check_mark::*_"
-    _LABEL_ERROR = "_*Bob hit an error :exclamation::*_"
-
     def __init__(
         self,
         browser: SlackBrowserAdapter,
@@ -108,7 +107,8 @@ class BobOrchestrator:
                 text=text,
             )
             return
-        if not self._is_bob_root_message(text):
+        invocation = self._match_assistant_invocation(text)
+        if invocation is None:
             return
         if not self._is_actor_allowed(workspace_name, channel_name, author_actor_id):
             return
@@ -135,7 +135,8 @@ class BobOrchestrator:
                 thread_ts=message_ts,
                 intent_key="duplicate-session-warning",
                 text=(
-                    "Bob already has a session in this thread: {0}".format(
+                    "{0} already has a session in this thread: {1}".format(
+                        invocation.alias,
                         existing.codex_session_id
                     )
                 ),
@@ -180,7 +181,8 @@ class BobOrchestrator:
             thread_ts,
         ):
             return
-        if not self._is_bob_root_message(text):
+        invocation = self._match_assistant_invocation(text)
+        if invocation is None:
             return
         if not self._is_actor_allowed(workspace_name, channel_name, author_actor_id):
             return
@@ -218,12 +220,17 @@ class BobOrchestrator:
             channel_name,
             thread_ts,
         ) > 1:
+            assistant_name = self._assistant_name_from_text(
+                text,
+                existing.assistant_name if existing is not None else self._default_assistant_name(),
+            )
             self._try_append_queued_message(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 message_ts=message_ts,
                 original_text=text,
+                assistant_name=assistant_name,
             )
         self._dispatch_queued_tasks()
 
@@ -257,7 +264,7 @@ class BobOrchestrator:
                 intent_key="auto-close-{0}".format(record.thread_ts),
                 text=(
                     "{0} Session timed out while waiting. Reply again in this thread to resume.".format(
-                        self._LABEL_DONE
+                        self._label_done(record.assistant_name)
                     )
                 ),
             )
@@ -315,11 +322,13 @@ class BobOrchestrator:
             channel_name,
             thread_ts,
         ) > 1:
+            assistant_name = self._assistant_name_from_text(text, record.assistant_name)
             self._try_deliver_queued_message(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 message_ts=message_ts,
+                assistant_name=assistant_name,
             )
         self._dispatch_queued_tasks()
 
@@ -359,7 +368,11 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=record.thread_ts,
                 intent_key="approval-{0}-{1}".format(action, approval_id),
-                text="_*Bob {0} command request :exclamation:*_ {1}.".format(action_text, approval_id),
+                text="_*{0} {1} command request :exclamation:*_ {2}.".format(
+                    record.assistant_name,
+                    action_text,
+                    approval_id,
+                ),
             )
             self.state_store.update_status(
                 workspace_name=workspace_name,
@@ -387,6 +400,7 @@ class BobOrchestrator:
         session_id: str,
         run_result: CodexRunResult,
         result_key_suffix: str,
+        assistant_name: str,
     ) -> None:
         if run_result.wait_kind == "input":
             wait_message = run_result.wait_message or "Please reply in this thread."
@@ -396,7 +410,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 intent_key="wait-input-{0}".format(result_key_suffix),
-                text="{0} {1}".format(self._LABEL_INPUT, wait_message),
+                text="{0} {1}".format(self._label_input(assistant_name), wait_message),
             )
             self.state_store.set_waiting_state(
                 workspace_name=workspace_name,
@@ -437,6 +451,7 @@ class BobOrchestrator:
                     session_id=session_id,
                     run_result=auto_result,
                     result_key_suffix="auto-{0}".format(result_key_suffix),
+                    assistant_name=assistant_name,
                 )
                 return
             reminder_due_at, auto_close_due_at = self._waiting_deadlines()
@@ -451,7 +466,7 @@ class BobOrchestrator:
                 text=(
                     "{0} {1} "
                     "(reply with `approve {2}`, `deny {2}`, or `cancel {2}`)"
-                ).format(self._LABEL_APPROVAL, approval_summary, approval_request_id),
+                ).format(self._label_approval(assistant_name), approval_summary, approval_request_id),
             )
             self.state_store.set_waiting_state(
                 workspace_name=workspace_name,
@@ -474,6 +489,7 @@ class BobOrchestrator:
                 session_id=session_id,
                 result_key_suffix=result_key_suffix,
                 final_output=run_result.final_output,
+                assistant_name=assistant_name,
             )
             self.state_store.update_status(
                 workspace_name=workspace_name,
@@ -492,7 +508,7 @@ class BobOrchestrator:
                     intent_key="timeout-{0}".format(session_id),
                     text=(
                         "{0} {1} Reply again in this thread to resume.".format(
-                            self._LABEL_TIMED_OUT,
+                            self._label_timed_out(assistant_name),
                             run_result.failure_text,
                         )
                     ),
@@ -510,7 +526,7 @@ class BobOrchestrator:
                     channel_name=channel_name,
                     thread_ts=thread_ts,
                     intent_key="failure-{0}".format(session_id),
-                    text=self._failure_text(),
+                    text=self._failure_text(assistant_name),
                 )
                 self.state_store.update_status(
                     workspace_name=workspace_name,
@@ -528,6 +544,7 @@ class BobOrchestrator:
         session_id: str,
         result_key_suffix: str,
         final_output: str,
+        assistant_name: str,
     ) -> None:
         summary, files = extract_generated_files(final_output)
         if not files:
@@ -536,7 +553,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
-                text="{0} {1}".format(self._LABEL_DONE, final_output),
+                text="{0} {1}".format(self._label_done(assistant_name), final_output),
             )
             return
 
@@ -558,7 +575,7 @@ class BobOrchestrator:
                         channel_name=channel_name,
                         thread_ts=thread_ts,
                         intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
-                        text="{0} {1}".format(self._LABEL_DONE, final_output),
+                        text="{0} {1}".format(self._label_done(assistant_name), final_output),
                     )
                     return
                 raise
@@ -571,7 +588,7 @@ class BobOrchestrator:
             thread_ts=thread_ts,
             intent_key="final-{0}-{1}".format(session_id, result_key_suffix),
             text="{0} {1}\n\nUploaded snippets: {2}".format(
-                self._LABEL_DONE,
+                self._label_done(assistant_name),
                 summary_text,
                 file_list,
             ),
@@ -587,9 +604,13 @@ class BobOrchestrator:
         session_id: str,
         run_result: CodexRunResult,
         result_key_suffix: str,
+        assistant_name: str,
     ) -> None:
         if run_result.wait_kind == "input":
-            wait_message = run_result.wait_message or "Please reply with another `bob ...` message."
+            wait_message = (
+                run_result.wait_message
+                or "Please reply with another `{0} ...` message.".format(assistant_name)
+            )
             self._append_message_line_or_fallback(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -597,7 +618,7 @@ class BobOrchestrator:
                 message_ts=message_ts,
                 original_text=original_text,
                 intent_key="ultimate-wait-input-{0}".format(result_key_suffix),
-                line="{0} {1}".format(self._LABEL_INPUT, wait_message),
+                line="{0} {1}".format(self._label_input(assistant_name), wait_message),
             )
             self.state_store.set_waiting_state(
                 workspace_name=workspace_name,
@@ -640,6 +661,7 @@ class BobOrchestrator:
                     session_id=session_id,
                     run_result=auto_result,
                     result_key_suffix="auto-{0}".format(result_key_suffix),
+                    assistant_name=assistant_name,
                 )
                 return
             self._append_message_line_or_fallback(
@@ -653,9 +675,15 @@ class BobOrchestrator:
                     result_key_suffix,
                 ),
                 line=(
-                    "{0} {1} "
-                    "(send `bob approve {2}`, `bob deny {2}`, or `bob cancel {2}`)"
-                ).format(self._LABEL_APPROVAL, approval_summary, approval_request_id),
+                    "{label} {summary} "
+                    "(send `{alias} approve {approval_id}`, "
+                    "`{alias} deny {approval_id}`, or `{alias} cancel {approval_id}`)"
+                ).format(
+                    label=self._label_approval(assistant_name),
+                    summary=approval_summary,
+                    alias=assistant_name,
+                    approval_id=approval_request_id,
+                ),
             )
             self.state_store.set_waiting_state(
                 workspace_name=workspace_name,
@@ -680,6 +708,7 @@ class BobOrchestrator:
                 session_id=session_id,
                 result_key_suffix=result_key_suffix,
                 final_output=run_result.final_output,
+                assistant_name=assistant_name,
             )
             self.state_store.update_status(
                 workspace_name=workspace_name,
@@ -698,7 +727,10 @@ class BobOrchestrator:
                     message_ts=message_ts,
                     original_text=original_text,
                     intent_key="ultimate-timeout-{0}".format(session_id),
-                    line="{0} {1}".format(self._LABEL_TIMED_OUT, run_result.failure_text),
+                    line="{0} {1}".format(
+                        self._label_timed_out(assistant_name),
+                        run_result.failure_text,
+                    ),
                 )
                 self.state_store.update_status(
                     workspace_name=workspace_name,
@@ -715,7 +747,7 @@ class BobOrchestrator:
                     message_ts=message_ts,
                     original_text=original_text,
                     intent_key="ultimate-failure-{0}".format(session_id),
-                    line=self._failure_text(),
+                    line=self._failure_text(assistant_name),
                 )
                 self.state_store.update_status(
                     workspace_name=workspace_name,
@@ -735,6 +767,7 @@ class BobOrchestrator:
         session_id: str,
         result_key_suffix: str,
         final_output: str,
+        assistant_name: str,
     ) -> None:
         summary, files = extract_generated_files(final_output)
         if not files:
@@ -745,7 +778,7 @@ class BobOrchestrator:
                 message_ts=message_ts,
                 original_text=original_text,
                 intent_key="ultimate-final-{0}-{1}".format(session_id, result_key_suffix),
-                line="{0} {1}".format(self._LABEL_DONE, final_output),
+                line="{0} {1}".format(self._label_done(assistant_name), final_output),
             )
             return
 
@@ -769,7 +802,7 @@ class BobOrchestrator:
                         message_ts=message_ts,
                         original_text=original_text,
                         intent_key="ultimate-final-{0}-{1}".format(session_id, result_key_suffix),
-                        line="{0} {1}".format(self._LABEL_DONE, final_output),
+                        line="{0} {1}".format(self._label_done(assistant_name), final_output),
                     )
                     return
                 raise
@@ -784,7 +817,7 @@ class BobOrchestrator:
             original_text=original_text,
             intent_key="ultimate-final-{0}-{1}".format(session_id, result_key_suffix),
             line="{0} {1}\n\nUploaded snippets: {2}".format(
-                self._LABEL_DONE,
+                self._label_done(assistant_name),
                 summary_text,
                 file_list,
             ),
@@ -871,6 +904,10 @@ class BobOrchestrator:
         channel_name = task.channel_name
         message_ts = task.message_ts
         author_actor_id = task.author_actor_id
+        assistant_name = self._assistant_name_from_text(
+            task.prompt_text,
+            self._default_assistant_name(),
+        )
         existing = self.state_store.get_by_thread(workspace_name, channel_name, message_ts)
         if existing is not None:
             self._deliver_thread_message(
@@ -878,7 +915,8 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=message_ts,
                 intent_key="duplicate-session-warning",
-                text="Bob already has a session in this thread: {0}".format(
+                text="{0} already has a session in this thread: {1}".format(
+                    assistant_name,
                     existing.codex_session_id
                 ),
             )
@@ -894,6 +932,7 @@ class BobOrchestrator:
                 prompt_text=task.prompt_text,
                 owner_actor_id=author_actor_id,
                 cwd=self._resolve_default_cwd(workspace_name, channel_name),
+                assistant_name=assistant_name,
             )
         except Exception:
             record = self.state_store.get_by_thread(workspace_name, channel_name, message_ts)
@@ -924,6 +963,7 @@ class BobOrchestrator:
         prompt_text: str,
         owner_actor_id: str,
         cwd: str,
+        assistant_name: str,
     ) -> None:
         channel = self._find_channel(self._find_workspace(workspace_name), channel_name)
         assert channel is not None
@@ -941,6 +981,7 @@ class BobOrchestrator:
                 cwd=cwd,
                 owner_actor_id=owner_actor_id,
                 status=SessionStatus.RUNNING,
+                assistant_name=assistant_name,
             )
             self._try_deliver_working_message(
                 workspace_name=workspace_name,
@@ -948,10 +989,16 @@ class BobOrchestrator:
                 thread_ts=thread_ts,
                 intent_key="start-status-{0}".format(session_id),
                 session_id=session_id,
+                assistant_name=assistant_name,
             )
 
         run_result = self._runner_for_channel(workspace_name, channel_name).run_new_session(
-            prompt=self._build_codex_prompt(workspace_name, channel_name, prompt_text),
+            prompt=self._build_codex_prompt(
+                workspace_name,
+                channel_name,
+                prompt_text,
+                assistant_name=assistant_name,
+            ),
             cwd=cwd,
             additional_roots=list(channel.effective_additional_roots),
             sandbox_mode=self._sandbox_mode_for_channel(workspace_name, channel_name),
@@ -973,6 +1020,7 @@ class BobOrchestrator:
                 cwd=cwd,
                 owner_actor_id=owner_actor_id,
                 status=SessionStatus.RUNNING,
+                assistant_name=assistant_name,
             )
             self._process_run_result(
                 workspace_name=workspace_name,
@@ -981,6 +1029,7 @@ class BobOrchestrator:
                 session_id=session_id,
                 run_result=run_result,
                 result_key_suffix=message_ts,
+                assistant_name=assistant_name,
             )
             return
         self.state_store.upsert_session(
@@ -992,6 +1041,7 @@ class BobOrchestrator:
             cwd=cwd,
             owner_actor_id=owner_actor_id,
             status=SessionStatus.RUNNING,
+            assistant_name=assistant_name,
         )
         if started_session_id is None:
             self._try_deliver_working_message(
@@ -1000,6 +1050,7 @@ class BobOrchestrator:
                 thread_ts=thread_ts,
                 intent_key="start-status-{0}".format(session_id),
                 session_id=session_id,
+                assistant_name=assistant_name,
             )
         self._process_run_result(
             workspace_name=workspace_name,
@@ -1008,6 +1059,7 @@ class BobOrchestrator:
             session_id=session_id,
             run_result=run_result,
             result_key_suffix=message_ts,
+            assistant_name=assistant_name,
         )
 
     def _execute_thread_reply_task(self, task: TaskRecord) -> None:
@@ -1019,8 +1071,18 @@ class BobOrchestrator:
         if record is None:
             return
 
+        assistant_name = self._assistant_name_from_text(
+            task.prompt_text,
+            record.assistant_name,
+        )
         if self._is_manual_close_request(task.prompt_text):
             self._clear_waiting_message(record)
+            self.state_store.update_assistant_name(
+                workspace_name=task.workspace_name,
+                channel_name=task.channel_name,
+                thread_ts=task.thread_ts,
+                assistant_name=assistant_name,
+            )
             self.state_store.update_status(
                 workspace_name=task.workspace_name,
                 channel_name=task.channel_name,
@@ -1033,7 +1095,7 @@ class BobOrchestrator:
                 thread_ts=task.thread_ts,
                 intent_key="manual-close-{0}".format(task.message_ts),
                 text="{0} Session closed. Reply again in this thread to resume.".format(
-                    self._LABEL_DONE
+                    self._label_done(assistant_name)
                 ),
             )
             return
@@ -1085,6 +1147,10 @@ class BobOrchestrator:
             task.channel_name,
             task.thread_ts,
         )
+        assistant_name = self._assistant_name_from_text(
+            task.prompt_text,
+            record.assistant_name if record is not None else self._default_assistant_name(),
+        )
         if record is not None and record.status is SessionStatus.WAITING_FOR_APPROVAL:
             self._handle_ultimate_approval_invocation(task, record)
             return
@@ -1110,17 +1176,25 @@ class BobOrchestrator:
             user_text=task.prompt_text,
             invocation_message_ts=task.message_ts,
             thread_messages=thread_messages,
+            assistant_name=assistant_name,
         )
         if record is None:
-            self._execute_new_ultimate_session(task, prompt)
+            self._execute_new_ultimate_session(task, prompt, assistant_name)
             return
-        self._resume_ultimate_session(task, record, prompt)
+        self._resume_ultimate_session(task, record, prompt, assistant_name)
 
     def _handle_ultimate_approval_invocation(
         self,
         task: TaskRecord,
         record: SessionRecord,
     ) -> None:
+        assistant_name = self._assistant_name_from_text(task.prompt_text, record.assistant_name)
+        self.state_store.update_assistant_name(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            assistant_name=assistant_name,
+        )
         approval_text = self._strip_bob_prefix(task.prompt_text)
         action, approval_id = self._parse_approval_reply(approval_text)
         current_approval_id = record.approval_request_id or ""
@@ -1151,7 +1225,8 @@ class BobOrchestrator:
                 message_ts=task.message_ts,
                 original_text=task.prompt_text,
                 intent_key="ultimate-approval-{0}-{1}".format(action, approval_id),
-                line="_*Bob {0} command request :exclamation:*_ {1}.".format(
+                line="_*{0} {1} command request :exclamation:*_ {2}.".format(
+                    assistant_name,
                     action_text,
                     approval_id,
                 ),
@@ -1174,6 +1249,7 @@ class BobOrchestrator:
             original_text=task.prompt_text,
             intent_key="ultimate-start-status-{0}".format(task.message_ts),
             session_id=record.codex_session_id,
+            assistant_name=assistant_name,
         )
         try:
             run_result = self._runner_for_ultimate_invocation(
@@ -1214,9 +1290,15 @@ class BobOrchestrator:
             session_id=record.codex_session_id,
             run_result=run_result,
             result_key_suffix=task.message_ts,
+            assistant_name=assistant_name,
         )
 
-    def _execute_new_ultimate_session(self, task: TaskRecord, prompt: str) -> None:
+    def _execute_new_ultimate_session(
+        self,
+        task: TaskRecord,
+        prompt: str,
+        assistant_name: str,
+    ) -> None:
         cwd = self._resolve_default_cwd(task.workspace_name, task.channel_name)
         started_session_id: Optional[str] = None
 
@@ -1232,6 +1314,7 @@ class BobOrchestrator:
                 cwd=cwd,
                 owner_actor_id=task.author_actor_id,
                 status=SessionStatus.RUNNING,
+                assistant_name=assistant_name,
             )
             self._try_append_working_message(
                 workspace_name=task.workspace_name,
@@ -1241,6 +1324,7 @@ class BobOrchestrator:
                 original_text=task.prompt_text,
                 intent_key="ultimate-start-status-{0}".format(task.message_ts),
                 session_id=session_id,
+                assistant_name=assistant_name,
                 redeliver_existing=True,
             )
 
@@ -1276,6 +1360,7 @@ class BobOrchestrator:
                     cwd=cwd,
                     owner_actor_id=task.author_actor_id,
                     status=SessionStatus.RUNNING,
+                    assistant_name=assistant_name,
                 )
                 self._process_ultimate_run_result(
                     workspace_name=task.workspace_name,
@@ -1286,6 +1371,7 @@ class BobOrchestrator:
                     session_id=session_id,
                     run_result=run_result,
                     result_key_suffix=task.message_ts,
+                    assistant_name=assistant_name,
                 )
                 return
             self.state_store.upsert_session(
@@ -1297,6 +1383,7 @@ class BobOrchestrator:
                 cwd=cwd,
                 owner_actor_id=task.author_actor_id,
                 status=SessionStatus.RUNNING,
+                assistant_name=assistant_name,
             )
             if started_session_id is None:
                 self._try_append_working_message(
@@ -1307,6 +1394,7 @@ class BobOrchestrator:
                     original_text=task.prompt_text,
                     intent_key="ultimate-start-status-{0}".format(task.message_ts),
                     session_id=session_id,
+                    assistant_name=assistant_name,
                     redeliver_existing=True,
                 )
             self._process_ultimate_run_result(
@@ -1318,6 +1406,7 @@ class BobOrchestrator:
                 session_id=session_id,
                 run_result=run_result,
                 result_key_suffix=task.message_ts,
+                assistant_name=assistant_name,
             )
         except Exception:
             record = self.state_store.get_by_thread(task.workspace_name, task.channel_name, task.thread_ts)
@@ -1343,7 +1432,14 @@ class BobOrchestrator:
         task: TaskRecord,
         record: SessionRecord,
         prompt: str,
+        assistant_name: str,
     ) -> None:
+        self.state_store.update_assistant_name(
+            workspace_name=task.workspace_name,
+            channel_name=task.channel_name,
+            thread_ts=task.thread_ts,
+            assistant_name=assistant_name,
+        )
         previous_status = record.status
         self.state_store.update_status(
             workspace_name=task.workspace_name,
@@ -1360,6 +1456,7 @@ class BobOrchestrator:
             original_text=task.prompt_text,
             intent_key="ultimate-start-status-{0}".format(task.message_ts),
             session_id=record.codex_session_id,
+            assistant_name=assistant_name,
             redeliver_existing=True,
         )
         try:
@@ -1407,7 +1504,7 @@ class BobOrchestrator:
                 channel_name=task.channel_name,
                 thread_ts=task.thread_ts,
             )
-            self._execute_new_ultimate_session(task, prompt)
+            self._execute_new_ultimate_session(task, prompt, assistant_name)
             return
         if run_result.session_id and run_result.session_id != record.codex_session_id:
             self._rebind_session_id(record, run_result.session_id)
@@ -1425,6 +1522,7 @@ class BobOrchestrator:
             session_id=record.codex_session_id,
             run_result=run_result,
             result_key_suffix=task.message_ts,
+            assistant_name=assistant_name,
         )
 
     def _resume_record(
@@ -1440,7 +1538,14 @@ class BobOrchestrator:
         record = self.state_store.get_by_thread(workspace_name, channel_name, thread_ts)
         if record is None:
             return
+        assistant_name = self._assistant_name_from_text(prompt, record.assistant_name)
         previous_status = record.status
+        self.state_store.update_assistant_name(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            assistant_name=assistant_name,
+        )
         self.state_store.update_status(
             workspace_name=workspace_name,
             channel_name=channel_name,
@@ -1450,7 +1555,12 @@ class BobOrchestrator:
         )
         try:
             resume_prompt = (
-                self._build_codex_prompt(workspace_name, channel_name, prompt)
+                self._build_codex_prompt(
+                    workspace_name,
+                    channel_name,
+                    prompt,
+                    assistant_name=assistant_name,
+                )
                 if wrap_prompt
                 else prompt
             )
@@ -1502,6 +1612,7 @@ class BobOrchestrator:
                 session_id=session_id,
                 run_result=run_result,
                 result_key_suffix=message_ts,
+                assistant_name=assistant_name,
             )
         except Exception:
             self.state_store.update_status(
@@ -1524,6 +1635,7 @@ class BobOrchestrator:
             self._TASK_KIND_NEW_ROOT,
         )
         prompt_text = root_task.prompt_text if root_task is not None else task.prompt_text
+        assistant_name = self._assistant_name_from_text(prompt_text, record.assistant_name)
         self.state_store.delete_session(task.workspace_name, task.channel_name, task.thread_ts)
         self._start_root_session(
             workspace_name=task.workspace_name,
@@ -1534,6 +1646,7 @@ class BobOrchestrator:
             prompt_text=prompt_text,
             owner_actor_id=record.owner_actor_id,
             cwd=record.cwd,
+            assistant_name=assistant_name,
         )
 
     def _rebind_session_id(self, record: SessionRecord, session_id: str) -> None:
@@ -1553,6 +1666,7 @@ class BobOrchestrator:
             cwd=record.cwd,
             owner_actor_id=record.owner_actor_id,
             status=SessionStatus.RUNNING,
+            assistant_name=record.assistant_name,
         )
 
     def _startup_failed_session_id(self, message_ts: str) -> str:
@@ -1868,12 +1982,23 @@ class BobOrchestrator:
             return self.config.defaults.codex_workspace_write_writable_roots
         return channel.effective_codex_workspace_write_writable_roots
 
-    def _build_codex_prompt(self, workspace_name: str, channel_name: str, user_text: str) -> str:
+    def _build_codex_prompt(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        user_text: str,
+        assistant_name: Optional[str] = None,
+    ) -> str:
         workspace = self._find_workspace(workspace_name)
         channel = self._find_channel(workspace, channel_name)
         if channel is None:
             return user_text
 
+        effective_assistant_name = assistant_name or self._assistant_name_from_text(
+            user_text,
+            self._default_assistant_name(),
+        )
+        accepted_callsigns = ", ".join(self._assistant_names())
         owner_name = self.config.defaults.owner_name
         owner_preferred_name = self.config.defaults.owner_preferred_name
         effective_mode = channel.effective_persistent_memory_mode or channel.persistent_memory_mode
@@ -1893,19 +2018,20 @@ class BobOrchestrator:
             ).format(owner_name, owner_preferred_name)
 
         return (
-            "Bob execution context:\n"
+            "{7} execution context:\n"
             "- workspace: {0}\n"
             "- channel: {1}\n"
             "- persistent_memory_mode: {2}\n"
             "- persistent_memory_owner: {3}\n\n"
-            "Bob role:\n"
-            "- Bob is {4}'s personal assistant.\n"
-            "- Bob specializes in working on CTDM tickets.\n"
-            "- Bob helps with research on internal topics.\n"
-            "- Bob helps with checking work status.\n"
-            "- Bob is only invoked from approved Slack channels.\n"
-            "- In these Slack-started sessions, always use `Bob` as your name.\n"
-            "- Do not tell the user to use `Codex` as the default name in approved Bob channels.\n\n"
+            "{7} role:\n"
+            "- {7} is {4}'s personal assistant.\n"
+            "- {7} specializes in working on CTDM tickets.\n"
+            "- {7} helps with research on internal topics.\n"
+            "- {7} helps with checking work status.\n"
+            "- {7} is only invoked from approved Slack channels.\n"
+            "- Accepted Slack call signs: {8}\n"
+            "- In these Slack-started sessions, always use `{7}` as your name.\n"
+            "- Do not tell the user to use `Codex` as the default name in approved {7} channels.\n\n"
             "Rules:\n"
             "- You may use all available tools, skills, MCP servers, and agents normally.\n"
             "- When passing `sh -lc` through another shell layer, keep the inner script in single quotes or escape `$` as `\\$` so loop variables and shell parameters are not expanded by the outer shell.\n"
@@ -1920,6 +2046,8 @@ class BobOrchestrator:
             owner_preferred_name,
             memory_rule,
             user_text,
+            effective_assistant_name,
+            accepted_callsigns,
         )
 
     def _build_ultimate_prompt(
@@ -1929,6 +2057,7 @@ class BobOrchestrator:
         user_text: str,
         invocation_message_ts: str,
         thread_messages: List[SlackThreadMessage],
+        assistant_name: str,
     ) -> str:
         transcript_lines = []
         for message in thread_messages:
@@ -1948,7 +2077,12 @@ class BobOrchestrator:
             "Slack thread transcript:\n"
             "{2}"
         ).format(
-            self._build_codex_prompt(workspace_name, channel_name, user_text),
+            self._build_codex_prompt(
+                workspace_name,
+                channel_name,
+                user_text,
+                assistant_name=assistant_name,
+            ),
             invocation_message_ts,
             transcript_text,
         )
@@ -2014,18 +2148,25 @@ class BobOrchestrator:
         return parts[0].lower(), parts[1]
 
     def _strip_bob_prefix(self, text: str) -> str:
-        stripped = text.strip()
-        if stripped[:3].lower() != "bob":
-            return stripped
-        return stripped[3:].strip()
+        return strip_assistant_prefix(text, self._assistant_names())
 
     def _is_bob_root_message(self, text: str) -> bool:
-        normalized = text.strip().lower()
-        return normalized.startswith("bob")
+        return self._match_assistant_invocation(text) is not None
 
     def _is_manual_close_request(self, text: str) -> bool:
-        normalized = text.strip().lower()
-        return normalized in {"bob close", "close bob"}
+        return is_manual_close_request(text, self._assistant_names())
+
+    def _match_assistant_invocation(self, text: str):
+        return match_assistant_invocation(text, self._assistant_names())
+
+    def _assistant_name_from_text(self, text: str, fallback: str) -> str:
+        return assistant_label_from_text(text, self._assistant_names(), fallback)
+
+    def _assistant_names(self) -> List[str]:
+        return list(self.config.defaults.assistant_names or DEFAULT_ASSISTANT_NAMES)
+
+    def _default_assistant_name(self) -> str:
+        return self._assistant_names()[0]
 
     def _extract_approval_request_id(self, wait_message: Optional[str]) -> Optional[str]:
         if not wait_message:
@@ -2088,15 +2229,15 @@ class BobOrchestrator:
         summary = record.approval_command_summary or "pending command"
         return (
             "{0} {1} (reply with `approve {2}`, `deny {2}`, or `cancel {2}`)".format(
-                self._LABEL_APPROVAL,
+                self._label_approval(record.assistant_name),
                 summary,
                 approval_id,
             )
         )
 
-    def _working_text(self, session_id: str, thread_ts: str) -> str:
+    def _working_text(self, session_id: str, thread_ts: str, assistant_name: str) -> str:
         return "{0} session=`{1}` thread=`{2}`".format(
-            self._LABEL_WORKING,
+            self._label_working(assistant_name),
             session_id,
             thread_ts,
         )
@@ -2107,13 +2248,36 @@ class BobOrchestrator:
     def _is_missing_rollout_failure(self, failure_text: str) -> bool:
         return "no rollout found" in failure_text.lower()
 
-    def _queued_text(self) -> str:
+    def _queued_text(self, assistant_name: str) -> str:
         return "{0} I will run this after the active task in this thread.".format(
-            self._LABEL_QUEUED
+            self._label_queued(assistant_name)
         )
 
-    def _failure_text(self) -> str:
-        return "{0} Reply again in this thread to retry.".format(self._LABEL_ERROR)
+    def _failure_text(self, assistant_name: str) -> str:
+        return "{0} Reply again in this thread to retry.".format(
+            self._label_error(assistant_name)
+        )
+
+    def _label_working(self, assistant_name: str) -> str:
+        return "_*{0} is working on it :arrows_counterclockwise::*_".format(assistant_name)
+
+    def _label_queued(self, assistant_name: str) -> str:
+        return "_*{0} queued it :hourglass_flowing_sand::*_".format(assistant_name)
+
+    def _label_input(self, assistant_name: str) -> str:
+        return "_*{0} needs input :exclamation::*_".format(assistant_name)
+
+    def _label_approval(self, assistant_name: str) -> str:
+        return "_*{0} needs approval :exclamation::*_".format(assistant_name)
+
+    def _label_timed_out(self, assistant_name: str) -> str:
+        return "_*{0} timed out :hourglass_flowing_sand::*_".format(assistant_name)
+
+    def _label_done(self, assistant_name: str) -> str:
+        return "_*{0} :white_check_mark::*_".format(assistant_name)
+
+    def _label_error(self, assistant_name: str) -> str:
+        return "_*{0} hit an error :exclamation::*_".format(assistant_name)
 
     def _try_ack_message(
         self,
@@ -2138,6 +2302,7 @@ class BobOrchestrator:
         thread_ts: str,
         intent_key: str,
         session_id: str,
+        assistant_name: str,
     ) -> None:
         try:
             self._deliver_thread_message(
@@ -2145,7 +2310,11 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 intent_key=intent_key,
-                text=self._working_text(session_id=session_id, thread_ts=thread_ts),
+                text=self._working_text(
+                    session_id=session_id,
+                    thread_ts=thread_ts,
+                    assistant_name=assistant_name,
+                ),
             )
         except Exception:
             return
@@ -2159,6 +2328,7 @@ class BobOrchestrator:
         original_text: str,
         intent_key: str,
         session_id: str,
+        assistant_name: str,
         redeliver_existing: bool = False,
     ) -> None:
         self._append_message_line_or_fallback(
@@ -2168,7 +2338,11 @@ class BobOrchestrator:
             message_ts=message_ts,
             original_text=original_text,
             intent_key=intent_key,
-            line=self._working_text(session_id=session_id, thread_ts=thread_ts),
+            line=self._working_text(
+                session_id=session_id,
+                thread_ts=thread_ts,
+                assistant_name=assistant_name,
+            ),
             redeliver_existing=redeliver_existing,
         )
 
@@ -2178,6 +2352,7 @@ class BobOrchestrator:
         channel_name: str,
         thread_ts: str,
         message_ts: str,
+        assistant_name: str,
     ) -> None:
         try:
             self._deliver_thread_message(
@@ -2185,7 +2360,7 @@ class BobOrchestrator:
                 channel_name=channel_name,
                 thread_ts=thread_ts,
                 intent_key="queued-{0}".format(message_ts),
-                text=self._queued_text(),
+                text=self._queued_text(assistant_name),
             )
         except Exception:
             return
@@ -2197,6 +2372,7 @@ class BobOrchestrator:
         thread_ts: str,
         message_ts: str,
         original_text: str,
+        assistant_name: str,
     ) -> None:
         self._append_message_line_or_fallback(
             workspace_name=workspace_name,
@@ -2205,16 +2381,16 @@ class BobOrchestrator:
             message_ts=message_ts,
             original_text=original_text,
             intent_key="queued-{0}".format(message_ts),
-            line=self._queued_text(),
+            line=self._queued_text(assistant_name),
         )
 
     def _reminder_text(self, record: SessionRecord) -> str:
         if record.status is SessionStatus.WAITING_FOR_APPROVAL:
             return "{0} Reminder: approval is still pending in this thread.".format(
-                self._LABEL_APPROVAL
+                self._label_approval(record.assistant_name)
             )
         return "{0} Reminder: I am still waiting for your reply in this thread.".format(
-            self._LABEL_INPUT
+            self._label_input(record.assistant_name)
         )
 
     def _next_reminder_due_at(self, reminder_count: int, now_epoch: int) -> Optional[int]:

@@ -15,6 +15,7 @@ CODEX_SANDBOX_MODE_WORKSPACE_WRITE = "workspace-write"
 CODEX_SANDBOX_MODE_DANGER_FULL_ACCESS = "danger-full-access"
 DEFAULT_OWNER_NAME = "Bob Owner"
 DEFAULT_OWNER_PREFERRED_NAME = "Owner"
+DEFAULT_ASSISTANT_NAMES = ["Bob"]
 
 
 @dataclass
@@ -25,6 +26,7 @@ class DefaultSettings:
     allowed_actor_ids: List[str] = field(default_factory=list)
     owner_name: str = DEFAULT_OWNER_NAME
     owner_preferred_name: str = DEFAULT_OWNER_PREFERRED_NAME
+    assistant_names: List[str] = field(default_factory=lambda: list(DEFAULT_ASSISTANT_NAMES))
     codex_home_mode: str = CODEX_HOME_MODE_DEFAULT
     codex_sandbox_mode: Optional[str] = None
     codex_workspace_write_writable_roots: Optional[List[str]] = None
@@ -162,6 +164,7 @@ class SessionRecord:
     cwd: str
     owner_actor_id: str
     status: SessionStatus
+    assistant_name: str = DEFAULT_ASSISTANT_NAMES[0]
     waiting_message_ts: Optional[str] = None
     approval_request_id: Optional[str] = None
     approval_command_summary: Optional[str] = None

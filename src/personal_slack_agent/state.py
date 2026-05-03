@@ -4,7 +4,14 @@ import time
 from pathlib import Path
 from typing import Iterator, List, Optional, Union
 
-from .models import OutboundIntentRecord, SessionRecord, SessionStatus, TaskRecord, TaskStatus
+from .models import (
+    DEFAULT_ASSISTANT_NAMES,
+    OutboundIntentRecord,
+    SessionRecord,
+    SessionStatus,
+    TaskRecord,
+    TaskStatus,
+)
 
 
 class BobStateStore:
@@ -29,6 +36,7 @@ class BobStateStore:
                     cwd TEXT NOT NULL,
                     status TEXT NOT NULL,
                     owner_actor_id TEXT NOT NULL,
+                    assistant_name TEXT NOT NULL DEFAULT 'Bob',
                     waiting_message_ts TEXT,
                     approval_request_id TEXT,
                     approval_command_summary TEXT,
@@ -117,6 +125,7 @@ class BobStateStore:
         cwd: str,
         owner_actor_id: str,
         status: SessionStatus,
+        assistant_name: str = DEFAULT_ASSISTANT_NAMES[0],
         waiting_message_ts: Optional[str] = None,
         approval_request_id: Optional[str] = None,
         approval_command_summary: Optional[str] = None,
@@ -139,6 +148,7 @@ class BobStateStore:
                     cwd,
                     status,
                     owner_actor_id,
+                    assistant_name,
                     waiting_message_ts,
                     approval_request_id,
                     approval_command_summary,
@@ -149,11 +159,12 @@ class BobStateStore:
                     last_error,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (workspace_name, channel_name, thread_ts)
                 DO UPDATE SET
                     root_ts = excluded.root_ts,
                     status = excluded.status,
+                    assistant_name = excluded.assistant_name,
                     waiting_message_ts = excluded.waiting_message_ts,
                     approval_request_id = excluded.approval_request_id,
                     approval_command_summary = excluded.approval_command_summary,
@@ -176,6 +187,7 @@ class BobStateStore:
                     cwd,
                     status.value,
                     owner_actor_id,
+                    assistant_name,
                     waiting_message_ts,
                     approval_request_id,
                     approval_command_summary,
@@ -263,6 +275,32 @@ class BobStateStore:
                   AND thread_ts = ?
                 """,
                 (workspace_name, channel_name, thread_ts),
+            )
+
+    def update_assistant_name(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        assistant_name: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE sessions
+                SET assistant_name = ?,
+                    updated_at = ?
+                WHERE workspace_name = ?
+                  AND channel_name = ?
+                  AND thread_ts = ?
+                """,
+                (
+                    assistant_name,
+                    int(time.time()),
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                ),
             )
 
     def enqueue_task(
@@ -1150,6 +1188,10 @@ class BobStateStore:
             connection.execute(
                 "ALTER TABLE sessions ADD COLUMN owner_actor_id TEXT NOT NULL DEFAULT ''"
             )
+        if "assistant_name" not in columns:
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN assistant_name TEXT NOT NULL DEFAULT 'Bob'"
+            )
         if "approval_request_id" not in columns:
             connection.execute("ALTER TABLE sessions ADD COLUMN approval_request_id TEXT")
         if "approval_command_summary" not in columns:
@@ -1189,6 +1231,7 @@ class BobStateStore:
             cwd=row["cwd"],
             owner_actor_id=row["owner_actor_id"],
             status=SessionStatus(row["status"]),
+            assistant_name=row["assistant_name"] or DEFAULT_ASSISTANT_NAMES[0],
             waiting_message_ts=row["waiting_message_ts"],
             approval_request_id=row["approval_request_id"],
             approval_command_summary=row["approval_command_summary"],

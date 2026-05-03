@@ -279,6 +279,44 @@ def test_new_root_message_creates_session_and_posts_start_status(fake_environmen
     assert runner.new_session_calls[0]["workspace_write_writable_roots"] is None
 
 
+def test_new_root_message_uses_configured_alias_casing_in_replies(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.assistant_names = ["Bob", "Bobby"]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="bObBy, hi there",
+    )
+
+    thread_posts = browser.thread_posts["1743461000.000001"]
+    assert thread_posts[0].startswith("_*Bobby is working on it")
+    assert thread_posts[1] == "_*Bobby :white_check_mark::*_ Final answer"
+    assert len(runner.new_session_calls) == 1
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
+    assert record is not None
+    assert record.assistant_name == "Bobby"
+
+
+def test_new_root_message_does_not_trigger_on_partial_alias_boundary(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.assistant_names = ["Bob"]
+
+    orchestrator.handle_new_root_message(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        message_ts="1743461000.000001",
+        author_actor_id="U123",
+        text="bobcat run tests",
+    )
+
+    assert browser.thread_posts == {}
+    assert store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001") is None
+    assert runner.new_session_calls == []
+
+
 def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_environment):
     orchestrator, _browser, _store, runner = fake_environment
 
@@ -297,6 +335,7 @@ def test_new_root_message_wraps_prompt_with_owner_only_memory_policy(fake_enviro
     assert "checking work status" in prompt
     assert "approved Slack channels" in prompt
     assert "always use `Bob`" in prompt
+    assert "Accepted Slack call signs: Bob" in prompt
     assert "Do not tell the user to use `Codex` as the default name" in prompt
     assert "channel: bob_private_channel" in prompt
     assert "persistent_memory_mode: owner_only" in prompt
@@ -885,6 +924,38 @@ def test_bob_close_marks_session_closed_without_resuming(fake_environment):
     assert record.status is SessionStatus.CLOSED_MANUAL
     assert runner.resume_calls == []
     assert "closed" in browser.thread_posts["1743461000.000001"][-1].lower()
+
+
+def test_alias_close_marks_session_closed_and_uses_configured_alias_casing(fake_environment):
+    orchestrator, browser, store, runner = fake_environment
+    orchestrator.config.defaults.assistant_names = ["Bob", "Bobby"]
+    store.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        root_ts="1743461000.000001",
+        codex_session_id="session-123",
+        cwd="/tmp/project",
+        owner_actor_id="U123",
+        status=SessionStatus.WAITING_FOR_INPUT,
+        assistant_name="Bob",
+        waiting_message_ts="1743461001.000001",
+    )
+
+    orchestrator.handle_thread_reply(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="1743461000.000001",
+        message_ts="1743461010.000001",
+        author_actor_id="U123",
+        text="close bObBy",
+    )
+
+    record = store.get_by_thread("bob_company", "bob_private_channel", "1743461000.000001")
+    assert record is not None
+    assert record.status is SessionStatus.CLOSED_MANUAL
+    assert runner.resume_calls == []
+    assert browser.thread_posts["1743461000.000001"][-1].startswith("_*Bobby :white_check_mark::*_")
 
 
 def test_post_failure_marks_session_failed_instead_of_leaving_it_running(fake_environment):

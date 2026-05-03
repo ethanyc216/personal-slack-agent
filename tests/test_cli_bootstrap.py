@@ -1,13 +1,36 @@
 import pytest
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
+    import tomli as tomllib  # type: ignore[no-redef]
 
 from personal_slack_agent.cli import ctl as ctl_module
 from personal_slack_agent.cli.agent import build_parser as build_agent_parser
 from personal_slack_agent.cli.agent import main as agent_main
 from personal_slack_agent.cli.ctl import build_parser as build_ctl_parser
 from personal_slack_agent.cli.ctl import main as ctl_main
+from personal_slack_agent.cli.init_cmd import build_parser as build_init_parser
 from personal_slack_agent.cli.wrapper import build_parser as build_wrapper_parser
 from personal_slack_agent.cli.wrapper import main as wrapper_main
 from personal_slack_agent.paths import default_config_file
+
+
+def test_console_script_names_remain_fixed_bob_commands():
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["scripts"] == {
+        "bob-agent": "personal_slack_agent.cli:agent_main",
+        "bob": "personal_slack_agent.cli:wrapper_main",
+        "bobctl": "personal_slack_agent.cli:ctl_main",
+        "bob-init": "personal_slack_agent.cli:init_main",
+    }
+    assert build_wrapper_parser().prog == "bob"
+    assert build_agent_parser().prog == "bob-agent"
+    assert build_ctl_parser().prog == "bobctl"
+    assert build_init_parser().prog == "bob-init"
 
 
 def test_bobctl_requires_a_subcommand():
@@ -200,6 +223,92 @@ def test_wrapper_uses_workspace_channel_default_terminal_flag_when_not_explicit(
     )
 
     assert wrapper_main(["hello"]) == 0
+
+
+def test_wrapper_prefixes_with_first_configured_assistant_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(project_dir),
+                'allowed_actor_ids = ["U123"]',
+                'assistant_names = ["Ada", "Bob"]',
+                "",
+                "[[workspaces]]",
+                'name = "bob_company"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "bob_channel"',
+                'persistent_memory_mode = "disabled"',
+                "post_terminal_threads_here = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {}
+
+    def fake_run_smoke_test(**kwargs):
+        calls.update(kwargs)
+        return {
+            "thread_ts": "1775718000.000001",
+            "session_id": "session-123",
+            "final_message": "done",
+        }
+
+    monkeypatch.setattr("personal_slack_agent.cli.wrapper._run_smoke_test", fake_run_smoke_test)
+
+    assert wrapper_main(["hello"]) == 0
+
+    assert calls["text"] == "Ada, hello"
+
+
+def test_wrapper_preserves_explicit_configured_assistant_alias(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[defaults]",
+                'default_cwd = "{0}"'.format(project_dir),
+                'allowed_actor_ids = ["U123"]',
+                'assistant_names = ["Ada", "Bob"]',
+                "",
+                "[[workspaces]]",
+                'name = "bob_company"',
+                "",
+                "[[workspaces.channels]]",
+                'name = "bob_channel"',
+                'persistent_memory_mode = "disabled"',
+                "post_terminal_threads_here = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {}
+
+    def fake_run_smoke_test(**kwargs):
+        calls.update(kwargs)
+        return {
+            "thread_ts": "1775718000.000001",
+            "session_id": "session-123",
+            "final_message": "done",
+        }
+
+    monkeypatch.setattr("personal_slack_agent.cli.wrapper._run_smoke_test", fake_run_smoke_test)
+
+    assert wrapper_main(["bOB", "please", "help"]) == 0
+
+    assert calls["text"] == "bOB please help"
 
 
 def test_agent_default_config_path_is_expanded(tmp_path, monkeypatch):

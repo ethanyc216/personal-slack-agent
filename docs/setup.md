@@ -152,7 +152,7 @@ bobctl tail-log --lines 50
 
 ## 7. Test from Slack
 
-In your configured channel, send:
+In your configured channel, send a message that starts with a configured callsign:
 
 ```text
 Bob, test
@@ -162,6 +162,9 @@ Bob should create a thread and reply with:
 
 - working: `_*Bob is working on it :arrows_counterclockwise::*_ ...`
 - done: `_*Bob :white_check_mark::*_ ...`
+
+Changing `defaults.assistant_names` only changes Slack-facing callsigns and reply labels.
+The local command names remain `bob`, `bobctl`, `bob-agent`, and `bob-init`.
 
 If you want terminal-originated Bob requests without specifying the channel each time, mark exactly one channel with:
 
