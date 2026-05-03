@@ -32,9 +32,11 @@ def test_manual_close_request_accepts_each_alias_in_both_orders():
     assert not is_manual_close_request("close bobcat", ["Bob"])
 
 
-def test_assistant_label_from_text_prefers_exact_alias_then_fallback():
-    assert assistant_label_from_text("bObBy run tests", ["Bob", "Bobby"], "Bob") == "bObBy"
+def test_assistant_label_from_text_prefers_configured_alias_then_fallback():
+    assert assistant_label_from_text("bOb hi", ["Bob"], "Bob") == "Bob"
+    assert assistant_label_from_text("bObBy run tests", ["Bob", "Bobby"], "Bob") == "Bobby"
     assert assistant_label_from_text("continue", ["Bob", "Bobby"], "Bobby") == "Bobby"
+    assert assistant_label_from_text("continue", ["Bob", "Bobby"], "bObBy") == "Bobby"
 
 
 def test_normalize_assistant_names_defaults_empty_and_rejects_duplicates():

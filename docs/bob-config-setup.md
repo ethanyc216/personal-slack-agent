@@ -69,7 +69,7 @@ Common fields:
 - `assistant_names`
   Optional list of Slack callsigns that can invoke Bob. If omitted or empty, Bob uses `["Bob"]`.
   Matching is case-insensitive and boundary-aware, so `bobcat` does not invoke `Bob`.
-  Bob replies using the exact alias typed by the user for that interaction. For example:
+  Bob replies using the configured spelling of the matched alias. For example, `bOb` replies as `Bob`.
 
   ```toml
   assistant_names = ["Bob", "Bobby", "Copilot"]

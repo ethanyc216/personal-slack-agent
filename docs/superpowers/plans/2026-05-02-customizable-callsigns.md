@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add configurable Slack callsigns and make Bob reply using the exact alias typed by the user.
+**Goal:** Add configurable Slack callsigns and make Bob reply using the configured spelling of the matched alias.
 
 **Architecture:** Add a focused callsign parser module, extend defaults config and session state with assistant names/current alias, then route orchestrator and watcher matching through the parser. Keep database migration additive and preserve default `Bob` behavior.
 
@@ -46,7 +46,7 @@
 - Modify: `src/personal_slack_agent/orchestrator.py`
 - Test: `tests/test_orchestrator.py`
 
-- [x] Write failing orchestrator tests for alias-triggered root work, exact-casing labels, boundary non-match, alias close commands, and prompt identity.
+- [x] Write failing orchestrator tests for alias-triggered root work, configured-casing labels, boundary non-match, alias close commands, and prompt identity.
 - [x] Replace hardcoded root matching, prefix stripping, close parsing, labels, and prompt identity with callsign helpers.
 - [x] Store explicit aliases on session start and update the session alias on explicit thread replies.
 - [x] Pass the selected alias into result processing and lifecycle messages.

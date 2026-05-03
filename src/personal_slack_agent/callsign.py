@@ -76,15 +76,15 @@ def assistant_label_from_text(
 ) -> str:
     match = match_assistant_invocation(text, assistant_names)
     if match is not None:
-        return match.alias
+        return match.configured_name
     stripped = text.strip()
     if stripped.casefold().startswith("close"):
         next_char = stripped[5:6]
         if not next_char or not _is_name_continuation(next_char):
             close_match = match_assistant_invocation(stripped[5:].strip(), assistant_names)
             if close_match is not None and not close_match.remainder:
-                return close_match.alias
-    return fallback
+                return close_match.configured_name
+    return _canonicalize_assistant_label(fallback, assistant_names)
 
 
 def is_manual_close_request(text: str, assistant_names: list[str]) -> bool:
@@ -109,3 +109,10 @@ def _is_name_continuation(char: str) -> bool:
 
 def _effective_assistant_names(assistant_names: list[str]) -> list[str]:
     return assistant_names or list(DEFAULT_ASSISTANT_NAMES)
+
+
+def _canonicalize_assistant_label(label: str, assistant_names: list[str]) -> str:
+    for configured_name in _effective_assistant_names(assistant_names):
+        if label.casefold() == configured_name.casefold():
+            return configured_name
+    return label

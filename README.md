@@ -218,7 +218,7 @@ persistent_memory_mode = "disabled"
 
 `watcher.bob_ultimate_mode = false` preserves the current configured-channel Bob behavior. Set `watcher.bob_ultimate_mode = true` to allow explicit configured-callsign invocation from any accessible public/private channel, DM, or group DM, still restricted by `allowed_actor_ids`; in that mode Bob appends working and final status into the invoking message instead of posting a separate Bob reply for that invocation.
 
-`defaults.assistant_names` controls Slack-facing callsigns. If omitted or set to an empty list, Bob uses the legacy callsign `Bob`. You can configure aliases such as `["Bob", "Bobby", "Copilot"]`; matching is case-insensitive with a name boundary, and Bob replies using the exact alias typed in that Slack message.
+`defaults.assistant_names` controls Slack-facing callsigns. If omitted or set to an empty list, Bob uses the legacy callsign `Bob`. You can configure aliases such as `["Bob", "Bobby", "Copilot"]`; matching is case-insensitive with a name boundary, and Bob replies using the configured spelling of the matched alias.
 
 The operational command names are fixed and do not change with Slack callsigns: `bob`, `bobctl`, `bob-agent`, and `bob-init` remain the commands.
 

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Allow Bob to be invoked by any configured Slack callsign while preserving the exact alias the user typed in Bob's Slack replies for that interaction.
+Allow Bob to be invoked by any configured Slack callsign while using the configured alias spelling in Bob's Slack replies for that interaction.
 
 ## Configuration
 
@@ -25,7 +25,7 @@ Manual close commands support both existing shapes for every alias: `<alias> clo
 
 ## Reply Identity
 
-Bob's status and lifecycle messages use the exact alias spelling and casing from the triggering Slack message whenever a callsign is present. For example, `bObBy, run tests` yields `_*bObBy is working on it...*_` and `_*bObBy :white_check_mark::*_ ...`.
+Bob's status and lifecycle messages use the configured spelling and casing of the matched callsign whenever a callsign is present. For example, with `assistant_names = ["Bob", "Bobby"]`, `bObBy, run tests` yields `_*Bobby is working on it...*_` and `_*Bobby :white_check_mark::*_ ...`.
 
 Sessions store the most recent explicit alias. Thread replies that do not contain a callsign use the stored alias, which keeps waiting prompts, reminders, approvals, resumes, and auto-close messages consistent with the user's last explicit invocation.
 
