@@ -4,16 +4,21 @@ This guide walks through a first-time setup of Bob on a new machine.
 
 ## 1. Install the package
 
+For normal use, install the public package from PyPI:
+
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -U pip
-.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m pip install personal-slack-agent
 ```
+
+For repo checkout development, use the editable install flow in
+[docs/development.md](development.md).
 
 ## 2. Run the setup wizard
 
 ```bash
-bob-init
+.venv/bin/bob-init
 ```
 
 The wizard prompts for the owner identity, Slack workspace URL, channel, default working directory,
@@ -115,7 +120,7 @@ workspace or channel needs a different setup:
 You can inspect the current file with:
 
 ```bash
-bobctl show-config --config ~/.config/personal-slack-agent/bob.toml
+.venv/bin/bobctl show-config --config ~/.config/personal-slack-agent/bob.toml
 ```
 
 ## 5. Discover Slack API auth automatically
@@ -123,7 +128,7 @@ bobctl show-config --config ~/.config/personal-slack-agent/bob.toml
 If you already have the Slack workspace open in the debuggable Chrome session:
 
 ```bash
-bob-init --discover-slack-auth --workspace my-workspace
+.venv/bin/bob-init --discover-slack-auth --workspace my-workspace
 ```
 
 That command:
@@ -135,7 +140,7 @@ That command:
 ## 6. Start Bob
 
 ```bash
-bobctl start --config ~/.config/personal-slack-agent/bob.toml --poll-interval-seconds 10
+.venv/bin/bobctl start --config ~/.config/personal-slack-agent/bob.toml --poll-interval-seconds 10
 ```
 
 `--poll-interval-seconds` is Bob's idle cycle / recovery interval. Normal message detection is websocket-driven; this interval mainly controls reconnect recovery cadence and stop-file responsiveness.
@@ -143,11 +148,11 @@ bobctl start --config ~/.config/personal-slack-agent/bob.toml --poll-interval-se
 Check it:
 
 ```bash
-bob --workspace my-workspace --channel my-private-channel "summarize this repo"
-bobctl status
-bobctl doctor
-bobctl smoke-test --workspace my-workspace --channel my-private-channel
-bobctl tail-log --lines 50
+.venv/bin/bob --workspace my-workspace --channel my-private-channel "summarize this repo"
+.venv/bin/bobctl status
+.venv/bin/bobctl doctor
+.venv/bin/bobctl smoke-test --workspace my-workspace --channel my-private-channel
+.venv/bin/bobctl tail-log --lines 50
 ```
 
 ## 7. Test from Slack
@@ -177,7 +182,7 @@ post_terminal_threads_here = true
 Then you can run:
 
 ```bash
-bob "summarize this repo"
+.venv/bin/bob "summarize this repo"
 ```
 
 Recommended validation sequence:
