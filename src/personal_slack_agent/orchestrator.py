@@ -14,6 +14,7 @@ from .generated_files import GeneratedFile, extract_generated_files, normalize_s
 from .models import (
     AppConfig,
     ChannelConfig,
+    DEFAULT_ASSISTANT_NAMES,
     OutboundIntentRecord,
     SessionRecord,
     SessionStatus,
@@ -2162,10 +2163,10 @@ class BobOrchestrator:
         return assistant_label_from_text(text, self._assistant_names(), fallback)
 
     def _assistant_names(self) -> List[str]:
-        return list(self.config.defaults.assistant_names)
+        return list(self.config.defaults.assistant_names or DEFAULT_ASSISTANT_NAMES)
 
     def _default_assistant_name(self) -> str:
-        return self.config.defaults.assistant_names[0]
+        return self._assistant_names()[0]
 
     def _extract_approval_request_id(self, wait_message: Optional[str]) -> Optional[str]:
         if not wait_message:

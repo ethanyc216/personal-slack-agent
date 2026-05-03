@@ -20,7 +20,7 @@
 - Test: `tests/test_callsign.py`
 
 - [x] Write failing parser tests for exact alias capture, case-insensitive matching, prefix stripping, close commands, and `bobcat` non-match.
-- [x] Write failing config tests for default `["Bob"]`, configured aliases, duplicate rejection, and empty-list rejection.
+- [x] Write failing config tests for default `["Bob"]`, configured aliases, duplicate rejection, and empty-list fallback.
 - [x] Add `DEFAULT_ASSISTANT_NAMES` and `assistant_names` to `DefaultSettings`.
 - [x] Parse and dump `assistant_names`.
 - [x] Implement `callsign.py` helpers.
@@ -66,6 +66,6 @@
 
 - [x] Write failing ultimate-mode coverage for non-`bob` aliases and duplicate-safe routing.
 - [x] Search configured callsigns in ultimate mode and route only parser-confirmed invocations.
-- [x] Make the terminal wrapper use the first configured callsign when prefixing a prompt.
+- [x] Keep command names fixed while letting the terminal wrapper use the first effective Slack callsign when prefixing a prompt.
 - [x] Document `assistant_names`, examples, and terminal command distinction.
 - [x] Run focused tests and full test suite.

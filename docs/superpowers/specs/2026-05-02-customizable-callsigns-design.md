@@ -15,7 +15,7 @@ owner_preferred_name = "Yang"
 assistant_names = ["Bob", "Bobby", "Copilot"]
 ```
 
-The field is optional and defaults to `["Bob"]`, so existing configs continue to work unchanged. Values are stripped, case-insensitive duplicates are rejected, empty lists are rejected, and control characters are rejected. The first configured name is the fallback label when no alias can be inferred from a legacy session.
+The field is optional and defaults to `["Bob"]`, so existing configs continue to work unchanged. Values are stripped, case-insensitive duplicates are rejected, empty lists fall back to `["Bob"]`, and control characters are rejected. The first effective configured name is the fallback label when no alias can be inferred from a legacy session.
 
 ## Invocation Semantics
 
@@ -39,4 +39,4 @@ Ultimate-mode search must search for all configured callsigns and use the same p
 
 ## Non-Goals
 
-The terminal executable remains `bob`. This change customizes Slack-facing callsigns and reply identity, not the package name, process name, CLI command name, or persisted database filename.
+The command names remain fixed: `bob`, `bobctl`, `bob-agent`, and `bob-init`. This change customizes Slack-facing callsigns and reply identity, not the package name, process name, CLI command name, or persisted database filename.

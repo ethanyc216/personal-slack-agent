@@ -5,6 +5,7 @@ import sys
 
 from ..callsign import match_assistant_invocation
 from ..config import load_config
+from ..models import DEFAULT_ASSISTANT_NAMES
 from .ctl import _resolve_smoke_target, _run_smoke_test, build_runtime_paths
 
 
@@ -80,9 +81,10 @@ def _resolve_terminal_target(config, workspace_name: str | None, channel_name: s
 
 def _ensure_assistant_prefix(prompt: str, assistant_names: list[str]) -> str:
     stripped = prompt.strip()
-    if match_assistant_invocation(stripped, assistant_names) is not None:
+    effective_names = assistant_names or DEFAULT_ASSISTANT_NAMES
+    if match_assistant_invocation(stripped, effective_names) is not None:
         return stripped
-    return "{0}, {1}".format(assistant_names[0], stripped)
+    return "{0}, {1}".format(effective_names[0], stripped)
 
 
 if __name__ == "__main__":

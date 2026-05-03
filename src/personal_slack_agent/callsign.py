@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import unicodedata
 
+from .models import DEFAULT_ASSISTANT_NAMES
+
 
 @dataclass(frozen=True)
 class AssistantInvocation:
@@ -13,7 +15,7 @@ class AssistantInvocation:
 
 def normalize_assistant_names(names: list[str]) -> list[str]:
     if not names:
-        raise ValueError("assistant names must not be empty")
+        return list(DEFAULT_ASSISTANT_NAMES)
     normalized = []
     seen = set()
     for raw_name in names:
@@ -37,7 +39,11 @@ def match_assistant_invocation(
     stripped = text.strip()
     if not stripped:
         return None
-    for configured_name in sorted(assistant_names, key=len, reverse=True):
+    for configured_name in sorted(
+        _effective_assistant_names(assistant_names),
+        key=len,
+        reverse=True,
+    ):
         prefix = stripped[: len(configured_name)]
         if prefix.casefold() != configured_name.casefold():
             continue
@@ -99,3 +105,7 @@ def is_manual_close_request(text: str, assistant_names: list[str]) -> bool:
 
 def _is_name_continuation(char: str) -> bool:
     return char.isalnum() or char in {"_", "-"}
+
+
+def _effective_assistant_names(assistant_names: list[str]) -> list[str]:
+    return assistant_names or list(DEFAULT_ASSISTANT_NAMES)

@@ -9,7 +9,7 @@ from typing import Callable, Deque, Dict, Optional, Set, Tuple
 from ..callsign import match_assistant_invocation
 from ..config import runtime_channel_name, slack_channel_id_from_runtime_channel_name
 from ..generated_files import normalize_slack_markdown
-from ..models import AppConfig, SessionStatus
+from ..models import AppConfig, DEFAULT_ASSISTANT_NAMES, SessionStatus
 from ..state import BobStateStore
 from .browser import SlackBrowserAdapter, SlackRootMessage, SlackThreadReplyMessage
 from .events import SlackRealtimeEvent
@@ -621,7 +621,7 @@ class SlackWatcher:
         if self._stop_requested():
             return
         messages_by_key = {}
-        for assistant_name in self.config.defaults.assistant_names:
+        for assistant_name in self._configured_assistant_names():
             if self._stop_requested():
                 return
             try:
@@ -729,14 +729,18 @@ class SlackWatcher:
     def _should_route_ultimate_invocation(self, text: str) -> bool:
         return (
             self.config.watcher.bob_ultimate_mode
-            and match_assistant_invocation(text, self.config.defaults.assistant_names) is not None
+            and match_assistant_invocation(text, self._configured_assistant_names())
+            is not None
         )
 
     def _assistant_names_for_record(self, record) -> List[str]:
-        names = list(self.config.defaults.assistant_names)
+        names = self._configured_assistant_names()
         if record.assistant_name.casefold() not in {name.casefold() for name in names}:
             names.append(record.assistant_name)
         return names
+
+    def _configured_assistant_names(self) -> List[str]:
+        return list(self.config.defaults.assistant_names or DEFAULT_ASSISTANT_NAMES)
 
     def _sessions_for_periodic_thread_reconcile(
         self,

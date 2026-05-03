@@ -67,7 +67,7 @@ Common fields:
   The owner's preferred name for Bob's role prompt.
 
 - `assistant_names`
-  Optional list of Slack callsigns that can invoke Bob. The default is `["Bob"]`.
+  Optional list of Slack callsigns that can invoke Bob. If omitted or empty, Bob uses `["Bob"]`.
   Matching is case-insensitive and boundary-aware, so `bobcat` does not invoke `Bob`.
   Bob replies using the exact alias typed by the user for that interaction. For example:
 
@@ -75,7 +75,9 @@ Common fields:
   assistant_names = ["Bob", "Bobby", "Copilot"]
   ```
 
-  The terminal executable remains `bob`; terminal requests use the first configured callsign when they need to prefix a prompt.
+  The command names are fixed: `bob`, `bobctl`, `bob-agent`, and `bob-init` do not change
+  with this setting. The `bob` terminal wrapper may prefix the Slack message with the first
+  effective callsign when the prompt does not already start with one.
 
 Keep committed examples anonymized. Put real owner values only in local config files that are not committed.
 
@@ -203,6 +205,19 @@ Common fields:
 
 - `allowed_actor_ids`
   Restricts who may invoke Bob in those channels. Empty means no restriction.
+  Values are Slack member/user IDs such as `U12345678`, not Slack handles or display names.
+
+  To find a person's Slack member/user ID:
+  1. Open the person's Slack profile in the target workspace.
+  2. Click `More` or the `...` menu.
+  3. Choose `Copy member ID`.
+  4. Paste that value into `allowed_actor_ids`.
+
+  Example:
+
+  ```toml
+  allowed_actor_ids = ["U12345678"]
+  ```
 
 - `default_cwd`
   Default working directory for Bob tasks in this workspace.
@@ -252,6 +267,11 @@ Common fields:
 
 - `persistent_memory_owner`
   Required when `persistent_memory_mode = "owner_only"`.
+
+- `allowed_actor_ids`
+  Optional per-channel override for who may invoke Bob in this channel.
+  Use Slack member/user IDs copied from the user's Slack profile, for example `["U12345678"]`.
+  Set `[]` to allow any actor who can post in that channel.
 
 - `slack_channel_id`
   Optional direct id seed for this specific channel.
@@ -348,5 +368,7 @@ Usually means Slack did not expose the channel in the rendered sidebar. Add `sla
 
 - [README.md](../README.md)
 - [docs/setup.md](setup.md)
+- [docs/how-it-works.md](how-it-works.md)
 - [docs/command-reference.md](command-reference.md)
+- [docs/publishing.md](publishing.md)
 - [config/bob.sample.toml](../config/bob.sample.toml)

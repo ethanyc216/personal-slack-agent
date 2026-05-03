@@ -94,7 +94,7 @@ def test_defaults_assistant_names_load_and_dump_round_trip(tmp_path):
     assert round_tripped.defaults.assistant_names == ["Bob", "Bobby", "Copilot"]
 
 
-def test_defaults_assistant_names_reject_empty_list(tmp_path):
+def test_defaults_assistant_names_empty_list_falls_back_to_bob(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
 
@@ -109,8 +109,9 @@ def test_defaults_assistant_names_reject_empty_list(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="defaults.assistant_names"):
-        load_config(config_path)
+    config = load_config(config_path)
+
+    assert config.defaults.assistant_names == ["Bob"]
 
 
 def test_defaults_assistant_names_reject_case_insensitive_duplicates(tmp_path):

@@ -1,13 +1,36 @@
 import pytest
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
+    import tomli as tomllib  # type: ignore[no-redef]
 
 from personal_slack_agent.cli import ctl as ctl_module
 from personal_slack_agent.cli.agent import build_parser as build_agent_parser
 from personal_slack_agent.cli.agent import main as agent_main
 from personal_slack_agent.cli.ctl import build_parser as build_ctl_parser
 from personal_slack_agent.cli.ctl import main as ctl_main
+from personal_slack_agent.cli.init_cmd import build_parser as build_init_parser
 from personal_slack_agent.cli.wrapper import build_parser as build_wrapper_parser
 from personal_slack_agent.cli.wrapper import main as wrapper_main
 from personal_slack_agent.paths import default_config_file
+
+
+def test_console_script_names_remain_fixed_bob_commands():
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["scripts"] == {
+        "bob-agent": "personal_slack_agent.cli:agent_main",
+        "bob": "personal_slack_agent.cli:wrapper_main",
+        "bobctl": "personal_slack_agent.cli:ctl_main",
+        "bob-init": "personal_slack_agent.cli:init_main",
+    }
+    assert build_wrapper_parser().prog == "bob"
+    assert build_agent_parser().prog == "bob-agent"
+    assert build_ctl_parser().prog == "bobctl"
+    assert build_init_parser().prog == "bob-init"
 
 
 def test_bobctl_requires_a_subcommand():

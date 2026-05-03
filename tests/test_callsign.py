@@ -1,3 +1,5 @@
+import pytest
+
 from personal_slack_agent.callsign import (
     assistant_label_from_text,
     is_manual_close_request,
@@ -35,5 +37,8 @@ def test_assistant_label_from_text_prefers_exact_alias_then_fallback():
     assert assistant_label_from_text("continue", ["Bob", "Bobby"], "Bobby") == "Bobby"
 
 
-def test_normalize_assistant_names_rejects_empty_and_duplicate_values():
+def test_normalize_assistant_names_defaults_empty_and_rejects_duplicates():
+    assert normalize_assistant_names([]) == ["Bob"]
     assert normalize_assistant_names([" Bob ", "Bobby"]) == ["Bob", "Bobby"]
+    with pytest.raises(ValueError, match="duplicates"):
+        normalize_assistant_names(["Bob", "bob"])

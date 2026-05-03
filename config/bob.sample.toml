@@ -1,7 +1,7 @@
 [defaults]
 owner_name = "Bob Owner"
 owner_preferred_name = "Owner"
-# Optional Slack callsigns. Bob replies using the exact alias typed by the user.
+# Optional Slack callsigns. Empty or omitted falls back to ["Bob"].
 assistant_names = ["Bob"]
 
 [browser]

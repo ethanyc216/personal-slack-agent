@@ -11,6 +11,8 @@ The packaged commands are declared in `pyproject.toml`:
 | `bob-init` | `personal_slack_agent.cli:init_main` | Interactively generate or update local Bob configuration. |
 | `bobctl` | `personal_slack_agent.cli:ctl_main` | Start, stop, inspect, and diagnose the local Bob process. |
 
+These command names stay fixed even when `defaults.assistant_names` customizes Slack-facing callsigns.
+
 Use `.venv/bin/<command>` from a repo checkout, or `<command>` directly when the package is installed on your `PATH`.
 
 ## Shared Files
@@ -49,7 +51,7 @@ What it does:
 
 1. Loads `bob.toml`.
 2. Resolves the target workspace/channel.
-3. Ensures the prompt starts with a configured callsign by prefixing the first `defaults.assistant_names` value when needed.
+3. Posts through the fixed `bob` command name while ensuring the Slack message starts with an effective callsign.
 4. Posts a real root Bob message into Slack.
 5. Waits for Bob to finish the backing Codex session.
 6. Prints the Slack thread timestamp, Codex session id, and final Bob reply.
@@ -243,6 +245,8 @@ Because this is a personal shell alias, it may not exist in non-interactive shel
 ## Related Docs
 
 - [Setup guide](setup.md)
+- [How Bob works](how-it-works.md)
 - [Bob config setup](bob-config-setup.md)
+- [Publishing guide](publishing.md)
 - [Sample config](../config/bob.sample.toml)
 - [README](../README.md)
