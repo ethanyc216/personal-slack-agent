@@ -1,9 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
   workflow_dispatch:
 
@@ -45,7 +42,6 @@ jobs:
     name: Build distributions
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
 
     steps:
       - name: Check out repository
@@ -72,103 +68,3 @@ jobs:
           name: python-package-distributions
           path: dist/
           if-no-files-found: error
-
-  release-main:
-    name: Tag and release main
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: write
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-
-      - name: Generate release version
-        id: version
-        run: |
-          base_version="$(python - <<'PY'
-          import tomllib
-          from pathlib import Path
-
-          with Path("pyproject.toml").open("rb") as pyproject:
-              print(tomllib.load(pyproject)["project"]["version"])
-          PY
-          )"
-          auto_version="${base_version%.*}.${GITHUB_RUN_NUMBER}"
-          echo "version=${auto_version}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${auto_version}" >> "$GITHUB_OUTPUT"
-
-      - name: Apply generated package version
-        env:
-          AUTO_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          python - <<'PY'
-          import os
-          import re
-          from pathlib import Path
-
-          pyproject_path = Path("pyproject.toml")
-          pyproject = pyproject_path.read_text(encoding="utf-8")
-          updated = re.sub(
-              r'(?m)^version = "[^"]+"$',
-              f'version = "{os.environ["AUTO_VERSION"]}"',
-              pyproject,
-              count=1,
-          )
-          if updated == pyproject:
-              raise SystemExit("Could not find project version in pyproject.toml")
-          pyproject_path.write_text(updated, encoding="utf-8")
-          PY
-
-      - name: Install build frontend
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install build
-
-      - name: Build source and wheel distributions
-        run: python -m build
-
-      - name: Upload distribution artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-package-distributions-${{ steps.version.outputs.tag }}
-          path: dist/
-          if-no-files-found: error
-
-      - name: Create release tag
-        env:
-          TAG_NAME: ${{ steps.version.outputs.tag }}
-        run: |
-          existing_tag_sha="$(git ls-remote --tags origin "refs/tags/${TAG_NAME}" | awk '{print $1}')"
-          if [ -n "$existing_tag_sha" ]; then
-            if [ "$existing_tag_sha" != "$GITHUB_SHA" ]; then
-              echo "Tag ${TAG_NAME} already points to ${existing_tag_sha}, not ${GITHUB_SHA}" >&2
-              exit 1
-            fi
-            echo "Tag ${TAG_NAME} already exists for this commit."
-          else
-            git tag "$TAG_NAME"
-            git push origin "$TAG_NAME"
-          fi
-
-      - name: Create or update GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ steps.version.outputs.tag }}
-        run: |
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" dist/* --clobber
-          else
-            gh release create "$TAG_NAME" dist/* --target "$GITHUB_SHA" --title "$TAG_NAME" --generate-notes
-          fi

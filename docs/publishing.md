@@ -6,15 +6,18 @@ This page captures the current release and package-publishing setup for
 ## Current State
 
 - GitHub CI is configured in `.github/workflows/ci.yml`.
-- Pushes to `main` run the test matrix, generate a package version, create a
-  Git tag, create a GitHub Release, and upload wheel plus source distribution
-  artifacts.
-- After the GitHub Release job succeeds, `.github/workflows/pypi.yml` is wired
+- Pull requests run `.github/workflows/ci.yml` as a verification gate only.
+  That workflow runs the test matrix and builds distributions, but it does not
+  create release tags.
+- Pushes to `main` run `.github/workflows/release.yml`, which runs the test
+  matrix, generates the next package version, creates a Git tag, creates a
+  GitHub Release, and uploads wheel plus source distribution artifacts.
+- After the Release workflow succeeds, `.github/workflows/pypi.yml` is wired
   to publish the same wheel and source distribution artifacts to PyPI from the
   `pypi` environment.
 - GitHub Release versions are generated from the base `pyproject.toml` version
-  and the CI workflow run number. For example, base version `0.1.0` can produce
-  release `v0.1.7`.
+  and existing Git tags with the same major/minor prefix. For example, with
+  base version `0.1.0` and latest tag `v0.1.15`, the next release is `v0.1.16`.
 - TestPyPI publishing is configured in `.github/workflows/testpypi.yml`.
 - TestPyPI publishing is manual-only through `workflow_dispatch`.
 - PyPI publishing is configured in `.github/workflows/pypi.yml` for automatic
@@ -22,9 +25,9 @@ This page captures the current release and package-publishing setup for
 - Real PyPI publishing requires account-side PyPI Trusted Publisher setup before
   the PyPI workflow can publish successfully.
 
-The committed `pyproject.toml` version remains the base version. The workflows
-temporarily rewrite that version inside GitHub Actions before building package
-artifacts.
+The committed `pyproject.toml` version remains the base version. Release and
+publishing workflows temporarily rewrite that version inside GitHub Actions
+before building package artifacts.
 
 ## Public Exposure
 
@@ -64,8 +67,11 @@ python3 -m venv .venv
 
 ## Version Alignment
 
-The GitHub Release workflow and the TestPyPI workflow currently generate
-versions independently unless a TestPyPI version is supplied manually.
+The GitHub Release workflow derives the next package version from existing
+matching tags. Pull request runs do not consume release numbers.
+
+The TestPyPI workflow still generates versions independently unless a TestPyPI
+version is supplied manually.
 
 For a smoke test where exact version alignment does not matter, run
 `Publish to TestPyPI` and leave the `version` input blank. The workflow will
@@ -113,7 +119,8 @@ Keep GitHub Releases automatic and TestPyPI manual.
 Flow:
 
 ```text
-main push -> CI -> GitHub Release
+pull request -> CI verification
+main push -> Release workflow -> GitHub Release
 manual workflow -> TestPyPI publish
 no workflow -> PyPI publish
 ```
@@ -128,7 +135,8 @@ Publish each generated GitHub Release to TestPyPI automatically.
 Flow:
 
 ```text
-main push -> CI -> GitHub Release -> TestPyPI publish
+pull request -> CI verification
+main push -> Release workflow -> GitHub Release -> TestPyPI publish
 no workflow -> PyPI publish
 ```
 
@@ -146,7 +154,8 @@ same version to real PyPI.
 Flow:
 
 ```text
-main push -> CI -> GitHub Release
+pull request -> CI verification
+main push -> Release workflow -> GitHub Release
 manual workflow -> TestPyPI publish
 manual workflow -> PyPI publish
 ```
@@ -170,7 +179,8 @@ Publish every generated GitHub Release directly to real PyPI.
 Flow:
 
 ```text
-main push -> CI -> GitHub Release -> PyPI publish
+pull request -> CI verification
+main push -> Release workflow -> GitHub Release -> PyPI publish
 ```
 
 This is the current configured path once PyPI Trusted Publisher setup is in
