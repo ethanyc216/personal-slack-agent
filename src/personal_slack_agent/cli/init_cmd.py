@@ -312,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
             slack_signin_url=config.browser.slack_signin_url,
             chrome_executable_path=config.browser.chrome_executable_path,
             browser_user_data_dir=config.browser.browser_user_data_dir,
+            reauth_state_path=default_state_dir() / "slack-reauth.json",
+            slack_reauth_cooldown_seconds=config.browser.slack_reauth_cooldown_seconds,
         )
         adapter.set_workspace_urls(
             {

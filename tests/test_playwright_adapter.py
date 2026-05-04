@@ -28,6 +28,7 @@ class FakePage:
         self.reload_calls = []
         self.handlers = {}
         self.closed = False
+        self.bring_to_front_calls = 0
 
     def goto(self, url: str, **kwargs) -> None:
         del kwargs
@@ -55,6 +56,38 @@ class FakePage:
 
     def close(self):
         self.closed = True
+
+    def bring_to_front(self):
+        self.bring_to_front_calls += 1
+
+
+class RedirectingFakePage(FakePage):
+    def __init__(self, redirect_url: str):
+        super().__init__()
+        self.redirect_url = redirect_url
+
+    def goto(self, url: str, **kwargs) -> None:
+        super().goto(url, **kwargs)
+        self.url = self.redirect_url
+
+
+class PollRedirectFakePage(FakePage):
+    def __init__(self, initial_url: str, redirect_url: str):
+        self._url = initial_url
+        self.redirect_url = redirect_url
+        self.url_reads = 0
+        super().__init__(initial_url)
+
+    @property
+    def url(self):
+        self.url_reads += 1
+        if self.url_reads >= 2:
+            self._url = self.redirect_url
+        return self._url
+
+    @url.setter
+    def url(self, value):
+        self._url = value
 
 
 class FakeContext:
@@ -212,6 +245,117 @@ def test_connect_cleans_up_failed_shared_browser_attach_before_retry():
     assert browser is second_playwright.chromium.browser
 
 
+def test_shared_browser_connect_recovers_when_cdp_has_no_page_targets(monkeypatch):
+    browser = FakeBrowser([FakeContext([])])
+    first_playwright = FakePlaywright(
+        FakeChromium(
+            browser=browser,
+            dedicated_context=FakeContext([]),
+        )
+    )
+    attempts = []
+
+    def connect_over_cdp(cdp_url: str, **kwargs):
+        attempts.append((cdp_url, kwargs))
+        if len(attempts) == 1:
+            raise PlaywrightError(
+                "Protocol error (Browser.setDownloadBehavior): "
+                "Browser context management is not supported."
+            )
+        return browser
+
+    first_playwright.chromium.connect_over_cdp = connect_over_cdp  # type: ignore[method-assign]
+    sync_obj = FakeSyncPlaywright(first_playwright)
+
+    def loader():
+        return lambda: sync_obj
+
+    requested_urls = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            del exc_type
+            del exc
+            del tb
+
+        def read(self):
+            return b'{"id":"blank-target"}'
+
+    def fake_urlopen(request, timeout):
+        requested_urls.append((request.full_url, request.get_method(), timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "personal_slack_agent.slack.playwright_adapter.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+        playwright_loader=loader,
+    )
+
+    connected = adapter.connect()
+
+    assert connected is browser
+    assert attempts == [
+        ("http://127.0.0.1:9222", {"timeout": 10000}),
+        ("http://127.0.0.1:9222", {"timeout": 10000}),
+    ]
+    assert requested_urls == [
+        ("http://127.0.0.1:9222/json/new?about:blank", "PUT", 2.0)
+    ]
+
+
+def test_shared_browser_closes_temporary_cdp_recovery_target_after_select(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        del params
+        shared_context.pages.append(FakePage(signin_url))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=tmp_path / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=60,
+    )
+    adapter._temporary_cdp_target_ids.append("blank-target")
+    adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    page = adapter.select_bob_tab(workspace_url)
+
+    assert page.url == signin_url
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": workspace_url,
+                "background": False,
+                "focus": False,
+            },
+        ),
+        ("Target.closeTarget", {"targetId": "blank-target"}),
+    ]
+
+
 def test_shared_browser_connects_over_cdp_and_reuses_matching_tab():
     matching_page = FakePage("https://example.enterprise.slack.com/client/T1/C1")
     shared_context = FakeContext([matching_page])
@@ -255,6 +399,7 @@ def test_shared_browser_creates_non_focused_workspace_target_when_missing():
         slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
         playwright_loader=loader,
     )
+    adapter._SIGNIN_REDIRECT_SETTLE_SECONDS = 0.01
 
     page = adapter.select_bob_tab("https://app.slack.com/client/T123/C123")
 
@@ -271,6 +416,588 @@ def test_shared_browser_creates_non_focused_workspace_target_when_missing():
         )
     ]
     assert browser.browser_cdp_session.detached is True
+
+
+def test_shared_browser_reuses_signin_redirect_without_fallback_tab(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        del params
+        shared_context.pages.append(FakePage(signin_url))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=tmp_path / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=60,
+    )
+    adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    page = adapter.select_bob_tab(workspace_url)
+
+    assert page.url == signin_url
+    assert page.bring_to_front_calls == 1
+    assert len(shared_context.pages) == 1
+    assert shared_context.new_page_calls == 0
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": workspace_url,
+                "background": False,
+                "focus": False,
+            },
+        )
+    ]
+
+
+def test_shared_browser_waits_for_workspace_target_signin_redirect(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    workspace_signin_url = (
+        "https://app.slack.com/workspace-signin?redir=%2Fgantry%2Fauth"
+    )
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        shared_context.pages.append(PollRedirectFakePage(params["url"], workspace_signin_url))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=tmp_path / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=60,
+    )
+    adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+    adapter._SIGNIN_REDIRECT_SETTLE_SECONDS = 0.1
+
+    page = adapter.select_bob_tab(workspace_url)
+
+    assert page.url == workspace_signin_url
+    assert page.bring_to_front_calls == 1
+    assert shared_context.new_page_calls == 0
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": workspace_url,
+                "background": False,
+                "focus": False,
+            },
+        )
+    ]
+
+
+def test_shared_browser_treats_app_workspace_signin_redirect_as_reauth(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_signin_url = (
+        "https://app.slack.com/workspace-signin?redir=%2Fgantry%2Fauth"
+    )
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        del params
+        shared_context.pages.append(FakePage(workspace_signin_url))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=tmp_path / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=60,
+    )
+    adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    first_page = adapter.select_bob_tab(workspace_url)
+    first_page.bring_to_front_calls = 0
+    second_page = adapter.select_bob_tab(workspace_url)
+
+    assert first_page.url == workspace_signin_url
+    assert second_page is first_page
+    assert first_page.bring_to_front_calls == 0
+    assert len(shared_context.pages) == 1
+    assert shared_context.new_page_calls == 0
+
+
+def test_shared_browser_closes_unclaimed_target_before_signin_fallback(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_signin_url = (
+        "https://app.slack.com/workspace-signin?redir=%2Fgantry%2Fauth"
+    )
+    workspace_url = "https://app.slack.com/client/T123/C123"
+
+    class RedirectingContext(FakeContext):
+        def new_page(self):
+            self.new_page_calls += 1
+            page = RedirectingFakePage(workspace_signin_url)
+            self.pages.append(page)
+            return page
+
+    shared_context = RedirectingContext([])
+    browser = FakeBrowser([shared_context])
+    browser.browser_cdp_session = FakeBrowserCDPSession()
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=tmp_path / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=60,
+    )
+    adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    page = adapter.select_bob_tab(workspace_url)
+
+    assert page.url == workspace_signin_url
+    assert page.bring_to_front_calls == 1
+    assert shared_context.new_page_calls == 1
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": workspace_url,
+                "background": False,
+                "focus": False,
+            },
+        ),
+        ("Target.closeTarget", {"targetId": "target-123"}),
+    ]
+
+
+def test_shared_browser_reuses_existing_signin_page_without_prior_record(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_signin_page = FakePage(
+        "https://app.slack.com/workspace-signin?redir=%2Fgantry%2Fauth"
+    )
+    shared_context = FakeContext([workspace_signin_page])
+    browser = FakeBrowser([shared_context])
+    browser.browser_cdp_session = FakeBrowserCDPSession()
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=tmp_path / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=60,
+    )
+
+    page = adapter.select_bob_tab("https://app.slack.com/client/T123/C123")
+
+    assert page is workspace_signin_page
+    assert workspace_signin_page.bring_to_front_calls == 1
+    assert browser.browser_cdp_session.calls == []
+
+
+def test_shared_browser_refocuses_existing_signin_page_after_cooldown(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+    now = {"value": 100.0}
+
+    def on_create_target(params):
+        del params
+        shared_context.pages.append(FakePage(signin_url))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=tmp_path / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=60,
+        time_provider=lambda: now["value"],
+    )
+    adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    first_page = adapter.select_bob_tab(workspace_url)
+    now["value"] = 159.0
+    during_cooldown_page = adapter.select_bob_tab(workspace_url)
+    assert during_cooldown_page is first_page
+    assert first_page.bring_to_front_calls == 1
+
+    now["value"] = 160.0
+    after_cooldown_page = adapter.select_bob_tab(workspace_url)
+
+    assert after_cooldown_page is first_page
+    assert first_page.bring_to_front_calls == 2
+    assert len(shared_context.pages) == 1
+    assert shared_context.new_page_calls == 0
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": workspace_url,
+                "background": False,
+                "focus": False,
+            },
+        )
+    ]
+
+
+def test_shared_browser_closes_duplicate_signin_pages_before_refocus(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    first_signin_page = FakePage("https://app.slack.com/workspace-signin?redir=first")
+    second_signin_page = FakePage("https://slack.com/signin?entry_point=nav_menu#/signin")
+    shared_context = FakeContext([first_signin_page, second_signin_page])
+    browser = FakeBrowser([shared_context])
+    browser.browser_cdp_session = FakeBrowserCDPSession()
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=tmp_path / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=60,
+    )
+
+    page = adapter.select_bob_tab("https://app.slack.com/client/T123/C123")
+
+    assert page is first_signin_page
+    assert first_signin_page.bring_to_front_calls == 1
+    assert second_signin_page.closed is True
+    assert browser.browser_cdp_session.calls == []
+
+
+def test_shared_browser_persists_reauth_cooldown_across_adapters(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        del params
+        shared_context.pages.append(FakePage(signin_url))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    reauth_state_path = tmp_path / "slack-reauth.json"
+    first_adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=reauth_state_path,
+        slack_reauth_cooldown_seconds=60,
+    )
+    first_adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    first_page = first_adapter.select_bob_tab(workspace_url)
+    first_adapter.shutdown()
+    first_page.bring_to_front_calls = 0
+
+    loader, _sync = _loader_for(chromium)
+    second_adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=reauth_state_path,
+        slack_reauth_cooldown_seconds=60,
+    )
+
+    try:
+        second_page = second_adapter.select_bob_tab(workspace_url)
+    finally:
+        second_adapter.shutdown()
+
+    assert second_page is first_page
+    assert first_page.bring_to_front_calls == 0
+    assert len(shared_context.pages) == 1
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": workspace_url,
+                "background": False,
+                "focus": False,
+            },
+        )
+    ]
+
+
+def test_shared_browser_reopens_signin_url_when_cooldown_tab_was_closed(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        if params["url"] == workspace_url:
+            shared_context.pages.append(FakePage(signin_url))
+        else:
+            shared_context.pages.append(FakePage(params["url"]))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    reauth_state_path = tmp_path / "slack-reauth.json"
+    first_adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=reauth_state_path,
+        slack_reauth_cooldown_seconds=60,
+    )
+    first_adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    first_page = first_adapter.select_bob_tab(workspace_url)
+    first_adapter.shutdown()
+    shared_context.pages.remove(first_page)
+
+    loader, _sync = _loader_for(chromium)
+    second_adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=reauth_state_path,
+        slack_reauth_cooldown_seconds=60,
+    )
+
+    try:
+        second_page = second_adapter.select_bob_tab(workspace_url)
+    finally:
+        second_adapter.shutdown()
+
+    assert first_page.url == signin_url
+    assert second_page.url == signin_url
+    assert second_page.bring_to_front_calls == 1
+    assert len(shared_context.pages) == 1
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": workspace_url,
+                "background": False,
+                "focus": False,
+            },
+        ),
+        (
+            "Target.createTarget",
+            {
+                "url": signin_url,
+                "background": False,
+                "focus": False,
+            },
+        ),
+    ]
+
+
+def test_shared_browser_reopens_configured_signin_url_for_closed_workspace_signin_tab(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_signin_url = (
+        "https://app.slack.com/workspace-signin?redir=%2Fgantry%2Fauth"
+    )
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        shared_context.pages.append(FakePage(params["url"]))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    reauth_state_path = tmp_path / "slack-reauth.json"
+    reauth_state_path.write_text(
+        (
+            '{"workspaces":{"https://app.slack.com/client/T123/C123":'
+            '{"signin_url":"https://app.slack.com/workspace-signin?redir=%2Fgantry%2Fauth",'
+            '"expires_at":999.0}}}'
+        ),
+        encoding="utf-8",
+    )
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=reauth_state_path,
+        slack_reauth_cooldown_seconds=60,
+        time_provider=lambda: 100.0,
+    )
+    adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    try:
+        page = adapter.select_bob_tab(workspace_url)
+    finally:
+        adapter.shutdown()
+
+    assert page.url == signin_url
+    assert page.bring_to_front_calls == 1
+    assert len(shared_context.pages) == 1
+    assert browser.browser_cdp_session.calls == [
+        (
+            "Target.createTarget",
+            {
+                "url": signin_url,
+                "background": False,
+                "focus": False,
+            },
+        )
+    ]
+    rendered_state = reauth_state_path.read_text(encoding="utf-8")
+    assert signin_url in rendered_state
+    assert workspace_signin_url not in rendered_state
+
+
+def test_shared_browser_closes_expired_bob_reauth_target_before_replacing(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    shared_context = FakeContext([])
+    browser = FakeBrowser([shared_context])
+
+    def on_create_target(params):
+        del params
+        shared_context.pages.append(FakePage(signin_url))
+
+    browser.browser_cdp_session = FakeBrowserCDPSession(on_create_target=on_create_target)
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    reauth_state_path = tmp_path / "slack-reauth.json"
+    reauth_state_path.write_text(
+        (
+            '{"workspaces":{"https://app.slack.com/client/T123/C123":'
+            '{"signin_url":"https://slack.com/signin?entry_point=nav_menu#/signin",'
+            '"target_id":"old-target","expires_at":1.0}}}'
+        ),
+        encoding="utf-8",
+    )
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=reauth_state_path,
+        slack_reauth_cooldown_seconds=60,
+        time_provider=lambda: 100.0,
+    )
+    adapter._CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 0.01
+
+    try:
+        page = adapter.select_bob_tab(workspace_url)
+    finally:
+        adapter.shutdown()
+
+    assert page.url == signin_url
+    assert browser.browser_cdp_session.calls[0] == (
+        "Target.closeTarget",
+        {"targetId": "old-target"},
+    )
+    assert browser.browser_cdp_session.calls[1] == (
+        "Target.createTarget",
+        {
+            "url": signin_url,
+            "background": False,
+            "focus": False,
+        },
+    )
+
+
+def test_shared_browser_reuses_existing_signin_page_when_cooldown_expired(tmp_path):
+    signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
+    workspace_url = "https://app.slack.com/client/T123/C123"
+    signin_page = FakePage(signin_url)
+    shared_context = FakeContext([signin_page])
+    browser = FakeBrowser([shared_context])
+    browser.browser_cdp_session = FakeBrowserCDPSession()
+    chromium = FakeChromium(
+        browser=browser,
+        dedicated_context=FakeContext(),
+    )
+    loader, _sync = _loader_for(chromium)
+    reauth_state_path = tmp_path / "slack-reauth.json"
+    reauth_state_path.write_text(
+        (
+            '{"workspaces":{"https://app.slack.com/client/T123/C123":'
+            '{"signin_url":"https://slack.com/signin?entry_point=nav_menu#/signin",'
+            '"target_id":"old-target","expires_at":1.0}}}'
+        ),
+        encoding="utf-8",
+    )
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url=signin_url,
+        playwright_loader=loader,
+        reauth_state_path=reauth_state_path,
+        slack_reauth_cooldown_seconds=60,
+        time_provider=lambda: 100.0,
+    )
+
+    try:
+        page = adapter.select_bob_tab(workspace_url)
+    finally:
+        adapter.shutdown()
+
+    assert page is signin_page
+    assert signin_page.bring_to_front_calls == 1
+    assert browser.browser_cdp_session.calls == []
 
 
 def test_dedicated_browser_launches_persistent_context_and_uses_workspace_tab():

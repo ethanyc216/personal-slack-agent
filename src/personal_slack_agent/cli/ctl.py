@@ -552,13 +552,18 @@ def _resolve_smoke_target(
     return workspace, channel
 
 
-def _build_browser(config: AppConfig) -> PlaywrightSlackAdapter:
+def _build_browser(
+    config: AppConfig,
+    reauth_state_path: Optional[Path] = None,
+) -> PlaywrightSlackAdapter:
     browser = PlaywrightSlackAdapter(
         browser_mode=config.browser.browser_mode,
         cdp_url=config.browser.cdp_url,
         slack_signin_url=config.browser.slack_signin_url,
         chrome_executable_path=config.browser.chrome_executable_path,
         browser_user_data_dir=config.browser.browser_user_data_dir,
+        reauth_state_path=reauth_state_path or default_state_dir() / "slack-reauth.json",
+        slack_reauth_cooldown_seconds=config.browser.slack_reauth_cooldown_seconds,
     )
     browser.set_workspace_urls(
         {workspace.name: workspace.slack_url for workspace in config.workspaces if workspace.slack_url}

@@ -655,6 +655,8 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                 slack_signin_url=config.browser.slack_signin_url,
                 chrome_executable_path=config.browser.chrome_executable_path,
                 browser_user_data_dir=config.browser.browser_user_data_dir,
+                reauth_state_path=paths.state_dir / "slack-reauth.json",
+                slack_reauth_cooldown_seconds=config.browser.slack_reauth_cooldown_seconds,
             )
             browser.set_workspace_urls(
                 {

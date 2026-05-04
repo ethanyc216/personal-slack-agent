@@ -109,6 +109,14 @@ Common fields:
 
   `bobctl doctor` reports `cdp_reachable` and `browser_attach` against this endpoint.
 
+- `slack_reauth_cooldown_seconds`
+  How long Bob waits before prompting for Slack sign-in again after detecting
+  that a workspace URL redirected to sign-in. During this cooldown, separate Bob
+  commands share the same lightweight reauth marker and reuse the same sign-in
+  tab without stealing focus again. Once the cooldown elapses, the next Bob
+  Slack/browser pass refocuses the existing sign-in tab, or opens one if it was
+  closed. The default is `60`.
+
 - `browser_user_data_dir`
   Relevant primarily for dedicated-browser workflows or when you want a stable Chrome profile directory for the Bob browser session.
 
@@ -363,6 +371,7 @@ Usually means Slack did not expose the channel in the rendered sidebar. Add `sla
 - The local `bobctl` install in this environment is typically an editable install against this repo checkout.
 - Normal Bob operation should no longer require a persistent visible `https://bob-company.enterprise.slack.example/api/api.test` helper tab for Slack API calls.
 - Bob still requires the main Slack workspace tab for websocket-driven detection, channel discovery, and auth bootstrap.
+- If Slack auth expires, Bob keeps one sign-in tab available, avoids focus-stealing during the configured reauth cooldown, and refocuses that tab on the next Slack/browser pass after the cooldown elapses.
 
 ## Related Docs
 

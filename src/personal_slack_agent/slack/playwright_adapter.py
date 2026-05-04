@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import json
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -17,6 +17,7 @@ from playwright.sync_api import Error as PlaywrightError
 
 from ..models import (
     DEDICATED_BROWSER_MODE,
+    DEFAULT_SLACK_REAUTH_COOLDOWN_SECONDS,
     DEFAULT_SLACK_SIGNIN_URL,
     SHARED_BROWSER_MODE,
 )
@@ -35,6 +36,7 @@ class PlaywrightSlackAdapter:
     _SLACK_API_TIMEOUT_MS = 15000
     _CDP_CONNECT_TIMEOUT_MS = 10000
     _CDP_TARGET_APPEAR_TIMEOUT_SECONDS = 2.0
+    _SIGNIN_REDIRECT_SETTLE_SECONDS = 5.0
     _HTTP_USER_AGENT = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -49,6 +51,9 @@ class PlaywrightSlackAdapter:
         chrome_executable_path: Optional[str] = None,
         browser_user_data_dir: Optional[str] = None,
         playwright_loader: Any = _load_sync_playwright,
+        reauth_state_path: Optional[Path] = None,
+        slack_reauth_cooldown_seconds: float = DEFAULT_SLACK_REAUTH_COOLDOWN_SECONDS,
+        time_provider: Callable[[], float] = time.time,
     ):
         if browser_mode not in (SHARED_BROWSER_MODE, DEDICATED_BROWSER_MODE):
             raise ValueError("browser_mode must be shared_browser or dedicated_browser.")
@@ -58,6 +63,13 @@ class PlaywrightSlackAdapter:
         self.chrome_executable_path = chrome_executable_path
         self.browser_user_data_dir = browser_user_data_dir or ""
         self._playwright_loader = playwright_loader
+        self._reauth_state_path = (
+            Path(reauth_state_path).expanduser() if reauth_state_path is not None else None
+        )
+        self._slack_reauth_cooldown_seconds = float(slack_reauth_cooldown_seconds)
+        self._time_provider = time_provider
+        self._reauth_records: Dict[str, Dict[str, Any]] = {}
+        self._temporary_cdp_target_ids: list[str] = []
         self._playwright: Optional[Any] = None
         self._browser: Optional[Any] = None
         self._context: Optional[Any] = None
@@ -92,10 +104,7 @@ class PlaywrightSlackAdapter:
             self._playwright = sync_playwright().start()
             try:
                 if self.browser_mode == SHARED_BROWSER_MODE:
-                    self._browser = self._playwright.chromium.connect_over_cdp(
-                        self.cdp_url,
-                        timeout=self._CDP_CONNECT_TIMEOUT_MS,
-                    )
+                    self._browser = self._connect_shared_browser()
                     return self._browser
 
                 launch_kwargs = {"headless": False}
@@ -109,6 +118,48 @@ class PlaywrightSlackAdapter:
             except Exception:
                 self.close()
                 raise
+
+    def _connect_shared_browser(self) -> Any:
+        try:
+            return self._playwright.chromium.connect_over_cdp(
+                self.cdp_url,
+                timeout=self._CDP_CONNECT_TIMEOUT_MS,
+            )
+        except PlaywrightError as exc:
+            if not self._is_empty_cdp_browser_error(exc):
+                raise
+            if not self._ensure_cdp_page_target():
+                raise
+            return self._playwright.chromium.connect_over_cdp(
+                self.cdp_url,
+                timeout=self._CDP_CONNECT_TIMEOUT_MS,
+            )
+
+    def _is_empty_cdp_browser_error(self, exc: Exception) -> bool:
+        return "Browser context management is not supported" in str(exc)
+
+    def _ensure_cdp_page_target(self) -> bool:
+        request = urllib.request.Request(
+            self.cdp_url.rstrip("/") + "/json/new?about:blank",
+            method="PUT",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=2.0) as response:
+                status = int(getattr(response, "status", 0))
+                body = response.read()
+        except (urllib.error.URLError, TimeoutError, ValueError):
+            return False
+        if not 200 <= status < 300:
+            return False
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+            payload = {}
+        if isinstance(payload, dict):
+            target_id = str(payload.get("id") or "").strip()
+            if target_id:
+                self._temporary_cdp_target_ids.append(target_id)
+        return True
 
     def close(self) -> None:
         if not self._on_io_thread():
@@ -135,16 +186,59 @@ class PlaywrightSlackAdapter:
             return self._run_on_io_thread(lambda: self.select_bob_tab(workspace_url_prefix))
         with self._io_lock:
             target_url = workspace_url_prefix or self.slack_signin_url
+            preexisting_cdp_page_target_ids = self._cdp_page_target_ids()
             runtime = self.connect()
             contexts = self._contexts(runtime)
             for context in contexts:
                 for page in context.pages:
                     if page.url.startswith(target_url):
+                        self._clear_reauth_record(target_url)
+                        self._close_temporary_cdp_targets(runtime, preexisting_cdp_page_target_ids)
                         return page
 
+            if self._should_track_reauth(target_url):
+                reauth_record = self._reauth_record(target_url)
+                reauth_record_expired = self._reauth_record_expired(reauth_record)
+                signin_page = self._existing_signin_page(contexts)
+                if signin_page is not None:
+                    self._close_extra_signin_pages(contexts, signin_page)
+                    if reauth_record is None or reauth_record_expired:
+                        self._save_reauth_record(target_url, signin_page)
+                        self._focus_page(signin_page)
+                    self._close_temporary_cdp_targets(runtime, preexisting_cdp_page_target_ids)
+                    return signin_page
+                if reauth_record is not None:
+                    if reauth_record_expired:
+                        self._close_reauth_target(runtime, reauth_record)
+                        self._clear_reauth_record(target_url)
+                    replacement_page = self._create_non_focused_target(
+                        runtime,
+                        self.slack_signin_url,
+                        accepted_url_prefixes=[self.slack_signin_url],
+                    )
+                    if replacement_page is not None:
+                        self._save_reauth_record(target_url, replacement_page)
+                        self._focus_page(replacement_page)
+                        self._close_temporary_cdp_targets(
+                            runtime,
+                            preexisting_cdp_page_target_ids,
+                        )
+                        return replacement_page
+                    self._clear_reauth_record(target_url)
+
             if self.browser_mode == SHARED_BROWSER_MODE:
-                helper_page = self._create_non_focused_target(runtime, target_url)
+                helper_page = self._create_non_focused_target(
+                    runtime,
+                    target_url,
+                    accepted_url_prefixes=[self.slack_signin_url],
+                )
                 if helper_page is not None:
+                    if self._should_track_reauth(target_url):
+                        self._wait_for_signin_redirect(helper_page)
+                    if self._is_signin_url(helper_page.url) and self._should_track_reauth(target_url):
+                        self._save_reauth_record(target_url, helper_page)
+                        self._focus_page(helper_page)
+                    self._close_temporary_cdp_targets(runtime, preexisting_cdp_page_target_ids)
                     return helper_page
 
             if contexts:
@@ -154,6 +248,10 @@ class PlaywrightSlackAdapter:
             else:
                 page = runtime.new_page()
             page.goto(target_url)
+            if self._is_signin_url(page.url) and self._should_track_reauth(target_url):
+                self._save_reauth_record(target_url, page)
+                self._focus_page(page)
+            self._close_temporary_cdp_targets(runtime, preexisting_cdp_page_target_ids)
             return page
 
     def get_channel_id(self, workspace_name: str, channel_name: str) -> str:
@@ -547,6 +645,209 @@ class PlaywrightSlackAdapter:
             return list(runtime.contexts)
         return [runtime]
 
+    def _should_track_reauth(self, target_url: str) -> bool:
+        return bool(target_url) and not self._is_signin_url(target_url)
+
+    def _is_signin_url(self, url: str) -> bool:
+        if not url:
+            return False
+        if url.startswith(self.slack_signin_url):
+            return True
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
+        if hostname == "app.slack.com" and parsed.path.startswith("/workspace-signin"):
+            return True
+        return (
+            (hostname == "slack.com" or hostname.endswith(".slack.com"))
+            and parsed.path.startswith("/signin")
+        )
+
+    def _page_matches_target(
+        self,
+        page_url: str,
+        target_url: str,
+        accepted_url_prefixes: Optional[list[str]] = None,
+    ) -> bool:
+        if page_url.startswith(target_url):
+            return True
+        for prefix in accepted_url_prefixes or []:
+            if page_url.startswith(prefix):
+                return True
+            if self._is_signin_url(prefix) and self._is_signin_url(page_url):
+                return True
+        return False
+
+    def _focus_page(self, page: Any) -> None:
+        bring_to_front = getattr(page, "bring_to_front", None)
+        if not callable(bring_to_front):
+            return
+        try:
+            bring_to_front()
+        except Exception:
+            return
+
+    def _wait_for_signin_redirect(self, page: Any) -> None:
+        deadline = time.monotonic() + self._SIGNIN_REDIRECT_SETTLE_SECONDS
+        while time.monotonic() < deadline:
+            if self._is_signin_url(page.url):
+                return
+            time.sleep(0.05)
+
+    def _existing_signin_page(self, contexts: list[Any]) -> Optional[Any]:
+        for context in contexts:
+            for page in context.pages:
+                if self._is_signin_url(page.url):
+                    return page
+        return None
+
+    def _close_extra_signin_pages(self, contexts: list[Any], keep_page: Any) -> None:
+        for context in contexts:
+            for page in list(context.pages):
+                if page is keep_page or not self._is_signin_url(page.url):
+                    continue
+                close = getattr(page, "close", None)
+                if not callable(close):
+                    continue
+                try:
+                    close()
+                except Exception:
+                    continue
+
+    def _save_reauth_record(self, target_url: str, page: Any) -> None:
+        record: Dict[str, Any] = {
+            "signin_url": str(getattr(page, "url", "") or self.slack_signin_url),
+            "expires_at": self._time_provider() + self._slack_reauth_cooldown_seconds,
+        }
+        target_id = getattr(page, "_bob_cdp_target_id", None)
+        if target_id:
+            record["target_id"] = str(target_id)
+        self._write_reauth_record(target_url, record)
+
+    def _reauth_record(self, target_url: str) -> Optional[Dict[str, Any]]:
+        records = self._read_reauth_records()
+        record = records.get(target_url)
+        return record if isinstance(record, dict) else None
+
+    def _write_reauth_record(self, target_url: str, record: Dict[str, Any]) -> None:
+        records = self._read_reauth_records()
+        records[target_url] = record
+        self._write_reauth_records(records)
+
+    def _clear_reauth_record(self, target_url: str) -> None:
+        records = self._read_reauth_records()
+        if target_url not in records:
+            return
+        records.pop(target_url, None)
+        self._write_reauth_records(records)
+
+    def _read_reauth_records(self) -> Dict[str, Dict[str, Any]]:
+        if self._reauth_state_path is None:
+            return self._reauth_records
+        try:
+            payload = json.loads(self._reauth_state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        workspaces = payload.get("workspaces")
+        if not isinstance(workspaces, dict):
+            return {}
+        return {str(key): value for key, value in workspaces.items() if isinstance(value, dict)}
+
+    def _write_reauth_records(self, records: Dict[str, Dict[str, Any]]) -> None:
+        if self._reauth_state_path is None:
+            self._reauth_records = dict(records)
+            return
+        self._reauth_state_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self._reauth_state_path.with_name(
+            ".{0}.{1}.tmp".format(self._reauth_state_path.name, uuid.uuid4().hex)
+        )
+        temp_path.write_text(
+            json.dumps({"workspaces": records}, sort_keys=True),
+            encoding="utf-8",
+        )
+        temp_path.replace(self._reauth_state_path)
+
+    def _record_float(self, record: Dict[str, Any], key: str) -> Optional[float]:
+        value = record.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    def _reauth_record_expired(self, record: Optional[Dict[str, Any]]) -> bool:
+        if record is None:
+            return False
+        expires_at = self._record_float(record, "expires_at")
+        return expires_at is None or expires_at <= self._time_provider()
+
+    def _close_reauth_target(self, runtime: Any, record: Dict[str, Any]) -> None:
+        target_id = str(record.get("target_id") or "").strip()
+        if not target_id or self.browser_mode != SHARED_BROWSER_MODE:
+            return
+        self._close_cdp_target_id(runtime, target_id)
+
+    def _close_temporary_cdp_targets(
+        self,
+        runtime: Any,
+        preexisting_cdp_page_target_ids: set[str],
+    ) -> None:
+        target_ids = self._temporary_cdp_target_ids
+        self._temporary_cdp_target_ids = []
+        for target_id in target_ids:
+            self._close_cdp_target_id(runtime, target_id)
+        for target in self._cdp_page_targets():
+            target_id = str(target.get("id") or "").strip()
+            if target_id in preexisting_cdp_page_target_ids:
+                continue
+            if target.get("url") == "about:blank":
+                self._close_cdp_target_id(runtime, target_id)
+
+    def _close_cdp_target_id(self, runtime: Any, target_id: str) -> None:
+        target_id = str(target_id or "").strip()
+        if not target_id or self.browser_mode != SHARED_BROWSER_MODE:
+            return
+        new_browser_cdp_session = getattr(runtime, "new_browser_cdp_session", None)
+        if not callable(new_browser_cdp_session):
+            return
+        try:
+            session = new_browser_cdp_session()
+        except Exception:
+            return
+        try:
+            session.send("Target.closeTarget", {"targetId": target_id})
+        except Exception:
+            return
+        finally:
+            detach = getattr(session, "detach", None)
+            if callable(detach):
+                detach()
+
+    def _cdp_page_target_ids(self) -> set[str]:
+        return {
+            str(target.get("id") or "").strip()
+            for target in self._cdp_page_targets()
+            if str(target.get("id") or "").strip()
+        }
+
+    def _cdp_page_targets(self) -> list[Dict[str, Any]]:
+        if self.browser_mode != SHARED_BROWSER_MODE:
+            return []
+        try:
+            with urllib.request.urlopen(
+                self.cdp_url.rstrip("/") + "/json/list",
+                timeout=2.0,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (OSError, TimeoutError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [
+            target
+            for target in payload
+            if isinstance(target, dict) and target.get("type") == "page"
+        ]
+
     def _channel_sidebar_key(self, channel_name: str) -> str:
         return channel_name.strip().lower().replace(" ", "-")
 
@@ -732,17 +1033,28 @@ class PlaywrightSlackAdapter:
     def _create_background_helper_page(self, runtime: Any, api_test_url: str) -> Optional[Any]:
         return self._create_non_focused_target(runtime, api_test_url)
 
-    def _create_non_focused_target(self, runtime: Any, target_url: str) -> Optional[Any]:
+    def _create_non_focused_target(
+        self,
+        runtime: Any,
+        target_url: str,
+        accepted_url_prefixes: Optional[list[str]] = None,
+    ) -> Optional[Any]:
         new_browser_cdp_session = getattr(runtime, "new_browser_cdp_session", None)
         if not callable(new_browser_cdp_session):
             return None
+        existing_page_ids = {
+            id(page)
+            for context in self._contexts(runtime)
+            for page in context.pages
+        }
 
         try:
             session = new_browser_cdp_session()
         except Exception:
             return None
+        target_id = ""
         try:
-            session.send(
+            payload = session.send(
                 "Target.createTarget",
                 {
                     "url": target_url,
@@ -750,6 +1062,8 @@ class PlaywrightSlackAdapter:
                     "focus": False,
                 },
             )
+            if isinstance(payload, dict):
+                target_id = str(payload.get("targetId") or "")
         finally:
             detach = getattr(session, "detach", None)
             if callable(detach):
@@ -759,9 +1073,14 @@ class PlaywrightSlackAdapter:
         while time.monotonic() < deadline:
             for context in self._contexts(runtime):
                 for page in context.pages:
-                    if page.url.startswith(target_url):
+                    if id(page) in existing_page_ids:
+                        continue
+                    if self._page_matches_target(page.url, target_url, accepted_url_prefixes):
+                        if target_id:
+                            setattr(page, "_bob_cdp_target_id", target_id)
                         return page
             time.sleep(0.05)
+        self._close_cdp_target_id(runtime, target_id)
         return None
 
     def _upload_external_bytes(self, upload_url: str, content: bytes) -> None:
