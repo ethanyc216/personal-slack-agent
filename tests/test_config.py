@@ -158,6 +158,7 @@ def test_browser_settings_use_defaults_when_omitted(tmp_path):
     assert config.browser.cdp_url == "http://127.0.0.1:9222"
     assert config.browser.chrome_executable_path is None
     assert config.browser.browser_user_data_dir is None
+    assert config.browser.slack_reauth_cooldown_seconds == 60.0
 
 
 def test_browser_settings_load_from_browser_section(tmp_path):
@@ -180,6 +181,7 @@ def test_browser_settings_load_from_browser_section(tmp_path):
         cdp_url = "http://127.0.0.1:9223"
         chrome_executable_path = "{chrome_bin}"
         browser_user_data_dir = "{user_data_dir}"
+        slack_reauth_cooldown_seconds = 45
         """,
         encoding="utf-8",
     )
@@ -191,6 +193,7 @@ def test_browser_settings_load_from_browser_section(tmp_path):
     assert config.browser.cdp_url == "http://127.0.0.1:9223"
     assert config.browser.chrome_executable_path == str(chrome_bin.resolve())
     assert config.browser.browser_user_data_dir == str(user_data_dir.resolve())
+    assert config.browser.slack_reauth_cooldown_seconds == 45.0
 
 
 def test_browser_settings_fallback_to_legacy_defaults_keys(tmp_path):
@@ -573,6 +576,7 @@ def test_dump_config_emits_browser_runner_and_lifecycle_sections(tmp_path):
     assert 'browser_mode = "shared_browser"' in rendered
     assert 'browser_url = "http://127.0.0.1:9222"' in rendered
     assert 'cdp_url = "http://127.0.0.1:9223"' in rendered
+    assert "slack_reauth_cooldown_seconds = 60" in rendered
     assert "[runner]" in rendered
     assert 'bob_codex_home = "{0}"'.format(str(bob_codex_home.resolve())) in rendered
     assert "codex_exec_timeout_seconds = 1200" in rendered
@@ -692,6 +696,27 @@ def test_browser_mode_must_be_known_value(tmp_path):
     )
 
     with pytest.raises(ConfigError, match="browser_mode"):
+        load_config(config_path)
+
+
+def test_browser_slack_reauth_cooldown_must_be_positive(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+
+    config_path = tmp_path / "bad-reauth-cooldown.toml"
+    config_path.write_text(
+        f"""
+        [defaults]
+        default_cwd = "{root}"
+        allowed_actor_ids = ["U123"]
+
+        [browser]
+        slack_reauth_cooldown_seconds = 0
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="browser.slack_reauth_cooldown_seconds"):
         load_config(config_path)
 
 

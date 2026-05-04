@@ -9,6 +9,7 @@ slack_signin_url = "https://slack.com/signin?entry_point=nav_menu#/signin"
 browser_mode = "shared_browser"
 browser_url = "http://127.0.0.1:9222"
 cdp_url = "http://127.0.0.1:9222"
+slack_reauth_cooldown_seconds = 60
 # chrome_executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 # browser_user_data_dir = "~/.config/personal-slack-agent/chrome-profile"
 

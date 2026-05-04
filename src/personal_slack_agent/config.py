@@ -14,6 +14,7 @@ from .models import (
     DEDICATED_BROWSER_MODE,
     DEFAULT_OWNER_NAME,
     DEFAULT_OWNER_PREFERRED_NAME,
+    DEFAULT_SLACK_REAUTH_COOLDOWN_SECONDS,
     DEFAULT_SLACK_SIGNIN_URL,
     PERSISTENT_MEMORY_MODE_DISABLED,
     PERSISTENT_MEMORY_MODE_OWNER_ONLY,
@@ -255,6 +256,9 @@ def dump_config(config: AppConfig) -> str:
             'browser_mode = "{0}"'.format(_toml_escape(config.browser.browser_mode)),
             'browser_url = "{0}"'.format(_toml_escape(config.browser.browser_url)),
             'cdp_url = "{0}"'.format(_toml_escape(config.browser.cdp_url)),
+            "slack_reauth_cooldown_seconds = {0}".format(
+                _render_number(config.browser.slack_reauth_cooldown_seconds)
+            ),
         ]
     )
     if config.browser.chrome_executable_path is not None:
@@ -602,6 +606,15 @@ def _parse_browser(
             "browser.browser_user_data_dir",
             base_dir=base_dir,
         ),
+        slack_reauth_cooldown_seconds=_optional_positive_float(
+            raw_browser.get(
+                "slack_reauth_cooldown_seconds",
+                legacy_defaults.get("slack_reauth_cooldown_seconds"),
+            ),
+            "browser.slack_reauth_cooldown_seconds",
+            default=DEFAULT_SLACK_REAUTH_COOLDOWN_SECONDS,
+        )
+        or DEFAULT_SLACK_REAUTH_COOLDOWN_SECONDS,
     )
 
 

@@ -4,6 +4,7 @@ from typing import List, Optional
 
 DEFAULT_SLACK_SIGNIN_URL = "https://slack.com/signin?entry_point=nav_menu#/signin"
 DEFAULT_BROWSER_CDP_URL = "http://127.0.0.1:9222"
+DEFAULT_SLACK_REAUTH_COOLDOWN_SECONDS = 60.0
 SHARED_BROWSER_MODE = "shared_browser"
 DEDICATED_BROWSER_MODE = "dedicated_browser"
 PERSISTENT_MEMORY_MODE_DISABLED = "disabled"
@@ -40,6 +41,7 @@ class BrowserSettings:
     cdp_url: str = DEFAULT_BROWSER_CDP_URL
     chrome_executable_path: Optional[str] = None
     browser_user_data_dir: Optional[str] = None
+    slack_reauth_cooldown_seconds: float = DEFAULT_SLACK_REAUTH_COOLDOWN_SECONDS
 
 
 @dataclass
