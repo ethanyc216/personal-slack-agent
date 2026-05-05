@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 from personal_slack_agent.models import (
@@ -1161,7 +1162,9 @@ def test_watcher_reconciles_all_configured_channels_before_limited_runtime_backf
     ]
 
 
-def test_watcher_initial_cycle_checks_configured_channels_before_runtime_discovery(tmp_path):
+def test_watcher_initial_cycle_prioritizes_search_then_configured_before_runtime_discovery(
+    tmp_path,
+):
     from personal_slack_agent.slack.watcher import SlackWatcher
 
     state = BobStateStore(tmp_path / "bob.sqlite3")
@@ -1188,11 +1191,13 @@ def test_watcher_initial_cycle_checks_configured_channels_before_runtime_discove
 
     watcher.run_cycle()
 
-    assert browser.operations[0] == ("root", "bob_private_channel")
-    assert browser.operations.index(("accessible", "bob_company")) > 0
+    assert browser.operations[0] == ("search", "bob_company")
+    assert browser.operations.index(("root", "bob_private_channel")) < browser.operations.index(
+        ("accessible", "bob_company")
+    )
 
 
-def test_watcher_steady_cycle_checks_configured_channels_before_ultimate_search(tmp_path):
+def test_watcher_steady_cycle_checks_ultimate_search_before_configured_channels(tmp_path):
     from personal_slack_agent.slack.watcher import SlackWatcher
 
     state = BobStateStore(tmp_path / "bob.sqlite3")
@@ -1220,7 +1225,143 @@ def test_watcher_steady_cycle_checks_configured_channels_before_ultimate_search(
 
     watcher.run_cycle()
 
-    assert browser.operations[0] == ("root", "bob_private_channel")
+    assert browser.operations[:2] == [
+        ("search", "bob_company"),
+        ("root", "bob_private_channel"),
+    ]
+
+
+def test_watcher_processes_event_hydration_before_runtime_backfill(tmp_path):
+    from personal_slack_agent.slack.events import SlackRealtimeEvent
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = ["C999"]
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="Bob, configured",
+        )
+    ]
+    browser.root_messages[("bob_company", "slack:C999")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="slack:C999",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="bob event",
+        )
+    ]
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("bob_company", "C123")] = "bob_private_channel"
+    watcher._event_queue.append(
+        (
+            "bob_company",
+            SlackRealtimeEvent(
+                kind="root_message_seen",
+                channel_id="C999",
+                thread_ts=None,
+                message_ts="2.0",
+            ),
+        )
+    )
+
+    watcher.run_cycle()
+
+    assert browser.operations.index(("root", "bob_private_channel")) < browser.operations.index(
+        ("root", "slack:C999")
+    )
+    assert browser.operations.index(("root", "slack:C999")) < browser.operations.index(
+        ("accessible", "bob_company")
+    )
+
+
+def test_pending_thread_reconcile_keeps_retry_when_lease_is_busy(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_config(tmp_path),
+    )
+    key = ("bob_company", "bob_private_channel", "10.0")
+    watcher._threads_pending_reconcile.add(key)
+    lease_scope = watcher._thread_lease_scope(*key)
+    assert state.try_acquire_watcher_lease(
+        scope=lease_scope,
+        owner="other-worker",
+        now_epoch=int(time.time()),
+        ttl_seconds=30,
+    )
+
+    watcher._reconcile_pending_threads()
+
+    assert key in watcher._threads_pending_reconcile
+    assert browser.thread_reply_calls == []
+
+    assert state.release_watcher_lease(scope=lease_scope, owner="other-worker")
+    watcher._reconcile_pending_threads()
+
+    assert key not in watcher._threads_pending_reconcile
+    assert browser.thread_reply_calls == [
+        ("bob_company", "bob_private_channel", "10.0", None, 200)
+    ]
+
+
+def test_watcher_lease_blocks_same_lane_from_another_worker_thread(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_config(tmp_path),
+    )
+    lease_scope = watcher._channel_lease_scope("bob_company", "bob_private_channel")
+
+    assert watcher._try_acquire_watcher_lease(lease_scope, "runtime-backfill")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        blocked = pool.submit(
+            watcher._try_acquire_watcher_lease,
+            lease_scope,
+            "runtime-backfill",
+        ).result()
+
+    assert not blocked
+    assert watcher._release_watcher_lease(lease_scope, "runtime-backfill")
 
 
 def test_watcher_runtime_backfill_fetches_only_one_root_page_per_channel_per_cycle(tmp_path):

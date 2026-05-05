@@ -317,6 +317,9 @@ def dump_config(config: AppConfig) -> str:
             "heartbeat_stale_seconds = {0}".format(
                 _render_number(config.watcher.heartbeat_stale_seconds)
             ),
+            "watcher_lease_ttl_seconds = {0}".format(
+                _render_number(config.watcher.watcher_lease_ttl_seconds)
+            ),
             "runtime_channel_reconcile_batch_size = {0}".format(
                 config.watcher.runtime_channel_reconcile_batch_size
             ),
@@ -739,6 +742,15 @@ def _parse_watcher(
             default=5 * 60.0,
         )
         or 5 * 60.0,
+        watcher_lease_ttl_seconds=_optional_positive_float(
+            raw_watcher.get(
+                "watcher_lease_ttl_seconds",
+                legacy_defaults.get("watcher_lease_ttl_seconds"),
+            ),
+            "watcher.watcher_lease_ttl_seconds",
+            default=2 * 60.0,
+        )
+        or 2 * 60.0,
         runtime_channel_reconcile_batch_size=_positive_int(
             raw_watcher.get(
                 "runtime_channel_reconcile_batch_size",
