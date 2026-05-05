@@ -665,7 +665,11 @@ def _collect_doctor_probe_results(*, paths: RuntimePaths, config: AppConfig) -> 
                 try:
                     payload = browser.api_test(workspace.name)
                     ok = bool(payload.get("ok"))
-                    detail = None if ok else str(payload.get("error") or "api.test failed")
+                    detail = None
+                    if not ok:
+                        detail = str(payload.get("error") or "api.test failed")
+                        if payload.get("detail"):
+                            detail = "{0}: {1}".format(detail, payload["detail"])
                     rows.extend(_doctor_probe(workspace_label + ".api_test", ok, detail))
                 except Exception as exc:
                     rows.extend(_doctor_probe(workspace_label + ".api_test", False, str(exc)))

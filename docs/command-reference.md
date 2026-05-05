@@ -225,8 +225,15 @@ bobctl install-chrome-launcher --config ~/.config/personal-slack-agent/bob.toml 
 | `browser_attach` | Bob can attach Playwright to the browser session. |
 | `terminal_default_target` | Workspace/channel used by `bob` when target flags are omitted. |
 | `terminal_codex_exec` | Lightweight Bob-style child Codex execution probe. |
+| `workspace[...].api_session` | Bob discovered Slack Web API auth from the browser session. |
+| `workspace[...].api_test` | Bob's Python runtime can call Slack Web API with the discovered auth. |
 
 Run `bobctl doctor` from a normal unsandboxed shell for operator truth. Inside a sandboxed Codex session, the child Codex probe can fail because nested sandboxing is blocked even when the real Bob daemon is healthy.
+
+If `workspace[...].api_test` fails while browser attach, API session discovery,
+and websocket subscription are healthy, check Bob's Python network and SSL
+trust path. See [Bob config setup](bob-config-setup.md#common-failure-modes)
+for the token-safe diagnostic commands.
 
 ## Local Alias: `bobcodex`
 

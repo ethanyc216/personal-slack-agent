@@ -344,6 +344,12 @@ The most useful fields are:
   run `bobctl doctor` from a normal unsandboxed shell for operator truth.
   If you run it from inside another sandboxed Codex session, `terminal_codex_exec` may fail because nested sandboxing is blocked, even while Bob itself is healthy.
 
+- `workspace[...].api_session`
+  Whether Bob discovered Slack Web API auth from the browser session.
+
+- `workspace[...].api_test`
+  Whether Bob's Python runtime can call Slack Web API with that discovered auth.
+
 ## Common Failure Modes
 
 ### `browser_attach: False`
@@ -361,6 +367,80 @@ Usually means one of:
 - Bob child Codex sessions cannot launch in the current sandbox context
 - Bob was started from inside another sandboxed Codex session and inherited a bad sandbox environment
 - child-session config such as writable roots or `CODEX_HOME` is invalid
+
+### `workspace[...].api_test: False`
+
+If `browser_attach`, `workspace[...].slack_tab`, `workspace[...].api_session`,
+and `workspace[...].socket_subscribe` are all `True`, then Slack login, browser
+attach, auth discovery, and websocket detection are working. The failing boundary
+is Bob's Python Slack API request to:
+
+```text
+<api_origin>/api/api.test
+```
+
+Run the network and certificate checks with the same Python environment Bob uses:
+
+```bash
+BOB_PY="$HOME/.local/pipx/venvs/personal-slack-agent/bin/python"
+ORIGIN="$(bobctl doctor | awk -F': ' '/api_origin/ {print $2; exit}')"
+
+echo "== Bob version =="
+pipx list | grep personal-slack-agent
+
+echo "== proxy env =="
+env | grep -i proxy || true
+
+echo "== Bob Python SSL paths =="
+"$BOB_PY" - <<'PY'
+import ssl, sys
+print(sys.executable)
+print(ssl.get_default_verify_paths())
+PY
+
+echo "== curl api.test =="
+curl -sS -X POST --connect-timeout 5 --max-time 20 \
+  -w '\nHTTP=%{http_code} time=%{time_total}s\n' \
+  "$ORIGIN/api/api.test"
+
+echo "== Bob Python urllib api.test =="
+"$BOB_PY" - <<PY
+import time, urllib.request
+url = "$ORIGIN".rstrip("/") + "/api/api.test"
+start = time.time()
+try:
+    req = urllib.request.Request(url, data=b"", method="POST")
+    with urllib.request.urlopen(req, timeout=20) as response:
+        print("status", response.status)
+        print("elapsed", round(time.time() - start, 3))
+        print(response.read(500).decode("utf-8", "replace"))
+except Exception as exc:
+    print(type(exc).__name__, repr(exc))
+    print("elapsed", round(time.time() - start, 3))
+PY
+```
+
+If `curl` works but Bob Python reports `SSLCertVerificationError` or
+`ssl_cert_verification_failed`, the local Python certificate bundle is missing
+the issuer certificate. Fix the certificate bundle for the exact Python printed
+by the command above.
+
+For python.org installs on macOS, run that Python's `Install Certificates.command`.
+For example, if Bob uses Python 3.13:
+
+```bash
+open "/Applications/Python 3.13/Install Certificates.command"
+```
+
+Then restart Bob and rerun doctor:
+
+```bash
+bobctl stop
+bobctl start --config ~/.config/personal-slack-agent/bob.toml
+bobctl doctor --config ~/.config/personal-slack-agent/bob.toml
+```
+
+If `curl` also times out, debug VPN, proxy, DNS, or corporate network access first.
 
 ### Channel name present but channel id missing
 

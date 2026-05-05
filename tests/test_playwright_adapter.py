@@ -1,5 +1,7 @@
+import ssl
 import threading
 import time
+import urllib.error
 
 from playwright._impl._errors import TargetClosedError
 
@@ -1748,6 +1750,66 @@ def test_call_slack_api_retries_once_when_direct_http_request_times_out():
             {},
         ),
     ]
+
+
+def test_post_slack_api_form_reports_ssl_certificate_verification_failure(monkeypatch):
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+
+    def fail_urlopen(request, timeout):
+        del request
+        del timeout
+        raise urllib.error.URLError(
+            ssl.SSLCertVerificationError(
+                "certificate verify failed: unable to get local issuer certificate"
+            )
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    adapter._origin_cookie_header = lambda origin: ""  # type: ignore[method-assign]
+
+    payload = adapter._post_slack_api_form(
+        "https://bob-company.enterprise.slack.example",
+        "api.test",
+        "fresh-token",
+        {},
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"] == "ssl_cert_verification_failed"
+    assert "unable to get local issuer certificate" in payload["detail"]
+
+
+def test_post_slack_api_form_reports_direct_ssl_certificate_verification_failure(monkeypatch):
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+
+    def fail_urlopen(request, timeout):
+        del request
+        del timeout
+        raise ssl.SSLCertVerificationError(
+            "certificate verify failed: unable to get local issuer certificate"
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    adapter._origin_cookie_header = lambda origin: ""  # type: ignore[method-assign]
+
+    payload = adapter._post_slack_api_form(
+        "https://bob-company.enterprise.slack.example",
+        "api.test",
+        "fresh-token",
+        {},
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"] == "ssl_cert_verification_failed"
+    assert "unable to get local issuer certificate" in payload["detail"]
 
 def test_api_page_marks_new_helper_page_for_cleanup():
     shared_context = FakeContext([FakePage("https://app.slack.com/client/T123/C123")])
