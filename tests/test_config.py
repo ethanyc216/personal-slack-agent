@@ -447,6 +447,9 @@ def test_watcher_settings_load_from_watcher_section(tmp_path):
         thread_reply_rate_limit_backoff_seconds = 45
         heartbeat_stale_seconds = 240
         watcher_lease_ttl_seconds = 90
+        ultimate_search_workers = 1
+        configured_channel_workers = 2
+        runtime_backfill_workers = 3
         runtime_channel_reconcile_batch_size = 4
         recent_terminal_thread_reconcile_limit = 8
         periodic_terminal_thread_reconcile_batch_size = 3
@@ -465,6 +468,9 @@ def test_watcher_settings_load_from_watcher_section(tmp_path):
     assert config.watcher.thread_reply_rate_limit_backoff_seconds == 45.0
     assert config.watcher.heartbeat_stale_seconds == 240.0
     assert config.watcher.watcher_lease_ttl_seconds == 90.0
+    assert config.watcher.ultimate_search_workers == 1
+    assert config.watcher.configured_channel_workers == 2
+    assert config.watcher.runtime_backfill_workers == 3
     assert config.watcher.runtime_channel_reconcile_batch_size == 4
     assert config.watcher.recent_terminal_thread_reconcile_limit == 8
     assert config.watcher.periodic_terminal_thread_reconcile_batch_size == 3
@@ -489,6 +495,9 @@ def test_watcher_settings_fallback_to_legacy_defaults_keys(tmp_path):
         thread_reply_rate_limit_backoff_seconds = 30
         heartbeat_stale_seconds = 180
         watcher_lease_ttl_seconds = 75
+        ultimate_search_workers = 1
+        configured_channel_workers = 2
+        runtime_backfill_workers = 3
         runtime_channel_reconcile_batch_size = 2
         recent_terminal_thread_reconcile_limit = 5
         periodic_terminal_thread_reconcile_batch_size = 2
@@ -507,6 +516,9 @@ def test_watcher_settings_fallback_to_legacy_defaults_keys(tmp_path):
     assert config.watcher.thread_reply_rate_limit_backoff_seconds == 30.0
     assert config.watcher.heartbeat_stale_seconds == 180.0
     assert config.watcher.watcher_lease_ttl_seconds == 75.0
+    assert config.watcher.ultimate_search_workers == 1
+    assert config.watcher.configured_channel_workers == 2
+    assert config.watcher.runtime_backfill_workers == 3
     assert config.watcher.runtime_channel_reconcile_batch_size == 2
     assert config.watcher.recent_terminal_thread_reconcile_limit == 5
     assert config.watcher.periodic_terminal_thread_reconcile_batch_size == 2
@@ -533,6 +545,9 @@ def test_dump_config_emits_orchestrator_and_watcher_sections(tmp_path):
         thread_reply_rate_limit_backoff_seconds = 30
         heartbeat_stale_seconds = 180
         watcher_lease_ttl_seconds = 75
+        ultimate_search_workers = 1
+        configured_channel_workers = 2
+        runtime_backfill_workers = 3
         runtime_channel_reconcile_batch_size = 2
         recent_terminal_thread_reconcile_limit = 5
         periodic_terminal_thread_reconcile_batch_size = 2
@@ -555,6 +570,9 @@ def test_dump_config_emits_orchestrator_and_watcher_sections(tmp_path):
     assert "thread_reply_rate_limit_backoff_seconds = 30" in rendered
     assert "heartbeat_stale_seconds = 180" in rendered
     assert "watcher_lease_ttl_seconds = 75" in rendered
+    assert "ultimate_search_workers = 1" in rendered
+    assert "configured_channel_workers = 2" in rendered
+    assert "runtime_backfill_workers = 3" in rendered
     assert "runtime_channel_reconcile_batch_size = 2" in rendered
     assert "recent_terminal_thread_reconcile_limit = 5" in rendered
     assert "periodic_terminal_thread_reconcile_batch_size = 2" in rendered

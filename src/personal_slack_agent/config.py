@@ -320,6 +320,15 @@ def dump_config(config: AppConfig) -> str:
             "watcher_lease_ttl_seconds = {0}".format(
                 _render_number(config.watcher.watcher_lease_ttl_seconds)
             ),
+            "ultimate_search_workers = {0}".format(
+                config.watcher.ultimate_search_workers
+            ),
+            "configured_channel_workers = {0}".format(
+                config.watcher.configured_channel_workers
+            ),
+            "runtime_backfill_workers = {0}".format(
+                config.watcher.runtime_backfill_workers
+            ),
             "runtime_channel_reconcile_batch_size = {0}".format(
                 config.watcher.runtime_channel_reconcile_batch_size
             ),
@@ -751,6 +760,30 @@ def _parse_watcher(
             default=2 * 60.0,
         )
         or 2 * 60.0,
+        ultimate_search_workers=_positive_int(
+            raw_watcher.get(
+                "ultimate_search_workers",
+                legacy_defaults.get("ultimate_search_workers"),
+            ),
+            "watcher.ultimate_search_workers",
+            default=1,
+        ),
+        configured_channel_workers=_positive_int(
+            raw_watcher.get(
+                "configured_channel_workers",
+                legacy_defaults.get("configured_channel_workers"),
+            ),
+            "watcher.configured_channel_workers",
+            default=1,
+        ),
+        runtime_backfill_workers=_positive_int(
+            raw_watcher.get(
+                "runtime_backfill_workers",
+                legacy_defaults.get("runtime_backfill_workers"),
+            ),
+            "watcher.runtime_backfill_workers",
+            default=1,
+        ),
         runtime_channel_reconcile_batch_size=_positive_int(
             raw_watcher.get(
                 "runtime_channel_reconcile_batch_size",

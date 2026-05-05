@@ -1508,7 +1508,7 @@ def test_search_messages_parses_thread_ts_from_permalink():
     assert messages[0].thread_ts == "1777006365.616769"
 
 
-def test_post_root_message_serializes_concurrent_browser_api_calls():
+def test_post_root_message_runs_cached_api_calls_concurrently():
     class SlowTransport:
         def __init__(self):
             self._lock = threading.Lock()
@@ -1517,10 +1517,11 @@ def test_post_root_message_serializes_concurrent_browser_api_calls():
             self.texts = []
             self.counter = 0
 
-        def __call__(self, origin, method_name, token, params):
+        def __call__(self, origin, method_name, token, params, cookie_header=None):
             del origin
             del method_name
             del token
+            del cookie_header
             with self._lock:
                 self.inflight += 1
                 self.max_inflight = max(self.max_inflight, self.inflight)
@@ -1578,7 +1579,7 @@ def test_post_root_message_serializes_concurrent_browser_api_calls():
 
     assert errors == []
     assert len(results) == 2
-    assert slow_transport.max_inflight == 1
+    assert slow_transport.max_inflight == 2
     assert sorted(slow_transport.texts) == ["Bob, wrap-1", "Bob, wrap-2"]
 
 
@@ -1673,7 +1674,7 @@ def test_call_slack_api_rediscovers_when_seeded_workspace_auth_is_invalid():
     discovery_page = DiscoveryPage()
     tokens = []
     adapter._workspace_page = lambda workspace_name: discovery_page  # type: ignore[method-assign]
-    adapter._post_slack_api_form = lambda origin, method_name, token, params: (  # type: ignore[method-assign]
+    adapter._post_slack_api_form = lambda origin, method_name, token, params, cookie_header=None: (  # type: ignore[method-assign]
         tokens.append(token) or (
             {"ok": False, "error": "invalid_auth"}
             if token == "stale-token"
@@ -1698,7 +1699,7 @@ def test_call_slack_api_uses_direct_http_transport_without_api_page():
     )
     calls = []
     adapter._api_page = lambda origin: (_ for _ in ()).throw(AssertionError("helper page should not be used"))  # type: ignore[method-assign]
-    adapter._post_slack_api_form = lambda origin, method_name, token, params: (  # type: ignore[method-assign]
+    adapter._post_slack_api_form = lambda origin, method_name, token, params, cookie_header=None: (  # type: ignore[method-assign]
         calls.append((origin, method_name, token, params)) or {"ok": True, "messages": []}
     )
 
@@ -1729,7 +1730,7 @@ def test_call_slack_api_retries_once_when_direct_http_request_times_out():
         {"ok": False, "error": "request_timeout"},
         {"ok": True, "messages": []},
     ]
-    adapter._post_slack_api_form = lambda origin, method_name, token, params: (  # type: ignore[method-assign]
+    adapter._post_slack_api_form = lambda origin, method_name, token, params, cookie_header=None: (  # type: ignore[method-assign]
         calls.append((origin, method_name, token, params)) or responses.pop(0)
     )
 

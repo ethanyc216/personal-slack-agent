@@ -1,4 +1,5 @@
 from concurrent.futures import Future, ThreadPoolExecutor
+import threading
 import time
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
@@ -80,6 +81,7 @@ class BobOrchestrator:
         self._active_tasks: Dict[int, Future[None]] = {}
         self._active_task_threads: Dict[int, Tuple[str, str, str]] = {}
         self._thread_active_counts: Dict[Tuple[str, str, str], int] = {}
+        self._dispatch_lock = threading.RLock()
         self.state_store.requeue_running_tasks()
 
     def close(self) -> None:
@@ -824,47 +826,49 @@ class BobOrchestrator:
         )
 
     def _dispatch_queued_tasks(self) -> None:
-        self._drain_completed_tasks()
-        available_slots = self._max_concurrent_tasks - len(self._active_tasks)
-        if available_slots <= 0:
-            return
-
-        for task in self.state_store.list_tasks(status=TaskStatus.QUEUED):
+        with self._dispatch_lock:
+            self._drain_completed_tasks()
+            available_slots = self._max_concurrent_tasks - len(self._active_tasks)
             if available_slots <= 0:
-                break
-            thread_key = (task.workspace_name, task.channel_name, task.thread_ts)
-            if self._thread_active_counts.get(thread_key, 0) >= self._max_concurrent_per_thread:
-                continue
-            claimed_task = self.state_store.claim_task(task.task_id)
-            if claimed_task is None:
-                continue
-            if self._max_concurrent_tasks == 1:
-                self._run_task_inline(claimed_task)
+                return
+
+            for task in self.state_store.list_tasks(status=TaskStatus.QUEUED):
+                if available_slots <= 0:
+                    break
+                thread_key = (task.workspace_name, task.channel_name, task.thread_ts)
+                if self._thread_active_counts.get(thread_key, 0) >= self._max_concurrent_per_thread:
+                    continue
+                claimed_task = self.state_store.claim_task(task.task_id)
+                if claimed_task is None:
+                    continue
+                if self._max_concurrent_tasks == 1:
+                    self._run_task_inline(claimed_task)
+                    available_slots -= 1
+                    continue
+                future = self._worker_pool.submit(self._execute_claimed_task, claimed_task.task_id)
+                self._active_tasks[claimed_task.task_id] = future
+                self._active_task_threads[claimed_task.task_id] = thread_key
+                self._thread_active_counts[thread_key] = self._thread_active_counts.get(thread_key, 0) + 1
                 available_slots -= 1
-                continue
-            future = self._worker_pool.submit(self._execute_claimed_task, claimed_task.task_id)
-            self._active_tasks[claimed_task.task_id] = future
-            self._active_task_threads[claimed_task.task_id] = thread_key
-            self._thread_active_counts[thread_key] = self._thread_active_counts.get(thread_key, 0) + 1
-            available_slots -= 1
 
     def _drain_completed_tasks(self) -> None:
-        completed_task_ids = [
-            task_id for task_id, future in self._active_tasks.items() if future.done()
-        ]
-        for task_id in completed_task_ids:
-            future = self._active_tasks.pop(task_id)
-            thread_key = self._active_task_threads.pop(task_id, None)
-            if thread_key is not None:
-                remaining = self._thread_active_counts.get(thread_key, 0) - 1
-                if remaining > 0:
-                    self._thread_active_counts[thread_key] = remaining
-                else:
-                    self._thread_active_counts.pop(thread_key, None)
-            try:
-                future.result()
-            except Exception:
-                continue
+        with self._dispatch_lock:
+            completed_task_ids = [
+                task_id for task_id, future in self._active_tasks.items() if future.done()
+            ]
+            for task_id in completed_task_ids:
+                future = self._active_tasks.pop(task_id)
+                thread_key = self._active_task_threads.pop(task_id, None)
+                if thread_key is not None:
+                    remaining = self._thread_active_counts.get(thread_key, 0) - 1
+                    if remaining > 0:
+                        self._thread_active_counts[thread_key] = remaining
+                    else:
+                        self._thread_active_counts.pop(thread_key, None)
+                try:
+                    future.result()
+                except Exception:
+                    continue
 
     def _execute_claimed_task(self, task_id: int) -> None:
         task = self.state_store.get_task(task_id)
