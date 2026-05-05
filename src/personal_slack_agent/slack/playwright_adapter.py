@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path, PurePosixPath
+import ssl
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -1282,8 +1283,12 @@ class PlaywrightSlackAdapter:
                 text = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             text = exc.read().decode("utf-8", errors="replace")
-        except (urllib.error.URLError, TimeoutError):
-            return {"ok": False, "error": "request_timeout"}
+        except urllib.error.URLError as exc:
+            return self._slack_api_request_error_payload(exc)
+        except ssl.SSLError as exc:
+            return self._slack_api_request_error_payload(exc)
+        except TimeoutError as exc:
+            return self._slack_api_request_error_payload(exc)
         try:
             payload = json.loads(text)
         except json.JSONDecodeError:
@@ -1291,6 +1296,22 @@ class PlaywrightSlackAdapter:
         if not isinstance(payload, dict):
             return {"ok": False, "error": "non_json_response", "raw": text}
         return payload
+
+    def _slack_api_request_error_payload(self, exc: BaseException) -> Dict[str, Any]:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            return {
+                "ok": False,
+                "error": "ssl_cert_verification_failed",
+                "detail": str(reason),
+            }
+        if isinstance(reason, ssl.SSLError):
+            return {
+                "ok": False,
+                "error": "ssl_error",
+                "detail": str(reason),
+            }
+        return {"ok": False, "error": "request_timeout", "detail": str(exc)}
 
     def _on_io_thread(self) -> bool:
         return self._io_thread_id == threading.get_ident()
