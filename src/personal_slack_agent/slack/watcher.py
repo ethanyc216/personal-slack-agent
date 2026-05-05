@@ -53,6 +53,7 @@ class SlackWatcher:
         self._historical_reconcile_due_at: Dict[str, float] = {}
         self._historical_reconcile_interval_seconds: Dict[str, float] = {}
         self._ultimate_search_cursor: Dict[str, float] = {}
+        self._runtime_reconcile_cursor: Dict[str, int] = {}
 
     def run_cycle(self) -> None:
         if self._stop_requested():
@@ -67,13 +68,13 @@ class SlackWatcher:
         self._process_event_queue()
         if self._stop_requested():
             return
-        self._reconcile_recent_ultimate_invocations()
-        if self._stop_requested():
-            return
         self._reconcile_all_workspaces(skip_workspaces=reconciled_workspaces)
         if self._stop_requested():
             return
         self._reconcile_recent_ultimate_invocations()
+        if self._stop_requested():
+            return
+        self._reconcile_runtime_backfill()
         if self._stop_requested():
             return
         self._reconcile_pending_threads()
@@ -88,7 +89,6 @@ class SlackWatcher:
             for channel in workspace.channels:
                 channel_id = self.browser.get_channel_id(workspace.name, channel.name)
                 self._channel_name_by_id[(workspace.name, channel_id)] = channel.name
-            self._register_runtime_channels(workspace.name)
 
             client = SlackWebsocketClient(
                 on_event=lambda event, workspace_name=workspace.name: self._event_queue.append(
@@ -150,7 +150,7 @@ class SlackWatcher:
             if workspace is None:
                 continue
             reconciled_workspaces.add(workspace_name)
-            for channel_name in self._channel_names_for_workspace(workspace_name):
+            for channel_name in self._configured_channel_names_for_workspace(workspace_name):
                 if self._stop_requested():
                     return reconciled_workspaces
                 self.reconcile_channel_since_cursor(workspace_name, channel_name)
@@ -206,7 +206,7 @@ class SlackWatcher:
                 return
             if workspace.name in skipped:
                 continue
-            for channel_name in self._channel_names_for_workspace(workspace.name):
+            for channel_name in self._configured_channel_names_for_workspace(workspace.name):
                 if self._stop_requested():
                     return
                 self.reconcile_channel_since_cursor(workspace.name, channel_name)
@@ -251,23 +251,39 @@ class SlackWatcher:
                 event.message_ts,
             )
 
-    def reconcile_channel_since_cursor(self, workspace_name: str, channel_name: str) -> None:
+    def reconcile_channel_since_cursor(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        max_batches: Optional[int] = None,
+    ) -> None:
         cursor = self.state_store.get_channel_cursor(workspace_name, channel_name)
         latest_boundary = None
         batches = []
         while True:
             if self._stop_requested():
                 return
-            messages = self.browser.list_root_messages(
-                workspace_name,
-                channel_name,
-                oldest=cursor,
-                latest=latest_boundary,
-                limit=self.config.watcher.root_batch_size,
-            )
+            try:
+                messages = self.browser.list_root_messages(
+                    workspace_name,
+                    channel_name,
+                    oldest=cursor,
+                    latest=latest_boundary,
+                    limit=self.config.watcher.root_batch_size,
+                )
+            except RuntimeError as exc:
+                self._log_warning(
+                    "slack roots reconcile failed workspace=%s channel=%s error=%s",
+                    workspace_name,
+                    channel_name,
+                    exc,
+                )
+                return
             if not messages:
                 break
             batches.append(messages)
+            if max_batches is not None and len(batches) >= max_batches:
+                break
             oldest_message_ts = messages[0].message_ts
             if not _is_newer_timestamp(oldest_message_ts, cursor):
                 break
@@ -416,7 +432,18 @@ class SlackWatcher:
         cursor = self.state_store.get_channel_cursor(workspace_name, channel_name)
         if not _is_newer_timestamp(message_ts, cursor):
             return
-        message = self._find_root_message(workspace_name, channel_name, message_ts)
+        try:
+            message = self._find_root_message(workspace_name, channel_name, message_ts)
+        except RuntimeError as exc:
+            self._log_warning(
+                "slack root hydration failed workspace=%s channel=%s message=%s error=%s",
+                workspace_name,
+                channel_name,
+                message_ts,
+                exc,
+            )
+            self._workspaces_pending_reconcile.add(workspace_name)
+            return
         if message is None:
             self._workspaces_pending_reconcile.add(workspace_name)
             return
@@ -683,6 +710,31 @@ class SlackWatcher:
                 text=message.text,
             )
 
+    def _reconcile_runtime_backfill(self) -> None:
+        if not self.config.watcher.bob_ultimate_mode:
+            return
+        for workspace in self.config.workspaces:
+            if self._stop_requested():
+                return
+            runtime_channels = self._runtime_channel_names_for_workspace(workspace.name)
+            if not runtime_channels:
+                continue
+            cursor = self._runtime_reconcile_cursor.get(workspace.name, 0)
+            batch_size = min(
+                max(1, int(self.config.watcher.runtime_channel_reconcile_batch_size)),
+                len(runtime_channels),
+            )
+            for offset in range(batch_size):
+                if self._stop_requested():
+                    return
+                channel_name = runtime_channels[(cursor + offset) % len(runtime_channels)]
+                self.reconcile_channel_since_cursor(
+                    workspace.name,
+                    channel_name,
+                    max_batches=1,
+                )
+            self._runtime_reconcile_cursor[workspace.name] = cursor + batch_size
+
     def _stop_requested(self) -> bool:
         if self._should_stop is None:
             return False
@@ -691,17 +743,22 @@ class SlackWatcher:
         except Exception:
             return False
 
-    def _channel_names_for_workspace(self, workspace_name: str):
+    def _configured_channel_names_for_workspace(self, workspace_name: str):
         workspace = self._workspace_config(workspace_name)
         if workspace is None:
             return []
+        return [channel.name for channel in workspace.channels]
+
+    def _runtime_channel_names_for_workspace(self, workspace_name: str):
         self._register_runtime_channels(workspace_name)
-        channel_names = [channel.name for channel in workspace.channels]
-        seen = set(channel_names)
+        seen = set(self._configured_channel_names_for_workspace(workspace_name))
+        channel_names = []
         if not self.config.watcher.bob_ultimate_mode:
             return channel_names
         for (item_workspace, _channel_id), channel_name in self._channel_name_by_id.items():
             if item_workspace != workspace_name or channel_name in seen:
+                continue
+            if not self._is_runtime_channel(channel_name):
                 continue
             channel_names.append(channel_name)
             seen.add(channel_name)
@@ -773,7 +830,7 @@ class SlackWatcher:
         workspace = self._workspace_config(workspace_name)
         if workspace is None:
             return None
-        for channel_name in self._channel_names_for_workspace(workspace_name):
+        for channel_name in self._configured_channel_names_for_workspace(workspace_name):
             sessions = self.state_store.list_sessions(workspace_name, channel_name)
             _recent_sessions, historical_sessions = self._partition_terminal_sessions(sessions)
             candidates.extend(historical_sessions)

@@ -314,6 +314,12 @@ def dump_config(config: AppConfig) -> str:
             "thread_reply_rate_limit_backoff_seconds = {0}".format(
                 _render_number(config.watcher.thread_reply_rate_limit_backoff_seconds)
             ),
+            "heartbeat_stale_seconds = {0}".format(
+                _render_number(config.watcher.heartbeat_stale_seconds)
+            ),
+            "runtime_channel_reconcile_batch_size = {0}".format(
+                config.watcher.runtime_channel_reconcile_batch_size
+            ),
             "recent_terminal_thread_reconcile_limit = {0}".format(
                 config.watcher.recent_terminal_thread_reconcile_limit
             ),
@@ -724,6 +730,23 @@ def _parse_watcher(
             default=60.0,
         )
         or 60.0,
+        heartbeat_stale_seconds=_optional_positive_float(
+            raw_watcher.get(
+                "heartbeat_stale_seconds",
+                legacy_defaults.get("heartbeat_stale_seconds"),
+            ),
+            "watcher.heartbeat_stale_seconds",
+            default=5 * 60.0,
+        )
+        or 5 * 60.0,
+        runtime_channel_reconcile_batch_size=_positive_int(
+            raw_watcher.get(
+                "runtime_channel_reconcile_batch_size",
+                legacy_defaults.get("runtime_channel_reconcile_batch_size"),
+            ),
+            "watcher.runtime_channel_reconcile_batch_size",
+            default=1,
+        ),
         recent_terminal_thread_reconcile_limit=_positive_int(
             raw_watcher.get(
                 "recent_terminal_thread_reconcile_limit",
