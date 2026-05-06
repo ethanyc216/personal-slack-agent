@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
+import html
 from logging import Logger
 import re
 import threading
@@ -17,6 +19,20 @@ from ..state import BobStateStore
 from .browser import SlackBrowserAdapter, SlackRootMessage, SlackThreadReplyMessage
 from .events import SlackRealtimeEvent
 from .websocket_client import SlackWebsocketClient
+
+
+_OUTBOUND_ECHO_FRAGMENT_MIN_CHARS = 240
+_OUTBOUND_ECHO_FRAGMENT_WINDOW_SECONDS = 10 * 60.0
+_SLACK_LINK_PATTERN = re.compile(r"<((?:https?|mailto):[^>|]+)(?:\|([^>]+))?>")
+
+
+@dataclass(frozen=True)
+class _OutboundEchoCandidate:
+    normalized_text: str
+    delivery_state: str
+    message_ts: Optional[str]
+    created_at: int
+    updated_at: int
 
 
 class SlackWatcher:
@@ -425,18 +441,6 @@ class SlackWatcher:
         if record is None:
             return
         cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
-        delivered_timestamps = set(
-            self.state_store.list_delivered_outbound_message_timestamps(
-                workspace_name,
-                channel_name,
-                thread_ts,
-            )
-        )
-        pending_outbound_texts = self._pending_outbound_texts_for_thread(
-            workspace_name,
-            channel_name,
-            thread_ts,
-        )
         current_cursor = cursor
         legacy_thread = self._is_legacy_configured_bob_thread(
             workspace_name,
@@ -471,6 +475,13 @@ class SlackWatcher:
                 if historical:
                     self._record_historical_sweep_success(workspace_name)
                 return
+            outbound_echo_candidates = self._outbound_echo_candidates_for_thread(
+                workspace_name,
+                channel_name,
+                thread_ts,
+            )
+            delivered_timestamps = _delivered_outbound_timestamps(outbound_echo_candidates)
+            pending_outbound_texts = _pending_outbound_texts(outbound_echo_candidates)
             for reply in replies:
                 if self._stop_requested():
                     return
@@ -482,6 +493,7 @@ class SlackWatcher:
                     delivered_timestamps,
                     pending_outbound_texts,
                     self._assistant_names_for_record(record),
+                    outbound_echo_candidates,
                 ):
                     continue
                 if self._should_route_ultimate_invocation(reply.text) and (
@@ -588,6 +600,20 @@ class SlackWatcher:
                 channel_name,
                 thread_ts,
             )
+            if self._is_outbound_echo_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=reply.message_ts,
+                text=reply.text,
+            ):
+                self.state_store.upsert_thread_cursor(
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    reply.message_ts,
+                )
+                return
             if self._is_runtime_channel(channel_name) or not legacy_thread:
                 if self._should_route_ultimate_invocation(reply.text):
                     self.orchestrator.handle_ultimate_invocation(
@@ -613,24 +639,20 @@ class SlackWatcher:
                     reply.message_ts,
                 )
                 return
-            delivered_timestamps = set(
-                self.state_store.list_delivered_outbound_message_timestamps(
-                    workspace_name,
-                    channel_name,
-                    thread_ts,
-                )
-            )
-            pending_outbound_texts = self._pending_outbound_texts_for_thread(
+            outbound_echo_candidates = self._outbound_echo_candidates_for_thread(
                 workspace_name,
                 channel_name,
                 thread_ts,
             )
+            delivered_timestamps = _delivered_outbound_timestamps(outbound_echo_candidates)
+            pending_outbound_texts = _pending_outbound_texts(outbound_echo_candidates)
             if not _should_route_reply(
                 reply,
                 record.created_at,
                 delivered_timestamps,
                 pending_outbound_texts,
                 self._assistant_names_for_record(record),
+                outbound_echo_candidates,
             ):
                 self.state_store.upsert_thread_cursor(
                     workspace_name,
@@ -694,25 +716,58 @@ class SlackWatcher:
                 return reply
         return None
 
-    def _pending_outbound_texts_for_thread(
+    def _outbound_echo_candidates_for_thread(
         self,
         workspace_name: str,
         channel_name: str,
         thread_ts: str,
-    ) -> Set[str]:
-        texts = set()
-        for intent in self.state_store.list_pending_outbound_intents():
-            if (
-                intent.workspace_name != workspace_name
-                or intent.channel_name != channel_name
-                or intent.thread_ts != thread_ts
-                or intent.action != "post_thread_reply"
-            ):
+    ) -> List[_OutboundEchoCandidate]:
+        candidates = []
+        for intent in self.state_store.list_outbound_intents_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        ):
+            if intent.action != "post_thread_reply":
+                continue
+            if intent.delivery_state not in {"pending", "attempted", "delivered"}:
                 continue
             normalized = _normalize_reply_text(intent.text)
             if normalized:
-                texts.add(normalized)
-        return texts
+                candidates.append(
+                    _OutboundEchoCandidate(
+                        normalized_text=normalized,
+                        delivery_state=intent.delivery_state,
+                        message_ts=intent.message_ts,
+                        created_at=intent.created_at,
+                        updated_at=intent.updated_at,
+                    )
+                )
+        return candidates
+
+    def _is_outbound_echo_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        text: str,
+    ) -> bool:
+        normalized_text = _normalize_reply_text(text)
+        if not normalized_text:
+            return False
+        outbound_echo_candidates = self._outbound_echo_candidates_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        )
+        return _matches_outbound_echo(
+            message_ts=message_ts,
+            normalized_text=normalized_text,
+            delivered_timestamps=_delivered_outbound_timestamps(outbound_echo_candidates),
+            pending_outbound_texts=_pending_outbound_texts(outbound_echo_candidates),
+            outbound_echo_candidates=outbound_echo_candidates,
+        )
 
     def _workspace_config(self, workspace_name: str):
         for workspace in self.config.workspaces:
@@ -832,6 +887,14 @@ class SlackWatcher:
                         thread_ts,
                     )
                 )
+            ):
+                continue
+            if self._is_outbound_echo_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message.message_ts,
+                text=message.text,
             ):
                 continue
             self.orchestrator.handle_ultimate_invocation(
@@ -1265,13 +1328,18 @@ def _should_route_reply(
     delivered_timestamps: Set[str],
     pending_outbound_texts: Set[str],
     assistant_names: List[str],
+    outbound_echo_candidates: Optional[List[_OutboundEchoCandidate]] = None,
 ) -> bool:
     normalized_text = _normalize_reply_text(reply.text)
     if not normalized_text:
         return False
-    if reply.message_ts in delivered_timestamps:
-        return False
-    if normalized_text in pending_outbound_texts:
+    if _matches_outbound_echo(
+        message_ts=reply.message_ts,
+        normalized_text=normalized_text,
+        delivered_timestamps=delivered_timestamps,
+        pending_outbound_texts=pending_outbound_texts,
+        outbound_echo_candidates=outbound_echo_candidates or [],
+    ):
         return False
     if _is_assistant_generated_reply_text(normalized_text, assistant_names):
         return False
@@ -1282,11 +1350,117 @@ def _should_route_reply(
     except (TypeError, ValueError):
         return False
 
+
+def _matches_outbound_echo(
+    message_ts: str,
+    normalized_text: str,
+    delivered_timestamps: Set[str],
+    pending_outbound_texts: Set[str],
+    outbound_echo_candidates: List[_OutboundEchoCandidate],
+) -> bool:
+    if message_ts in delivered_timestamps:
+        return True
+    if normalized_text in pending_outbound_texts:
+        return True
+    for candidate in outbound_echo_candidates:
+        if candidate.message_ts and message_ts == candidate.message_ts:
+            return True
+        if normalized_text == candidate.normalized_text:
+            return True
+        if _is_recent_large_outbound_fragment(
+            message_ts,
+            normalized_text,
+            candidate,
+        ):
+            return True
+    return False
+
+
+def _delivered_outbound_timestamps(
+    outbound_echo_candidates: List[_OutboundEchoCandidate],
+) -> Set[str]:
+    return {
+        candidate.message_ts
+        for candidate in outbound_echo_candidates
+        if candidate.delivery_state == "delivered" and candidate.message_ts
+    }
+
+
+def _pending_outbound_texts(
+    outbound_echo_candidates: List[_OutboundEchoCandidate],
+) -> Set[str]:
+    return {
+        candidate.normalized_text
+        for candidate in outbound_echo_candidates
+        if candidate.delivery_state in {"pending", "attempted"}
+    }
+
+
+def _is_recent_large_outbound_fragment(
+    message_ts: str,
+    normalized_text: str,
+    candidate: _OutboundEchoCandidate,
+) -> bool:
+    if len(normalized_text) < _OUTBOUND_ECHO_FRAGMENT_MIN_CHARS:
+        return False
+    if len(candidate.normalized_text) < _OUTBOUND_ECHO_FRAGMENT_MIN_CHARS:
+        return False
+    if (
+        normalized_text not in candidate.normalized_text
+        and candidate.normalized_text not in normalized_text
+    ):
+        return False
+    return _message_near_outbound_candidate(message_ts, candidate)
+
+
+def _message_near_outbound_candidate(
+    message_ts: str,
+    candidate: _OutboundEchoCandidate,
+) -> bool:
+    message_time = _timestamp_float(message_ts)
+    if message_time is None:
+        return False
+    candidate_times = [
+        item
+        for item in (
+            _timestamp_float(candidate.message_ts),
+            float(candidate.created_at) if candidate.created_at else None,
+            float(candidate.updated_at) if candidate.updated_at else None,
+        )
+        if item is not None
+    ]
+    return any(
+        abs(message_time - candidate_time) <= _OUTBOUND_ECHO_FRAGMENT_WINDOW_SECONDS
+        for candidate_time in candidate_times
+    )
+
+
+def _timestamp_float(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_reply_text(text: str) -> str:
-    normalized = normalize_slack_markdown(text or "").strip()
+    normalized = html.unescape(normalize_slack_markdown(text or "")).strip()
+    normalized = _SLACK_LINK_PATTERN.sub(_normalize_slack_link, normalized)
     normalized = normalized.lstrip("_*`~> ")
+    normalized = re.sub(r":([A-Za-z0-9_+-]+):[:*_`~]+", r":\1:", normalized)
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized
+
+
+def _normalize_slack_link(match: re.Match) -> str:
+    target = match.group(1)
+    label = match.group(2)
+    if label:
+        return label
+    if target.startswith("mailto:"):
+        return target[len("mailto:") :]
+    return target
 
 
 def _is_assistant_generated_reply_text(

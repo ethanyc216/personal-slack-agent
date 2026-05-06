@@ -1817,6 +1817,152 @@ def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
     assert state.get_thread_cursor("bob_company", "bob_private_channel", "10.0") == "9999999999.0"
 
 
+def test_watcher_skips_long_delivered_outbound_fragments_with_different_ts(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    lines = [
+        "{0}. **Required:** Configure item {0} before rollout.".format(index)
+        for index in range(1, 80)
+    ]
+    lines[37] = (
+        "38. **Required:** Set `slack_channel_id=<redacted>` when sidebar "
+        "discovery cannot find the channel."
+    )
+    lines[60] = (
+        "61. `curl http://127.0.0.1:9222/json/version | jq .webSocketDebuggerUrl`"
+    )
+    lines[61] = "62. `ssh -T git@bitbucket.oci.oraclecorp.com`"
+    outbound_text = "_*Bob :white_check_mark::*_ " + "\n".join(lines)
+    fragment_texts = [
+        "\n".join(lines[12:28]),
+        "\n".join(lines[36:52]).replace("<redacted>", "&lt;redacted&gt;"),
+        "\n".join(lines[52:70])
+        .replace(
+            "http://127.0.0.1:9222/json/version",
+            "<http://127.0.0.1:9222/json/version>",
+        )
+        .replace(
+            "git@bitbucket.oci.oraclecorp.com",
+            "<mailto:git@bitbucket.oci.oraclecorp.com|git@bitbucket.oci.oraclecorp.com>",
+        ),
+    ]
+    state.upsert_outbound_intent(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="10.0",
+        intent_key="final-session-123",
+        action="post_thread_reply",
+        text=outbound_text,
+        delivery_state="delivered",
+        message_ts="9999999999.500000",
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="10.0",
+            message_ts="9999999999.450000",
+            author_actor_id="U123",
+            text=fragment_texts[0],
+        ),
+        SlackThreadReplyMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="10.0",
+            message_ts="9999999999.460000",
+            author_actor_id="U123",
+            text=fragment_texts[1],
+        ),
+        SlackThreadReplyMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="10.0",
+            message_ts="9999999999.470000",
+            author_actor_id="U123",
+            text=fragment_texts[2],
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.reply_calls == []
+    assert state.get_thread_cursor("bob_company", "bob_private_channel", "10.0") == (
+        "9999999999.470000"
+    )
+
+
+def test_watcher_search_fallback_skips_delivered_outbound_echo(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="bob_company",
+        channel_name="slack:C999",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    outbound_text = "_*Bob :white_check_mark::*_ Final answer"
+    state.upsert_outbound_intent(
+        workspace_name="bob_company",
+        channel_name="slack:C999",
+        thread_ts="10.0",
+        intent_key="final-session-123",
+        action="post_thread_reply",
+        text=outbound_text,
+        delivery_state="delivered",
+        message_ts="9999999999.500000",
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.search_results["bob_company"] = [
+        SlackSearchMessage(
+            workspace_name="bob_company",
+            channel_id="C999",
+            message_ts="9999999999.450000",
+            thread_ts="10.0",
+            author_actor_id="U123",
+            text="Bob :white_check_mark: Final answer",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls == []
+
+
 def test_watcher_skips_ratelimited_thread_reconcile_without_aborting_cycle(tmp_path):
     from personal_slack_agent.slack.watcher import SlackWatcher
 
