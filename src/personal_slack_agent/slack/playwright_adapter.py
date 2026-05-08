@@ -484,6 +484,47 @@ class PlaywrightSlackAdapter:
             payload=payload,
         )
 
+    def client_user_boot(
+        self,
+        workspace_name: str,
+        reason: str | None = None,
+    ) -> Dict[str, Any]:
+        return self._api_client(workspace_name).client_user_boot(reason=reason)
+
+    def users_channel_sections_list(
+        self,
+        workspace_name: str,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> Dict[str, Any]:
+        return self._api_client(workspace_name).users_channel_sections_list(
+            cursor=cursor,
+            limit=limit,
+        )
+
+    def client_counts(self, workspace_name: str) -> Dict[str, Any]:
+        return self._api_client(workspace_name).client_counts()
+
+    def conversations_view(
+        self,
+        workspace_name: str,
+        channel_id: str,
+        limit: int | None = None,
+    ) -> Dict[str, Any]:
+        return self._api_client(workspace_name).conversations_view(
+            channel_id=channel_id,
+            limit=limit,
+        )
+
+    def conversations_list_prefs(
+        self,
+        workspace_name: str,
+        channel_id: str,
+    ) -> Dict[str, Any]:
+        return self._api_client(workspace_name).conversations_list_prefs(
+            channel_id=channel_id,
+        )
+
     def list_thread_replies(
         self,
         workspace_name: str,
