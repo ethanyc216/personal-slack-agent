@@ -78,19 +78,27 @@ class PlaywrightSlackAdapter:
         self._channel_urls: Dict[Tuple[str, str], str] = {}
         self._api_sessions: Dict[str, Tuple[str, str]] = {}
         self._workspace_api_contexts: Dict[str, Tuple[str, str]] = {}
+        self._api_session_cookie_headers: Dict[str, str] = {}
         self._realtime_subscriptions: Dict[str, Callable[[Any], None]] = {}
+        self._api_session_lock = threading.RLock()
+        self._channel_url_lock = threading.RLock()
         self._io_lock = threading.RLock()
         self._io_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bob-slack-io")
         self._io_thread_id: Optional[int] = None
 
     def set_workspace_urls(self, workspace_urls: Dict[str, str]) -> None:
-        self._workspace_urls = dict(workspace_urls)
+        with self._channel_url_lock:
+            self._workspace_urls = dict(workspace_urls)
 
     def set_channel_urls(self, channel_urls: Dict[Tuple[str, str], str]) -> None:
-        self._channel_urls = dict(channel_urls)
+        with self._channel_url_lock:
+            self._channel_urls = dict(channel_urls)
 
     def set_workspace_api_contexts(self, workspace_api_contexts: Dict[str, Tuple[str, str]]) -> None:
-        self._workspace_api_contexts = dict(workspace_api_contexts)
+        with self._api_session_lock:
+            self._workspace_api_contexts = dict(workspace_api_contexts)
+            self._api_sessions.clear()
+            self._api_session_cookie_headers.clear()
 
     def connect(self) -> Any:
         if not self._on_io_thread():
@@ -256,19 +264,24 @@ class PlaywrightSlackAdapter:
             return page
 
     def get_channel_id(self, workspace_name: str, channel_name: str) -> str:
+        if channel_name.startswith("slack:"):
+            return channel_name.split(":", 1)[1]
+        cached = self._cached_channel_url(workspace_name, channel_name)
+        if cached:
+            _team_id, channel_id = self._parse_workspace_target(cached)
+            if channel_id:
+                return channel_id
         if not self._on_io_thread():
             return self._run_on_io_thread(lambda: self.get_channel_id(workspace_name, channel_name))
         with self._io_lock:
-            if channel_name.startswith("slack:"):
-                return channel_name.split(":", 1)[1]
             _team_id, channel_id = self._parse_workspace_target(
                 self._channel_url(workspace_name, channel_name)
             )
-            if not channel_id:
-                raise RuntimeError(
-                    "Could not determine Slack channel id for workspace {0}.".format(workspace_name)
-                )
-            return channel_id
+        if not channel_id:
+            raise RuntimeError(
+                "Could not determine Slack channel id for workspace {0}.".format(workspace_name)
+            )
+        return channel_id
 
     def subscribe_to_realtime_frames(
         self,
@@ -317,23 +330,18 @@ class PlaywrightSlackAdapter:
         thread_ts: str,
         text: str,
     ) -> str:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self.post_thread_reply(workspace_name, channel_name, thread_ts, text)
-            )
-        with self._io_lock:
-            payload = self._api_client(workspace_name).chat_post_message(
-                channel_id=self.get_channel_id(workspace_name, channel_name),
-                thread_ts=thread_ts,
-                text=text,
-                reply_broadcast=False,
-            )
-            if not payload.get("ok"):
-                raise RuntimeError("Slack API chat.postMessage failed: {0}".format(payload.get("error")))
-            latest_ts = str(payload.get("ts") or payload.get("message", {}).get("ts") or "")
-            if not latest_ts:
-                raise RuntimeError("Slack API post succeeded but no reply timestamp was returned.")
-            return latest_ts
+        payload = self._api_client(workspace_name).chat_post_message(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            thread_ts=thread_ts,
+            text=text,
+            reply_broadcast=False,
+        )
+        if not payload.get("ok"):
+            raise RuntimeError("Slack API chat.postMessage failed: {0}".format(payload.get("error")))
+        latest_ts = str(payload.get("ts") or payload.get("message", {}).get("ts") or "")
+        if not latest_ts:
+            raise RuntimeError("Slack API post succeeded but no reply timestamp was returned.")
+        return latest_ts
 
     def post_root_message(
         self,
@@ -341,23 +349,18 @@ class PlaywrightSlackAdapter:
         channel_name: str,
         text: str,
     ) -> str:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self.post_root_message(workspace_name, channel_name, text)
-            )
-        with self._io_lock:
-            payload = self._api_client(workspace_name).chat_post_message(
-                channel_id=self.get_channel_id(workspace_name, channel_name),
-                text=text,
-                thread_ts=None,
-                reply_broadcast=False,
-            )
-            if not payload.get("ok"):
-                raise RuntimeError("Slack API chat.postMessage failed: {0}".format(payload.get("error")))
-            latest_ts = str(payload.get("ts") or payload.get("message", {}).get("ts") or "")
-            if not latest_ts:
-                raise RuntimeError("Slack API post succeeded but no message timestamp was returned.")
-            return latest_ts
+        payload = self._api_client(workspace_name).chat_post_message(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            text=text,
+            thread_ts=None,
+            reply_broadcast=False,
+        )
+        if not payload.get("ok"):
+            raise RuntimeError("Slack API chat.postMessage failed: {0}".format(payload.get("error")))
+        latest_ts = str(payload.get("ts") or payload.get("message", {}).get("ts") or "")
+        if not latest_ts:
+            raise RuntimeError("Slack API post succeeded but no message timestamp was returned.")
+        return latest_ts
 
     def add_reaction(
         self,
@@ -366,24 +369,16 @@ class PlaywrightSlackAdapter:
         message_ts: str,
         emoji_name: str,
     ) -> None:
-        if not self._on_io_thread():
-            self._run_on_io_thread(
-                lambda: self.add_reaction(
-                    workspace_name, channel_name, message_ts, emoji_name
-                )
-            )
-            return None
-        with self._io_lock:
-            payload = self._api_client(workspace_name).reactions_add(
-                channel_id=self.get_channel_id(workspace_name, channel_name),
-                name=emoji_name,
-                timestamp=message_ts,
-            )
-            if payload.get("ok"):
-                return
-            if payload.get("error") == "already_reacted":
-                return
-            raise RuntimeError("Slack API reactions.add failed: {0}".format(payload.get("error")))
+        payload = self._api_client(workspace_name).reactions_add(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            name=emoji_name,
+            timestamp=message_ts,
+        )
+        if payload.get("ok"):
+            return
+        if payload.get("error") == "already_reacted":
+            return
+        raise RuntimeError("Slack API reactions.add failed: {0}".format(payload.get("error")))
         return None
 
     def upload_text_snippet(
@@ -394,39 +389,32 @@ class PlaywrightSlackAdapter:
         filename: str,
         content: str,
     ) -> str:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self.upload_text_snippet(
-                    workspace_name, channel_name, thread_ts, filename, content
+        upload_name = self._snippet_filename(filename)
+        payload = self._api_client(workspace_name).files_get_upload_url_external(
+            filename=upload_name,
+            length=len(content.encode("utf-8")),
+        )
+        if not payload.get("ok"):
+            raise RuntimeError(
+                "Slack API files.getUploadURLExternal failed: {0}".format(payload.get("error"))
+            )
+        upload_url = str(payload.get("upload_url") or "")
+        file_id = str(payload.get("file_id") or "")
+        if not upload_url or not file_id:
+            raise RuntimeError("Slack upload URL flow returned an incomplete payload.")
+        self._upload_external_bytes(upload_url, content.encode("utf-8"))
+        completion = self._api_client(workspace_name).files_complete_upload_external(
+            files=[{"id": file_id, "title": filename}],
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            thread_ts=thread_ts,
+        )
+        if not completion.get("ok"):
+            raise RuntimeError(
+                "Slack API files.completeUploadExternal failed: {0}".format(
+                    completion.get("error")
                 )
             )
-        with self._io_lock:
-            upload_name = self._snippet_filename(filename)
-            payload = self._api_client(workspace_name).files_get_upload_url_external(
-                filename=upload_name,
-                length=len(content.encode("utf-8")),
-            )
-            if not payload.get("ok"):
-                raise RuntimeError(
-                    "Slack API files.getUploadURLExternal failed: {0}".format(payload.get("error"))
-                )
-            upload_url = str(payload.get("upload_url") or "")
-            file_id = str(payload.get("file_id") or "")
-            if not upload_url or not file_id:
-                raise RuntimeError("Slack upload URL flow returned an incomplete payload.")
-            self._upload_external_bytes(upload_url, content.encode("utf-8"))
-            completion = self._api_client(workspace_name).files_complete_upload_external(
-                files=[{"id": file_id, "title": filename}],
-                channel_id=self.get_channel_id(workspace_name, channel_name),
-                thread_ts=thread_ts,
-            )
-            if not completion.get("ok"):
-                raise RuntimeError(
-                    "Slack API files.completeUploadExternal failed: {0}".format(
-                        completion.get("error")
-                    )
-                )
-            return file_id
+        return file_id
 
     def list_root_messages(
         self,
@@ -436,56 +424,40 @@ class PlaywrightSlackAdapter:
         latest: str | None = None,
         limit: int = 50,
     ) -> list[SlackRootMessage]:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self.list_root_messages(
-                    workspace_name=workspace_name,
-                    channel_name=channel_name,
-                    oldest=oldest,
-                    latest=latest,
-                    limit=limit,
-                )
-            )
-        with self._io_lock:
-            payload = self._api_client(workspace_name).conversations_history(
-                channel_id=self.get_channel_id(workspace_name, channel_name),
-                limit=limit,
-                oldest=oldest,
-                latest=latest,
-            )
-            if not payload.get("ok"):
-                raise RuntimeError("Slack API conversations.history failed: {0}".format(payload.get("error")))
-            return self._root_messages_from_api_payload(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                payload=payload,
-            )
+        payload = self._api_client(workspace_name).conversations_history(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            limit=limit,
+            oldest=oldest,
+            latest=latest,
+        )
+        if not payload.get("ok"):
+            raise RuntimeError("Slack API conversations.history failed: {0}".format(payload.get("error")))
+        return self._root_messages_from_api_payload(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            payload=payload,
+        )
 
     def list_accessible_conversation_ids(
         self,
         workspace_name: str,
     ) -> list[str]:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self.list_accessible_conversation_ids(workspace_name)
+        payload = self._api_client(workspace_name).users_conversations(
+            limit=999,
+            types="public_channel,private_channel,im,mpim",
+        )
+        if not payload.get("ok"):
+            raise RuntimeError(
+                "Slack API users.conversations failed: {0}".format(payload.get("error"))
             )
-        with self._io_lock:
-            payload = self._api_client(workspace_name).users_conversations(
-                limit=999,
-                types="public_channel,private_channel,im,mpim",
-            )
-            if not payload.get("ok"):
-                raise RuntimeError(
-                    "Slack API users.conversations failed: {0}".format(payload.get("error"))
-                )
-            conversation_ids: list[str] = []
-            for item in payload.get("channels", []):
-                if not isinstance(item, dict):
-                    continue
-                conversation_id = str(item.get("id") or "").strip()
-                if conversation_id:
-                    conversation_ids.append(conversation_id)
-            return conversation_ids
+        conversation_ids: list[str] = []
+        for item in payload.get("channels", []):
+            if not isinstance(item, dict):
+                continue
+            conversation_id = str(item.get("id") or "").strip()
+            if conversation_id:
+                conversation_ids.append(conversation_id)
+        return conversation_ids
 
     def search_messages(
         self,
@@ -496,33 +468,62 @@ class PlaywrightSlackAdapter:
         sort: str | None = None,
         sort_dir: str | None = None,
     ) -> list[SlackSearchMessage]:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self.search_messages(
-                    workspace_name=workspace_name,
-                    query=query,
-                    count=count,
-                    page=page,
-                    sort=sort,
-                    sort_dir=sort_dir,
-                )
+        payload = self._api_client(workspace_name).search_messages(
+            query=query,
+            count=count,
+            page=page,
+            sort=sort,
+            sort_dir=sort_dir,
+        )
+        if not payload.get("ok"):
+            raise RuntimeError(
+                "Slack API search.messages failed: {0}".format(payload.get("error"))
             )
-        with self._io_lock:
-            payload = self._api_client(workspace_name).search_messages(
-                query=query,
-                count=count,
-                page=page,
-                sort=sort,
-                sort_dir=sort_dir,
-            )
-            if not payload.get("ok"):
-                raise RuntimeError(
-                    "Slack API search.messages failed: {0}".format(payload.get("error"))
-                )
-            return self._search_messages_from_api_payload(
-                workspace_name=workspace_name,
-                payload=payload,
-            )
+        return self._search_messages_from_api_payload(
+            workspace_name=workspace_name,
+            payload=payload,
+        )
+
+    def client_user_boot(
+        self,
+        workspace_name: str,
+        reason: str | None = None,
+    ) -> Dict[str, Any]:
+        return self._api_client(workspace_name).client_user_boot(reason=reason)
+
+    def users_channel_sections_list(
+        self,
+        workspace_name: str,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> Dict[str, Any]:
+        return self._api_client(workspace_name).users_channel_sections_list(
+            cursor=cursor,
+            limit=limit,
+        )
+
+    def client_counts(self, workspace_name: str) -> Dict[str, Any]:
+        return self._api_client(workspace_name).client_counts()
+
+    def conversations_view(
+        self,
+        workspace_name: str,
+        channel_id: str,
+        limit: int | None = None,
+    ) -> Dict[str, Any]:
+        return self._api_client(workspace_name).conversations_view(
+            channel_id=channel_id,
+            limit=limit,
+        )
+
+    def conversations_list_prefs(
+        self,
+        workspace_name: str,
+        channel_id: str,
+    ) -> Dict[str, Any]:
+        return self._api_client(workspace_name).conversations_list_prefs(
+            channel_id=channel_id,
+        )
 
     def list_thread_replies(
         self,
@@ -532,33 +533,22 @@ class PlaywrightSlackAdapter:
         oldest: str | None = None,
         limit: int = 200,
     ) -> list[SlackThreadReplyMessage]:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self.list_thread_replies(
-                    workspace_name=workspace_name,
-                    channel_name=channel_name,
-                    thread_ts=thread_ts,
-                    oldest=oldest,
-                    limit=limit,
-                )
-            )
-        with self._io_lock:
-            payload = self._api_client(workspace_name).conversations_replies(
-                channel_id=self.get_channel_id(workspace_name, channel_name),
-                thread_ts=thread_ts,
-                limit=limit,
-                oldest=oldest,
-            )
-            if payload.get("ok") is False and payload.get("error") == "thread_not_found":
-                return []
-            if not payload.get("ok"):
-                raise RuntimeError("Slack API conversations.replies failed: {0}".format(payload.get("error")))
-            return self._thread_replies_from_api_payload(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                payload=payload,
-            )
+        payload = self._api_client(workspace_name).conversations_replies(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            thread_ts=thread_ts,
+            limit=limit,
+            oldest=oldest,
+        )
+        if payload.get("ok") is False and payload.get("error") == "thread_not_found":
+            return []
+        if not payload.get("ok"):
+            raise RuntimeError("Slack API conversations.replies failed: {0}".format(payload.get("error")))
+        return self._thread_replies_from_api_payload(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            payload=payload,
+        )
 
     def list_thread_messages(
         self,
@@ -566,29 +556,24 @@ class PlaywrightSlackAdapter:
         channel_name: str,
         thread_ts: str,
     ) -> list[SlackThreadMessage]:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self.list_thread_messages(workspace_name, channel_name, thread_ts)
+        payload = self._api_client(workspace_name).conversations_replies(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            thread_ts=thread_ts,
+            limit=200,
+            oldest=None,
+        )
+        if payload.get("ok") is False and payload.get("error") == "thread_not_found":
+            return []
+        if not payload.get("ok"):
+            raise RuntimeError(
+                "Slack API conversations.replies failed: {0}".format(payload.get("error"))
             )
-        with self._io_lock:
-            payload = self._api_client(workspace_name).conversations_replies(
-                channel_id=self.get_channel_id(workspace_name, channel_name),
-                thread_ts=thread_ts,
-                limit=200,
-                oldest=None,
-            )
-            if payload.get("ok") is False and payload.get("error") == "thread_not_found":
-                return []
-            if not payload.get("ok"):
-                raise RuntimeError(
-                    "Slack API conversations.replies failed: {0}".format(payload.get("error"))
-                )
-            return self._thread_messages_from_api_payload(
-                workspace_name=workspace_name,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                payload=payload,
-            )
+        return self._thread_messages_from_api_payload(
+            workspace_name=workspace_name,
+            channel_name=channel_name,
+            thread_ts=thread_ts,
+            payload=payload,
+        )
 
     def delete_message(
         self,
@@ -608,24 +593,13 @@ class PlaywrightSlackAdapter:
         message_ts: str,
         text: str,
     ) -> None:
-        if not self._on_io_thread():
-            self._run_on_io_thread(
-                lambda: self.update_message(
-                    workspace_name=workspace_name,
-                    channel_name=channel_name,
-                    message_ts=message_ts,
-                    text=text,
-                )
-            )
-            return None
-        with self._io_lock:
-            payload = self._api_client(workspace_name).chat_update(
-                channel_id=self.get_channel_id(workspace_name, channel_name),
-                ts=message_ts,
-                text=text,
-            )
-            if not payload.get("ok"):
-                raise RuntimeError("Slack API chat.update failed: {0}".format(payload.get("error")))
+        payload = self._api_client(workspace_name).chat_update(
+            channel_id=self.get_channel_id(workspace_name, channel_name),
+            ts=message_ts,
+            text=text,
+        )
+        if not payload.get("ok"):
+            raise RuntimeError("Slack API chat.update failed: {0}".format(payload.get("error")))
         return None
 
     def find_existing_bob_messages(
@@ -865,13 +839,16 @@ class PlaywrightSlackAdapter:
         return parts[0], parts[1]
 
     def _workspace_page(self, workspace_name: str) -> Any:
-        return self.select_bob_tab(self._workspace_urls.get(workspace_name))
+        with self._channel_url_lock:
+            workspace_url = self._workspace_urls.get(workspace_name)
+        return self.select_bob_tab(workspace_url)
 
     def _channel_url(self, workspace_name: str, channel_name: str) -> str:
-        cached = self._channel_urls.get((workspace_name, channel_name))
+        cached = self._cached_channel_url(workspace_name, channel_name)
         if cached:
             return cached
-        workspace_url = self._workspace_urls.get(workspace_name)
+        with self._channel_url_lock:
+            workspace_url = self._workspace_urls.get(workspace_name)
         team_id, _channel_id = self._parse_workspace_target(workspace_url)
         if not workspace_url or not team_id:
             raise RuntimeError(
@@ -879,8 +856,13 @@ class PlaywrightSlackAdapter:
             )
         resolved_channel_id = self._resolve_channel_id(workspace_name, channel_name)
         resolved_url = "https://app.slack.com/client/{0}/{1}".format(team_id, resolved_channel_id)
-        self._channel_urls[(workspace_name, channel_name)] = resolved_url
+        with self._channel_url_lock:
+            self._channel_urls[(workspace_name, channel_name)] = resolved_url
         return resolved_url
+
+    def _cached_channel_url(self, workspace_name: str, channel_name: str) -> Optional[str]:
+        with self._channel_url_lock:
+            return self._channel_urls.get((workspace_name, channel_name))
 
     def _snippet_filename(self, filename: str) -> str:
         candidate = PurePosixPath(filename).name
@@ -1106,11 +1088,9 @@ class PlaywrightSlackAdapter:
         return session.token, session.origin
 
     def _discover_api_session(self, workspace_name: str) -> Tuple[str, str]:
-        if workspace_name in self._api_sessions:
-            return self._api_sessions[workspace_name]
-        if workspace_name in self._workspace_api_contexts:
-            token, origin = self._workspace_api_contexts[workspace_name]
-            self._api_sessions[workspace_name] = (token, origin)
+        cached = self._cached_api_session(workspace_name)
+        if cached is not None:
+            token, origin, _cookie_header = cached
             return token, origin
 
         page = self._workspace_page(workspace_name)
@@ -1135,7 +1115,10 @@ class PlaywrightSlackAdapter:
         origin = seen.get("origin")
         if not token or not origin:
             raise RuntimeError("Could not discover Slack Web API session token from the browser page.")
-        self._api_sessions[workspace_name] = (token, origin)
+        cookie_header = self._origin_cookie_header(origin)
+        with self._api_session_lock:
+            self._api_sessions[workspace_name] = (token, origin)
+            self._api_session_cookie_headers[workspace_name] = cookie_header
         return token, origin
 
     def discover_api_session(self, workspace_name: str) -> Tuple[str, str]:
@@ -1145,13 +1128,10 @@ class PlaywrightSlackAdapter:
             return self._discover_api_session(workspace_name)
 
     def api_test(self, workspace_name: str) -> Dict[str, Any]:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(lambda: self.api_test(workspace_name))
-        with self._io_lock:
-            return self._api_client(workspace_name).api_test()
+        return self._api_client(workspace_name).api_test()
 
     def _api_client(self, workspace_name: str) -> SlackApiClient:
-        token, origin = self._discover_api_session(workspace_name)
+        token, origin, _cookie_header = self._api_session_for_call(workspace_name)
         session = SlackApiSession(origin=origin, token=token)
         return SlackApiClient(
             workspace_name=workspace_name,
@@ -1171,48 +1151,76 @@ class PlaywrightSlackAdapter:
         retry_on_auth_error: bool = True,
         retry_on_closed_page_error: bool = True,
     ) -> Dict[str, Any]:
-        if not self._on_io_thread():
-            return self._run_on_io_thread(
-                lambda: self._call_slack_api(
-                    workspace_name=workspace_name,
-                    method_name=method_name,
-                    params=params,
-                    retry_on_auth_error=retry_on_auth_error,
-                    retry_on_closed_page_error=retry_on_closed_page_error,
-                )
+        token, origin, cookie_header = self._api_session_for_call(workspace_name)
+        body = self._post_slack_api_form(
+            origin,
+            method_name,
+            token,
+            params,
+            cookie_header=cookie_header,
+        )
+        if (
+            retry_on_closed_page_error
+            and isinstance(body, dict)
+            and body.get("error") == "request_timeout"
+        ):
+            return self._call_slack_api(
+                workspace_name=workspace_name,
+                method_name=method_name,
+                params=params,
+                retry_on_auth_error=retry_on_auth_error,
+                retry_on_closed_page_error=False,
             )
-        with self._io_lock:
-            token, origin = self._discover_api_session(workspace_name)
-            body = self._post_slack_api_form(origin, method_name, token, params)
-            if (
-                retry_on_closed_page_error
-                and isinstance(body, dict)
-                and body.get("error") == "request_timeout"
-            ):
-                return self._call_slack_api(
-                    workspace_name=workspace_name,
-                    method_name=method_name,
-                    params=params,
-                    retry_on_auth_error=retry_on_auth_error,
-                    retry_on_closed_page_error=False,
-                )
-            if (
-                retry_on_auth_error
-                and isinstance(body, dict)
-                and body.get("error") in {"not_authed", "invalid_auth"}
-            ):
+        if (
+            retry_on_auth_error
+            and isinstance(body, dict)
+            and body.get("error") in {"not_authed", "invalid_auth"}
+        ):
+            with self._api_session_lock:
                 self._api_sessions.pop(workspace_name, None)
+                self._api_session_cookie_headers.pop(workspace_name, None)
                 self._workspace_api_contexts.pop(workspace_name, None)
-                return self._call_slack_api(
-                    workspace_name=workspace_name,
-                    method_name=method_name,
-                    params=params,
-                    retry_on_auth_error=False,
-                    retry_on_closed_page_error=retry_on_closed_page_error,
+            self.discover_api_session(workspace_name)
+            return self._call_slack_api(
+                workspace_name=workspace_name,
+                method_name=method_name,
+                params=params,
+                retry_on_auth_error=False,
+                retry_on_closed_page_error=retry_on_closed_page_error,
+            )
+        if not isinstance(body, dict):
+            raise RuntimeError("Slack API call returned an unexpected payload shape.")
+        return body
+
+    def _api_session_for_call(self, workspace_name: str) -> Tuple[str, str, str]:
+        cached = self._cached_api_session(workspace_name)
+        if cached is not None:
+            return cached
+        discovered_token, discovered_origin = self.discover_api_session(workspace_name)
+        cached = self._cached_api_session(workspace_name)
+        if cached is None:
+            return discovered_token, discovered_origin, ""
+        return cached
+
+    def _cached_api_session(self, workspace_name: str) -> Optional[Tuple[str, str, str]]:
+        with self._api_session_lock:
+            if workspace_name in self._api_sessions:
+                token, origin = self._api_sessions[workspace_name]
+                return (
+                    token,
+                    origin,
+                    self._api_session_cookie_headers.get(workspace_name, ""),
                 )
-            if not isinstance(body, dict):
-                raise RuntimeError("Slack API call returned an unexpected payload shape.")
-            return body
+            if workspace_name in self._workspace_api_contexts:
+                token, origin = self._workspace_api_contexts[workspace_name]
+                self._api_sessions[workspace_name] = (token, origin)
+                self._api_session_cookie_headers.setdefault(workspace_name, "")
+                return (
+                    token,
+                    origin,
+                    self._api_session_cookie_headers.get(workspace_name, ""),
+                )
+        return None
 
     def _origin_cookie_header(self, origin: str) -> str:
         runtime = self.connect()
@@ -1260,6 +1268,7 @@ class PlaywrightSlackAdapter:
         method_name: str,
         token: str,
         params: Dict[str, Any],
+        cookie_header: Optional[str] = None,
     ) -> Dict[str, Any]:
         boundary, body = self._multipart_form_request_body(token, params)
         headers = {
@@ -1269,7 +1278,8 @@ class PlaywrightSlackAdapter:
             "Referer": origin.rstrip("/") + "/api/api.test",
             "User-Agent": self._HTTP_USER_AGENT,
         }
-        cookie_header = self._origin_cookie_header(origin)
+        if cookie_header is None:
+            cookie_header = self._origin_cookie_header(origin)
         if cookie_header:
             headers["Cookie"] = cookie_header
         request = urllib.request.Request(

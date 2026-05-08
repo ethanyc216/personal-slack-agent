@@ -67,6 +67,12 @@ class WatcherSettings:
     root_batch_size: int = 50
     thread_batch_size: int = 200
     thread_reply_rate_limit_backoff_seconds: float = 60.0
+    heartbeat_stale_seconds: float = 5 * 60.0
+    watcher_lease_ttl_seconds: float = 2 * 60.0
+    ultimate_search_workers: int = 1
+    configured_channel_workers: int = 1
+    runtime_backfill_workers: int = 1
+    runtime_channel_reconcile_batch_size: int = 1
     recent_terminal_thread_reconcile_limit: int = 6
     periodic_terminal_thread_reconcile_batch_size: int = 1
     historical_terminal_thread_reconcile_base_interval_seconds: float = 60.0

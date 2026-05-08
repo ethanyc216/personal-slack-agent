@@ -19,7 +19,13 @@ from ..chrome_launcher import (
 )
 from ..codex_runner import SubprocessCodexRunner
 from ..config import load_config
-from ..models import AppConfig, SessionStatus, WorkspaceConfig, ChannelConfig
+from ..models import (
+    AppConfig,
+    ChannelConfig,
+    SessionStatus,
+    WatcherSettings,
+    WorkspaceConfig,
+)
 from ..paths import default_config_file, default_log_file, default_state_dir
 from ..slack.playwright_adapter import PlaywrightSlackAdapter
 from ..state import BobStateStore
@@ -117,6 +123,92 @@ def _running_pids(paths: RuntimePaths) -> list[int]:
         if _is_pid_running(pid):
             result.append(pid)
     return result
+
+
+def _marker_mtime(path: Path) -> Optional[float]:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _heartbeat_age_seconds(paths: RuntimePaths) -> Optional[float]:
+    mtimes = [
+        mtime
+        for mtime in (_marker_mtime(paths.pid_file), _marker_mtime(paths.lock_file))
+        if mtime is not None
+    ]
+    if not mtimes:
+        return None
+    return max(0.0, time.time() - max(mtimes))
+
+
+def _format_duration_ago(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "unknown"
+    total_seconds = max(0, int(seconds))
+    if total_seconds < 60:
+        return "{0}s ago".format(total_seconds)
+    total_minutes = total_seconds // 60
+    if total_minutes < 60:
+        return "{0}m ago".format(total_minutes)
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    if minutes == 0:
+        return "{0}h ago".format(hours)
+    return "{0}h {1}m ago".format(hours, minutes)
+
+
+def _format_number(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _heartbeat_stale_seconds(config: Optional[AppConfig]) -> float:
+    if config is None:
+        return WatcherSettings().heartbeat_stale_seconds
+    return float(config.watcher.heartbeat_stale_seconds)
+
+
+def _heartbeat_status_text(running: bool, stale: bool, age_seconds: Optional[float]) -> str:
+    if not running:
+        return "not running"
+    if stale:
+        return "running but stale: last loop heartbeat {0}".format(
+            _format_duration_ago(age_seconds)
+        )
+    return "running: last loop heartbeat {0}".format(_format_duration_ago(age_seconds))
+
+
+def _load_config_for_status(paths: RuntimePaths) -> Optional[AppConfig]:
+    try:
+        return load_config(paths.config_file)
+    except Exception:
+        return None
+
+
+def _runtime_heartbeat_rows(
+    paths: RuntimePaths,
+    config: Optional[AppConfig],
+) -> list[tuple[str, str]]:
+    running = _running_pids(paths)
+    pid = running[0] if running else (
+        _read_lock_pid(paths.pid_file) or _read_lock_pid(paths.lock_file)
+    )
+    age_seconds = _heartbeat_age_seconds(paths)
+    stale_seconds = _heartbeat_stale_seconds(config)
+    stale = bool(running and age_seconds is not None and age_seconds > stale_seconds)
+    rows = [
+        ("heartbeat_status", _heartbeat_status_text(bool(running), stale, age_seconds)),
+        ("heartbeat_running", "True" if bool(running) else "False"),
+        ("heartbeat_stale", "True" if stale else "False"),
+        ("heartbeat_stale_seconds", _format_number(stale_seconds)),
+        ("heartbeat_age", _format_duration_ago(age_seconds)),
+    ]
+    if pid is not None:
+        rows.append(("heartbeat_pid", str(pid)))
+    return rows
 
 
 def _is_cdp_reachable(url: str) -> bool:
@@ -378,6 +470,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         running = _running_pids(paths)
         if running:
+            config = _load_config_for_status(paths)
+            age_seconds = _heartbeat_age_seconds(paths)
+            stale_seconds = _heartbeat_stale_seconds(config)
+            if age_seconds is not None and age_seconds > stale_seconds:
+                print(
+                    "bob-agent is running but stale: last loop heartbeat {0} (pid {1}).".format(
+                        _format_duration_ago(age_seconds),
+                        running[0],
+                    )
+                )
+                return 0
             print("bob-agent is running (pid {0}).".format(running[0]))
             return 0
         pid = _read_lock_pid(paths.pid_file) or _read_lock_pid(paths.lock_file)
@@ -606,6 +709,7 @@ def _print_doctor_probe_results(rows: list[tuple[str, str]]) -> None:
 
 def _collect_doctor_probe_results(*, paths: RuntimePaths, config: AppConfig) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
+    rows.extend(_runtime_heartbeat_rows(paths, config))
     db_path = paths.state_dir / "bob.sqlite3"
     rows.append(("db_path", str(db_path)))
     try:

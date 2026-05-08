@@ -682,6 +682,17 @@ def test_channel_cursor_round_trip(tmp_path):
     assert store.get_channel_cursor("workspace", "channel") == "1775029000.698249"
 
 
+def test_channel_cursor_does_not_move_backward(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    store.upsert_channel_cursor("workspace", "channel", "1775029000.698249")
+    store.upsert_channel_cursor("workspace", "channel", "1775028999.000001")
+
+    assert store.get_channel_cursor("workspace", "channel") == "1775029000.698249"
+
+
 def test_thread_cursor_round_trip(tmp_path):
     db_path = tmp_path / "bob.sqlite3"
     store = BobStateStore(db_path)
@@ -694,6 +705,82 @@ def test_thread_cursor_round_trip(tmp_path):
     assert (
         store.get_thread_cursor("workspace", "channel", "thread-1")
         == "1775029017.231629"
+    )
+
+
+def test_thread_cursor_does_not_move_backward(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    store.upsert_thread_cursor(
+        "workspace", "channel", "thread-1", "1775029017.231629"
+    )
+    store.upsert_thread_cursor(
+        "workspace", "channel", "thread-1", "1775029000.000001"
+    )
+
+    assert (
+        store.get_thread_cursor("workspace", "channel", "thread-1")
+        == "1775029017.231629"
+    )
+
+
+def test_watcher_lease_blocks_other_owner_until_expired(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    assert store.try_acquire_watcher_lease(
+        scope="channel:bob_company:C123",
+        owner="configured",
+        now_epoch=100,
+        ttl_seconds=30,
+    )
+    assert not store.try_acquire_watcher_lease(
+        scope="channel:bob_company:C123",
+        owner="runtime",
+        now_epoch=120,
+        ttl_seconds=30,
+    )
+    assert store.try_acquire_watcher_lease(
+        scope="channel:bob_company:C123",
+        owner="runtime",
+        now_epoch=131,
+        ttl_seconds=30,
+    )
+
+
+def test_watcher_lease_owner_can_refresh_and_release(tmp_path):
+    db_path = tmp_path / "bob.sqlite3"
+    store = BobStateStore(db_path)
+    store.initialize()
+
+    assert store.try_acquire_watcher_lease(
+        scope="channel:bob_company:C123",
+        owner="configured",
+        now_epoch=100,
+        ttl_seconds=30,
+    )
+    assert store.try_acquire_watcher_lease(
+        scope="channel:bob_company:C123",
+        owner="configured",
+        now_epoch=120,
+        ttl_seconds=30,
+    )
+    assert not store.release_watcher_lease(
+        scope="channel:bob_company:C123",
+        owner="runtime",
+    )
+    assert store.release_watcher_lease(
+        scope="channel:bob_company:C123",
+        owner="configured",
+    )
+    assert store.try_acquire_watcher_lease(
+        scope="channel:bob_company:C123",
+        owner="runtime",
+        now_epoch=121,
+        ttl_seconds=30,
     )
 
 

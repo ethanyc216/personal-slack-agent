@@ -89,6 +89,43 @@ class SlackApiClient:
             params["sort_dir"] = sort_dir
         return self._call_api("search.messages", params)
 
+    def client_user_boot(
+        self,
+        reason: str | None = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if reason is not None:
+            params["_x_reason"] = reason
+        return self._call_api("client.userBoot", params)
+
+    def users_channel_sections_list(
+        self,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if cursor is not None:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return self._call_api("users.channelSections.list", params)
+
+    def client_counts(self) -> Dict[str, Any]:
+        return self._call_api("client.counts", {})
+
+    def conversations_view(
+        self,
+        channel_id: str,
+        limit: int | None = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"channel": channel_id}
+        if limit is not None:
+            params["limit"] = limit
+        return self._call_api("conversations.view", params)
+
+    def conversations_list_prefs(self, channel_id: str) -> Dict[str, Any]:
+        return self._call_api("conversations.listPrefs", {"channel": channel_id})
+
     def api_test(self) -> Dict[str, Any]:
         return self._call_api("api.test", {})
 

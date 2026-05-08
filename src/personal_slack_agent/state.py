@@ -110,6 +110,13 @@ class BobStateStore:
                     finished_at INTEGER,
                     updated_at INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS watcher_leases (
+                    scope TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
                 """
             )
             self._migrate_sessions_table(connection)
@@ -748,6 +755,57 @@ class BobStateStore:
             )
         return cursor.rowcount == 1
 
+    def try_acquire_watcher_lease(
+        self,
+        scope: str,
+        owner: str,
+        now_epoch: int,
+        ttl_seconds: int,
+    ) -> bool:
+        expires_at = int(now_epoch + ttl_seconds)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO watcher_leases (
+                    scope,
+                    owner,
+                    expires_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT (scope)
+                DO UPDATE SET
+                    owner = excluded.owner,
+                    expires_at = excluded.expires_at,
+                    updated_at = excluded.updated_at
+                WHERE watcher_leases.owner = excluded.owner
+                   OR watcher_leases.expires_at <= ?
+                """,
+                (
+                    scope,
+                    owner,
+                    expires_at,
+                    int(now_epoch),
+                    int(now_epoch),
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def release_watcher_lease(
+        self,
+        scope: str,
+        owner: str,
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM watcher_leases
+                WHERE scope = ?
+                  AND owner = ?
+                """,
+                (scope, owner),
+            )
+        return cursor.rowcount == 1
+
     def release_processed_message(
         self,
         workspace_name: str,
@@ -912,6 +970,8 @@ class BobStateStore:
                 DO UPDATE SET
                     latest_message_ts = excluded.latest_message_ts,
                     updated_at = excluded.updated_at
+                WHERE CAST(excluded.latest_message_ts AS REAL)
+                    > CAST(channel_cursors.latest_message_ts AS REAL)
                 """,
                 (
                     workspace_name,
@@ -961,6 +1021,8 @@ class BobStateStore:
                 DO UPDATE SET
                     latest_message_ts = excluded.latest_message_ts,
                     updated_at = excluded.updated_at
+                WHERE CAST(excluded.latest_message_ts AS REAL)
+                    > CAST(thread_cursors.latest_message_ts AS REAL)
                 """,
                 (
                     workspace_name,

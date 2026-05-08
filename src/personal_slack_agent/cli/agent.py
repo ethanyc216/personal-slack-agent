@@ -711,6 +711,9 @@ def _run_runtime(config_path: Path, once: bool, poll_interval_seconds: float) ->
                     logger=logger,
                 )
             finally:
+                close_watcher = getattr(watcher, "close", None)
+                if callable(close_watcher):
+                    close_watcher()
                 close_orchestrator = getattr(orchestrator, "close", None)
                 if callable(close_orchestrator):
                     close_orchestrator()

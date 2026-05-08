@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import time
 
 from personal_slack_agent.models import (
@@ -104,6 +106,9 @@ class FakeBrowser:
         self.channel_ids = {}
         self.accessible_conversation_ids = {}
         self.root_messages = {}
+        self.root_message_errors = {}
+        self.root_message_calls = []
+        self.operations = []
         self.search_results = {}
         self.search_queries = []
         self.thread_messages = {}
@@ -119,6 +124,7 @@ class FakeBrowser:
         return self.channel_ids[(workspace_name, channel_name)]
 
     def list_accessible_conversation_ids(self, workspace_name: str):
+        self.operations.append(("accessible", workspace_name))
         value = self.accessible_conversation_ids.get(workspace_name, [])
         if isinstance(value, Exception):
             raise value
@@ -133,6 +139,7 @@ class FakeBrowser:
         sort: str = None,
         sort_dir: str = None,
     ):
+        self.operations.append(("search", workspace_name))
         self.search_queries.append(query)
         del count
         del page
@@ -152,6 +159,11 @@ class FakeBrowser:
         latest: str = None,
         limit: int = 50,
     ):
+        self.operations.append(("root", channel_name))
+        self.root_message_calls.append((workspace_name, channel_name, oldest, latest, limit))
+        error = self.root_message_errors.get((workspace_name, channel_name))
+        if error is not None:
+            raise error
         messages = list(self.root_messages.get((workspace_name, channel_name), []))
         if oldest is not None:
             messages = [message for message in messages if float(message.message_ts) > float(oldest)]
@@ -498,6 +510,7 @@ def test_watcher_routes_unconfigured_root_message_to_ultimate_mode(tmp_path):
     )
 
     watcher.run_cycle()
+    watcher.close()
 
     assert orchestrator.ultimate_calls == [
         {
@@ -537,12 +550,13 @@ def test_watcher_routes_unconfigured_bob_reply_to_ultimate_mode(tmp_path):
         config=_ultimate_mode_config(tmp_path),
     )
 
-    watcher.run_cycle()
+    watcher._initialize()
     browser.emit_frame(
         "bob_company",
         '{"type":"message","channel":"C999","ts":"10.1","thread_ts":"10.0","text":"bob can you do it?"}',
     )
     watcher.run_cycle()
+    watcher.close()
 
     assert orchestrator.ultimate_calls[-1] == {
         "workspace_name": "bob_company",
@@ -1076,6 +1090,683 @@ def test_watcher_stops_between_channel_reconciles_when_requested(tmp_path):
     ]
 
 
+def test_watcher_reconciles_all_configured_channels_before_limited_runtime_backfill(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "first-channel")] = "C111"
+    browser.channel_ids[("bob_company", "second-channel")] = "C222"
+    browser.accessible_conversation_ids["bob_company"] = ["C999", "C888"]
+    browser.root_messages[("bob_company", "first-channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="first-channel",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="Bob, first",
+        )
+    ]
+    browser.root_messages[("bob_company", "second-channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="second-channel",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="Bob, second",
+        )
+    ]
+    config = AppConfig(
+        defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
+        watcher=WatcherSettings(bob_ultimate_mode=True),
+        workspaces=[
+            WorkspaceConfig(
+                name="bob_company",
+                channels=[
+                    ChannelConfig(name="first-channel"),
+                    ChannelConfig(name="second-channel"),
+                ],
+            )
+        ],
+    )
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=config,
+    )
+
+    watcher.run_cycle()
+    watcher.close()
+
+    assert [call[1] for call in browser.root_message_calls] == [
+        "first-channel",
+        "second-channel",
+        "slack:C999",
+    ]
+    assert orchestrator.root_calls == [
+        {
+            "workspace_name": "bob_company",
+            "channel_name": "first-channel",
+            "message_ts": "1.0",
+            "author_actor_id": "U123",
+            "text": "Bob, first",
+        },
+        {
+            "workspace_name": "bob_company",
+            "channel_name": "second-channel",
+            "message_ts": "2.0",
+            "author_actor_id": "U123",
+            "text": "Bob, second",
+        },
+    ]
+
+
+def test_watcher_initial_cycle_prioritizes_search_then_configured_before_runtime_discovery(
+    tmp_path,
+):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = ["C999"]
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="Bob, configured first",
+        )
+    ]
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    watcher.close()
+
+    assert browser.operations[0] == ("search", "bob_company")
+    assert browser.operations.index(("root", "bob_private_channel")) < browser.operations.index(
+        ("accessible", "bob_company")
+    )
+
+
+def test_watcher_steady_cycle_checks_ultimate_search_before_configured_channels(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="Bob, configured first",
+        )
+    ]
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("bob_company", "C123")] = "bob_private_channel"
+
+    watcher.run_cycle()
+    watcher.close()
+
+    assert browser.operations[:2] == [
+        ("search", "bob_company"),
+        ("root", "bob_private_channel"),
+    ]
+
+
+def test_watcher_processes_event_hydration_before_runtime_backfill(tmp_path):
+    from personal_slack_agent.slack.events import SlackRealtimeEvent
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = ["C999"]
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="Bob, configured",
+        )
+    ]
+    browser.root_messages[("bob_company", "slack:C999")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="slack:C999",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="bob event",
+        )
+    ]
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("bob_company", "C123")] = "bob_private_channel"
+    watcher._event_queue.append(
+        (
+            "bob_company",
+            SlackRealtimeEvent(
+                kind="root_message_seen",
+                channel_id="C999",
+                thread_ts=None,
+                message_ts="2.0",
+            ),
+        )
+    )
+
+    watcher.run_cycle()
+    watcher.close()
+
+    assert browser.operations.index(("root", "bob_private_channel")) < browser.operations.index(
+        ("root", "slack:C999")
+    )
+    assert browser.operations.index(("root", "slack:C999")) < browser.operations.index(
+        ("accessible", "bob_company")
+    )
+
+
+def test_pending_thread_reconcile_keeps_retry_when_lease_is_busy(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_config(tmp_path),
+    )
+    key = ("bob_company", "bob_private_channel", "10.0")
+    watcher._threads_pending_reconcile.add(key)
+    lease_scope = watcher._thread_lease_scope(*key)
+    assert state.try_acquire_watcher_lease(
+        scope=lease_scope,
+        owner="other-worker",
+        now_epoch=int(time.time()),
+        ttl_seconds=30,
+    )
+
+    watcher._reconcile_pending_threads()
+
+    assert key in watcher._threads_pending_reconcile
+    assert browser.thread_reply_calls == []
+
+    assert state.release_watcher_lease(scope=lease_scope, owner="other-worker")
+    watcher._reconcile_pending_threads()
+
+    assert key not in watcher._threads_pending_reconcile
+    assert browser.thread_reply_calls == [
+        ("bob_company", "bob_private_channel", "10.0", None, 200)
+    ]
+
+
+def test_watcher_lease_blocks_same_lane_from_another_worker_thread(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_config(tmp_path),
+    )
+    lease_scope = watcher._channel_lease_scope("bob_company", "bob_private_channel")
+
+    assert watcher._try_acquire_watcher_lease(lease_scope, "runtime-backfill")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        blocked = pool.submit(
+            watcher._try_acquire_watcher_lease,
+            lease_scope,
+            "runtime-backfill",
+        ).result()
+
+    assert not blocked
+    assert watcher._release_watcher_lease(lease_scope, "runtime-backfill")
+
+
+def test_ultimate_search_lease_skips_search_when_another_worker_owns_scope(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("bob_company", "C123")] = "bob_private_channel"
+    assert state.try_acquire_watcher_lease(
+        scope=watcher._ultimate_search_lease_scope("bob_company"),
+        owner="other-ultimate-worker",
+        now_epoch=int(time.time()),
+        ttl_seconds=30,
+    )
+
+    watcher.run_cycle()
+    watcher.close()
+
+    assert ("search", "bob_company") not in browser.operations
+
+
+def test_configured_channel_workers_can_reconcile_channels_in_parallel(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    class SlowRootBrowser(FakeBrowser):
+        def __init__(self):
+            super().__init__()
+            self._lock = threading.Lock()
+            self.inflight = 0
+            self.max_inflight = 0
+
+        def list_root_messages(
+            self,
+            workspace_name: str,
+            channel_name: str,
+            oldest: str = None,
+            latest: str = None,
+            limit: int = 50,
+        ):
+            with self._lock:
+                self.inflight += 1
+                self.max_inflight = max(self.max_inflight, self.inflight)
+            try:
+                time.sleep(0.05)
+                return super().list_root_messages(
+                    workspace_name=workspace_name,
+                    channel_name=channel_name,
+                    oldest=oldest,
+                    latest=latest,
+                    limit=limit,
+                )
+            finally:
+                with self._lock:
+                    self.inflight -= 1
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = SlowRootBrowser()
+    browser.channel_ids[("bob_company", "first-channel")] = "C111"
+    browser.channel_ids[("bob_company", "second-channel")] = "C222"
+    config = AppConfig(
+        defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
+        watcher=WatcherSettings(configured_channel_workers=2),
+        workspaces=[
+            WorkspaceConfig(
+                name="bob_company",
+                channels=[
+                    ChannelConfig(name="first-channel"),
+                    ChannelConfig(name="second-channel"),
+                ],
+            )
+        ],
+    )
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=config,
+    )
+
+    watcher.run_cycle()
+    watcher.close()
+
+    assert browser.max_inflight == 2
+
+
+def test_runtime_backfill_does_not_block_next_configured_cycle(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    class BlockingRuntimeBrowser(FakeBrowser):
+        def __init__(self):
+            super().__init__()
+            self.accessible_started = threading.Event()
+            self.release_accessible = threading.Event()
+
+        def list_accessible_conversation_ids(self, workspace_name: str):
+            self.operations.append(("accessible", workspace_name))
+            self.accessible_started.set()
+            self.release_accessible.wait(timeout=2)
+            return ["C999"]
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = BlockingRuntimeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    assert browser.accessible_started.wait(timeout=1)
+    browser.root_messages[("bob_company", "bob_private_channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="Bob, configured while runtime is busy",
+        )
+    ]
+
+    watcher.run_cycle()
+
+    browser.release_accessible.set()
+    watcher.close()
+
+    assert orchestrator.root_calls == [
+        {
+            "workspace_name": "bob_company",
+            "channel_name": "bob_private_channel",
+            "message_ts": "1.0",
+            "author_actor_id": "U123",
+            "text": "Bob, configured while runtime is busy",
+        }
+    ]
+
+
+def test_runtime_backfill_skips_configured_channel_ids(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = ["C123", "C999"]
+    browser.root_messages[("bob_company", "slack:C123")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="slack:C123",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="bob duplicate configured id",
+        )
+    ]
+    browser.root_messages[("bob_company", "slack:C999")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="slack:C999",
+            thread_ts="3.0",
+            message_ts="3.0",
+            author_actor_id="U123",
+            text="bob runtime id",
+        )
+    ]
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=RecordingOrchestrator(),
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+    watcher.close()
+
+    assert ("bob_company", "slack:C123", None, None, 50) not in browser.root_message_calls
+    assert ("bob_company", "slack:C999", None, None, 50) in browser.root_message_calls
+
+
+def test_watcher_runtime_backfill_fetches_only_one_root_page_per_channel_per_cycle(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.accessible_conversation_ids["bob_company"] = ["C999"]
+    browser.root_messages[("bob_company", "slack:C999")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="slack:C999",
+            thread_ts="1.0",
+            message_ts="1.0",
+            author_actor_id="U123",
+            text="bob older runtime request",
+        ),
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="slack:C999",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="bob latest runtime request",
+        ),
+    ]
+    config = AppConfig(
+        defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
+        watcher=WatcherSettings(bob_ultimate_mode=True, root_batch_size=1),
+        workspaces=[
+            WorkspaceConfig(
+                name="bob_company",
+                channels=[
+                    ChannelConfig(name="bob_private_channel"),
+                ],
+            )
+        ],
+    )
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=config,
+    )
+
+    watcher.run_cycle()
+    watcher.close()
+
+    runtime_calls = [call for call in browser.root_message_calls if call[1] == "slack:C999"]
+    assert runtime_calls == [("bob_company", "slack:C999", None, None, 1)]
+    assert orchestrator.ultimate_calls == [
+        {
+            "workspace_name": "bob_company",
+            "channel_name": "slack:C999",
+            "thread_ts": "2.0",
+            "message_ts": "2.0",
+            "author_actor_id": "U123",
+            "text": "bob latest runtime request",
+        }
+    ]
+
+
+def test_watcher_skips_root_history_failure_and_continues_configured_channels(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "first-channel")] = "C111"
+    browser.channel_ids[("bob_company", "second-channel")] = "C222"
+    browser.root_message_errors[("bob_company", "first-channel")] = RuntimeError(
+        "Slack API conversations.history failed: internal_error"
+    )
+    browser.root_messages[("bob_company", "second-channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="second-channel",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="Bob, second",
+        )
+    ]
+    config = AppConfig(
+        defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
+        workspaces=[
+            WorkspaceConfig(
+                name="bob_company",
+                channels=[
+                    ChannelConfig(name="first-channel"),
+                    ChannelConfig(name="second-channel"),
+                ],
+            )
+        ],
+    )
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=config,
+    )
+
+    watcher.run_cycle()
+
+    assert [call[1] for call in browser.root_message_calls] == [
+        "first-channel",
+        "second-channel",
+    ]
+    assert orchestrator.root_calls == [
+        {
+            "workspace_name": "bob_company",
+            "channel_name": "second-channel",
+            "message_ts": "2.0",
+            "author_actor_id": "U123",
+            "text": "Bob, second",
+        }
+    ]
+    assert state.get_channel_cursor("bob_company", "first-channel") is None
+    assert state.get_channel_cursor("bob_company", "second-channel") == "2.0"
+
+
+def test_watcher_skips_root_event_history_failure_and_continues_event_queue(tmp_path):
+    from personal_slack_agent.slack.events import SlackRealtimeEvent
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "first-channel")] = "C111"
+    browser.channel_ids[("bob_company", "second-channel")] = "C222"
+    browser.root_message_errors[("bob_company", "first-channel")] = RuntimeError(
+        "Slack API conversations.history failed: internal_error"
+    )
+    browser.root_messages[("bob_company", "second-channel")] = [
+        SlackRootMessage(
+            workspace_name="bob_company",
+            channel_name="second-channel",
+            thread_ts="2.0",
+            message_ts="2.0",
+            author_actor_id="U123",
+            text="Bob, second",
+        )
+    ]
+    config = AppConfig(
+        defaults=DefaultSettings(default_cwd=str(tmp_path), allowed_actor_ids=["U123"]),
+        workspaces=[
+            WorkspaceConfig(
+                name="bob_company",
+                channels=[
+                    ChannelConfig(name="first-channel"),
+                    ChannelConfig(name="second-channel"),
+                ],
+            )
+        ],
+    )
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=config,
+    )
+    watcher._initialized = True
+    watcher._channel_name_by_id[("bob_company", "C111")] = "first-channel"
+    watcher._channel_name_by_id[("bob_company", "C222")] = "second-channel"
+
+    watcher._event_queue.append(
+        (
+            "bob_company",
+            SlackRealtimeEvent(
+                kind="root_message_seen",
+                channel_id="C111",
+                thread_ts=None,
+                message_ts="1.0",
+            ),
+        )
+    )
+    watcher._event_queue.append(
+        (
+            "bob_company",
+            SlackRealtimeEvent(
+                kind="root_message_seen",
+                channel_id="C222",
+                thread_ts=None,
+                message_ts="2.0",
+            ),
+        )
+    )
+    watcher.run_cycle()
+
+    assert orchestrator.root_calls == [
+        {
+            "workspace_name": "bob_company",
+            "channel_name": "second-channel",
+            "message_ts": "2.0",
+            "author_actor_id": "U123",
+            "text": "Bob, second",
+        }
+    ]
+    assert state.get_channel_cursor("bob_company", "first-channel") is None
+    assert state.get_channel_cursor("bob_company", "second-channel") == "2.0"
+
+
 def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
     from personal_slack_agent.slack.watcher import SlackWatcher
 
@@ -1124,6 +1815,152 @@ def test_watcher_skips_thread_reply_with_slack_normalized_bob_prefix(tmp_path):
 
     assert orchestrator.reply_calls == []
     assert state.get_thread_cursor("bob_company", "bob_private_channel", "10.0") == "9999999999.0"
+
+
+def test_watcher_skips_long_delivered_outbound_fragments_with_different_ts(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    lines = [
+        "{0}. **Required:** Configure item {0} before rollout.".format(index)
+        for index in range(1, 80)
+    ]
+    lines[37] = (
+        "38. **Required:** Set `slack_channel_id=<redacted>` when sidebar "
+        "discovery cannot find the channel."
+    )
+    lines[60] = (
+        "61. `curl http://127.0.0.1:9222/json/version | jq .webSocketDebuggerUrl`"
+    )
+    lines[61] = "62. `ssh -T git@bitbucket.oci.oraclecorp.com`"
+    outbound_text = "_*Bob :white_check_mark::*_ " + "\n".join(lines)
+    fragment_texts = [
+        "\n".join(lines[12:28]),
+        "\n".join(lines[36:52]).replace("<redacted>", "&lt;redacted&gt;"),
+        "\n".join(lines[52:70])
+        .replace(
+            "http://127.0.0.1:9222/json/version",
+            "<http://127.0.0.1:9222/json/version>",
+        )
+        .replace(
+            "git@bitbucket.oci.oraclecorp.com",
+            "<mailto:git@bitbucket.oci.oraclecorp.com|git@bitbucket.oci.oraclecorp.com>",
+        ),
+    ]
+    state.upsert_outbound_intent(
+        workspace_name="bob_company",
+        channel_name="bob_private_channel",
+        thread_ts="10.0",
+        intent_key="final-session-123",
+        action="post_thread_reply",
+        text=outbound_text,
+        delivery_state="delivered",
+        message_ts="9999999999.500000",
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.thread_replies[("bob_company", "bob_private_channel", "10.0")] = [
+        SlackThreadReplyMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="10.0",
+            message_ts="9999999999.450000",
+            author_actor_id="U123",
+            text=fragment_texts[0],
+        ),
+        SlackThreadReplyMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="10.0",
+            message_ts="9999999999.460000",
+            author_actor_id="U123",
+            text=fragment_texts[1],
+        ),
+        SlackThreadReplyMessage(
+            workspace_name="bob_company",
+            channel_name="bob_private_channel",
+            thread_ts="10.0",
+            message_ts="9999999999.470000",
+            author_actor_id="U123",
+            text=fragment_texts[2],
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.reply_calls == []
+    assert state.get_thread_cursor("bob_company", "bob_private_channel", "10.0") == (
+        "9999999999.470000"
+    )
+
+
+def test_watcher_search_fallback_skips_delivered_outbound_echo(tmp_path):
+    from personal_slack_agent.slack.watcher import SlackWatcher
+
+    state = BobStateStore(tmp_path / "bob.sqlite3")
+    state.initialize()
+    state.upsert_session(
+        workspace_name="bob_company",
+        channel_name="slack:C999",
+        thread_ts="10.0",
+        root_ts="10.0",
+        codex_session_id="session-123",
+        cwd=str(tmp_path),
+        owner_actor_id="U123",
+        status=SessionStatus.CLOSED_IDLE,
+    )
+    outbound_text = "_*Bob :white_check_mark::*_ Final answer"
+    state.upsert_outbound_intent(
+        workspace_name="bob_company",
+        channel_name="slack:C999",
+        thread_ts="10.0",
+        intent_key="final-session-123",
+        action="post_thread_reply",
+        text=outbound_text,
+        delivery_state="delivered",
+        message_ts="9999999999.500000",
+    )
+    browser = FakeBrowser()
+    browser.channel_ids[("bob_company", "bob_private_channel")] = "C123"
+    browser.search_results["bob_company"] = [
+        SlackSearchMessage(
+            workspace_name="bob_company",
+            channel_id="C999",
+            message_ts="9999999999.450000",
+            thread_ts="10.0",
+            author_actor_id="U123",
+            text="Bob :white_check_mark: Final answer",
+        )
+    ]
+    orchestrator = RecordingOrchestrator()
+    watcher = SlackWatcher(
+        browser=browser,
+        orchestrator=orchestrator,
+        state_store=state,
+        config=_ultimate_mode_config(tmp_path),
+    )
+
+    watcher.run_cycle()
+
+    assert orchestrator.ultimate_calls == []
 
 
 def test_watcher_skips_ratelimited_thread_reconcile_without_aborting_cycle(tmp_path):

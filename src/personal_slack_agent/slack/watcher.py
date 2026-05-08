@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
+import html
 from logging import Logger
 import re
+import threading
 import time
 from typing import Callable, Deque, Dict, Optional, Set, Tuple
+import uuid
 
 from ..callsign import match_assistant_invocation
 from ..config import runtime_channel_name, slack_channel_id_from_runtime_channel_name
@@ -14,6 +19,20 @@ from ..state import BobStateStore
 from .browser import SlackBrowserAdapter, SlackRootMessage, SlackThreadReplyMessage
 from .events import SlackRealtimeEvent
 from .websocket_client import SlackWebsocketClient
+
+
+_OUTBOUND_ECHO_FRAGMENT_MIN_CHARS = 240
+_OUTBOUND_ECHO_FRAGMENT_WINDOW_SECONDS = 10 * 60.0
+_SLACK_LINK_PATTERN = re.compile(r"<((?:https?|mailto):[^>|]+)(?:\|([^>]+))?>")
+
+
+@dataclass(frozen=True)
+class _OutboundEchoCandidate:
+    normalized_text: str
+    delivery_state: str
+    message_ts: Optional[str]
+    created_at: int
+    updated_at: int
 
 
 class SlackWatcher:
@@ -53,6 +72,23 @@ class SlackWatcher:
         self._historical_reconcile_due_at: Dict[str, float] = {}
         self._historical_reconcile_interval_seconds: Dict[str, float] = {}
         self._ultimate_search_cursor: Dict[str, float] = {}
+        self._runtime_reconcile_cursor: Dict[str, int] = {}
+        self._lease_owner_prefix = "watcher-{0}".format(uuid.uuid4().hex)
+        self._channel_map_lock = threading.RLock()
+        self._runtime_reconcile_lock = threading.RLock()
+        self._runtime_executor_lock = threading.RLock()
+        self._runtime_backfill_executor: Optional[ThreadPoolExecutor] = None
+        self._runtime_backfill_futures: Dict[str, Future[None]] = {}
+        self._closed = False
+
+    def close(self) -> None:
+        self._closed = True
+        with self._runtime_executor_lock:
+            executor = self._runtime_backfill_executor
+            self._runtime_backfill_executor = None
+            self._runtime_backfill_futures.clear()
+        if executor is not None:
+            executor.shutdown(wait=True)
 
     def run_cycle(self) -> None:
         if self._stop_requested():
@@ -61,13 +97,10 @@ class SlackWatcher:
             self._initialize()
         if self._stop_requested():
             return
-        reconciled_workspaces = self._reconcile_pending_workspaces()
-        if self._stop_requested():
-            return
-        self._process_event_queue()
-        if self._stop_requested():
-            return
         self._reconcile_recent_ultimate_invocations()
+        if self._stop_requested():
+            return
+        reconciled_workspaces = self._reconcile_pending_workspaces()
         if self._stop_requested():
             return
         self._reconcile_all_workspaces(skip_workspaces=reconciled_workspaces)
@@ -76,7 +109,13 @@ class SlackWatcher:
         self._reconcile_recent_ultimate_invocations()
         if self._stop_requested():
             return
+        self._process_event_queue()
+        if self._stop_requested():
+            return
         self._reconcile_pending_threads()
+        if self._stop_requested():
+            return
+        self._submit_runtime_backfill()
 
     def request_workspace_reconcile(self, workspace_name: str) -> None:
         self._workspaces_pending_reconcile.add(workspace_name)
@@ -87,8 +126,7 @@ class SlackWatcher:
                 return
             for channel in workspace.channels:
                 channel_id = self.browser.get_channel_id(workspace.name, channel.name)
-                self._channel_name_by_id[(workspace.name, channel_id)] = channel.name
-            self._register_runtime_channels(workspace.name)
+                self._remember_channel_name(workspace.name, channel_id, channel.name)
 
             client = SlackWebsocketClient(
                 on_event=lambda event, workspace_name=workspace.name: self._event_queue.append(
@@ -143,6 +181,7 @@ class SlackWatcher:
         reconciled_workspaces = set()
         pending = list(self._workspaces_pending_reconcile)
         self._workspaces_pending_reconcile.clear()
+        jobs = []
         for workspace_name in pending:
             if self._stop_requested():
                 return reconciled_workspaces
@@ -150,30 +189,34 @@ class SlackWatcher:
             if workspace is None:
                 continue
             reconciled_workspaces.add(workspace_name)
-            for channel_name in self._channel_names_for_workspace(workspace_name):
+            for channel_name in self._configured_channel_names_for_workspace(workspace_name):
                 if self._stop_requested():
                     return reconciled_workspaces
-                self.reconcile_channel_since_cursor(workspace_name, channel_name)
-                for session in self._sessions_for_periodic_thread_reconcile(
-                    workspace_name, channel_name
-                ):
-                    if self._stop_requested():
-                        return reconciled_workspaces
-                    self.reconcile_thread_since_cursor(
-                        workspace_name=workspace_name,
-                        channel_name=channel_name,
-                        thread_ts=session.thread_ts,
+                jobs.append(
+                    lambda workspace_name=workspace_name, channel_name=channel_name: (
+                        self._reconcile_configured_channel(workspace_name, channel_name)
                     )
+                )
             historical_session = self._historical_session_for_workspace_periodic_reconcile(
                 workspace_name
             )
             if historical_session is not None:
-                self.reconcile_thread_since_cursor(
-                    workspace_name=historical_session.workspace_name,
-                    channel_name=historical_session.channel_name,
-                    thread_ts=historical_session.thread_ts,
-                    historical=True,
+                jobs.append(
+                    lambda historical_session=historical_session: (
+                        self.reconcile_thread_since_cursor(
+                            workspace_name=historical_session.workspace_name,
+                            channel_name=historical_session.channel_name,
+                            thread_ts=historical_session.thread_ts,
+                            historical=True,
+                            lease_owner="configured-thread-history",
+                        )
+                    )
                 )
+        self._run_blocking_jobs(
+            jobs,
+            max_workers=self.config.watcher.configured_channel_workers,
+            thread_name_prefix="bob-watch-configured",
+        )
         return reconciled_workspaces
 
     def _process_event_queue(self) -> None:
@@ -192,50 +235,77 @@ class SlackWatcher:
             if record is None:
                 self._threads_pending_reconcile.discard(key)
                 continue
-            self.reconcile_thread_since_cursor(
+            reconciled = self.reconcile_thread_since_cursor(
                 workspace_name=key[0],
                 channel_name=key[1],
                 thread_ts=key[2],
+                lease_owner="event-hydration",
             )
-            self._threads_pending_reconcile.discard(key)
+            if reconciled:
+                self._threads_pending_reconcile.discard(key)
 
     def _reconcile_all_workspaces(self, skip_workspaces=None) -> None:
         skipped = skip_workspaces or set()
+        jobs = []
         for workspace in self.config.workspaces:
             if self._stop_requested():
                 return
             if workspace.name in skipped:
                 continue
-            for channel_name in self._channel_names_for_workspace(workspace.name):
+            for channel_name in self._configured_channel_names_for_workspace(workspace.name):
                 if self._stop_requested():
                     return
-                self.reconcile_channel_since_cursor(workspace.name, channel_name)
-                for session in self._sessions_for_periodic_thread_reconcile(
-                    workspace.name, channel_name
-                ):
-                    if self._stop_requested():
-                        return
-                    self.reconcile_thread_since_cursor(
-                        workspace_name=workspace.name,
-                        channel_name=channel_name,
-                        thread_ts=session.thread_ts,
+                jobs.append(
+                    lambda workspace_name=workspace.name, channel_name=channel_name: (
+                        self._reconcile_configured_channel(workspace_name, channel_name)
                     )
+                )
             historical_session = self._historical_session_for_workspace_periodic_reconcile(
                 workspace.name
             )
             if historical_session is not None:
-                self.reconcile_thread_since_cursor(
-                    workspace_name=historical_session.workspace_name,
-                    channel_name=historical_session.channel_name,
-                    thread_ts=historical_session.thread_ts,
-                    historical=True,
+                jobs.append(
+                    lambda historical_session=historical_session: (
+                        self.reconcile_thread_since_cursor(
+                            workspace_name=historical_session.workspace_name,
+                            channel_name=historical_session.channel_name,
+                            thread_ts=historical_session.thread_ts,
+                            historical=True,
+                            lease_owner="configured-thread-history",
+                        )
+                    )
                 )
+        self._run_blocking_jobs(
+            jobs,
+            max_workers=self.config.watcher.configured_channel_workers,
+            thread_name_prefix="bob-watch-configured",
+        )
+
+    def _reconcile_configured_channel(self, workspace_name: str, channel_name: str) -> None:
+        if self._stop_requested():
+            return
+        self.reconcile_channel_since_cursor(
+            workspace_name,
+            channel_name,
+            lease_owner="configured-channel-history",
+        )
+        for session in self._sessions_for_periodic_thread_reconcile(
+            workspace_name, channel_name
+        ):
+            if self._stop_requested():
+                return
+            self.reconcile_thread_since_cursor(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=session.thread_ts,
+                lease_owner="configured-thread-history",
+            )
 
     def handle_event(self, workspace_name: str, event: SlackRealtimeEvent) -> None:
-        channel_name = self._channel_name_by_id.get((workspace_name, event.channel_id))
+        channel_name = self._channel_name_for_id(workspace_name, event.channel_id)
         if channel_name is None and self.config.watcher.bob_ultimate_mode:
             channel_name = runtime_channel_name(event.channel_id)
-            self._channel_name_by_id[(workspace_name, event.channel_id)] = channel_name
+            self._remember_channel_name(workspace_name, event.channel_id, channel_name)
         if channel_name is None or event.message_ts is None:
             return
 
@@ -251,23 +321,59 @@ class SlackWatcher:
                 event.message_ts,
             )
 
-    def reconcile_channel_since_cursor(self, workspace_name: str, channel_name: str) -> None:
+    def reconcile_channel_since_cursor(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        max_batches: Optional[int] = None,
+        lease_owner: str = "channel-history",
+    ) -> bool:
+        lease_scope = self._channel_lease_scope(workspace_name, channel_name)
+        if not self._try_acquire_watcher_lease(lease_scope, lease_owner):
+            return False
+        try:
+            self._reconcile_channel_since_cursor_unlocked(
+                workspace_name,
+                channel_name,
+                max_batches=max_batches,
+            )
+            return True
+        finally:
+            self._release_watcher_lease(lease_scope, lease_owner)
+
+    def _reconcile_channel_since_cursor_unlocked(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        max_batches: Optional[int] = None,
+    ) -> None:
         cursor = self.state_store.get_channel_cursor(workspace_name, channel_name)
         latest_boundary = None
         batches = []
         while True:
             if self._stop_requested():
                 return
-            messages = self.browser.list_root_messages(
-                workspace_name,
-                channel_name,
-                oldest=cursor,
-                latest=latest_boundary,
-                limit=self.config.watcher.root_batch_size,
-            )
+            try:
+                messages = self.browser.list_root_messages(
+                    workspace_name,
+                    channel_name,
+                    oldest=cursor,
+                    latest=latest_boundary,
+                    limit=self.config.watcher.root_batch_size,
+                )
+            except RuntimeError as exc:
+                self._log_warning(
+                    "slack roots reconcile failed workspace=%s channel=%s error=%s",
+                    workspace_name,
+                    channel_name,
+                    exc,
+                )
+                return
             if not messages:
                 break
             batches.append(messages)
+            if max_batches is not None and len(batches) >= max_batches:
+                break
             oldest_message_ts = messages[0].message_ts
             if not _is_newer_timestamp(oldest_message_ts, cursor):
                 break
@@ -304,6 +410,28 @@ class SlackWatcher:
         channel_name: str,
         thread_ts: str,
         historical: bool = False,
+        lease_owner: str = "thread-history",
+    ) -> bool:
+        lease_scope = self._thread_lease_scope(workspace_name, channel_name, thread_ts)
+        if not self._try_acquire_watcher_lease(lease_scope, lease_owner):
+            return False
+        try:
+            self._reconcile_thread_since_cursor_unlocked(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                historical=historical,
+            )
+            return True
+        finally:
+            self._release_watcher_lease(lease_scope, lease_owner)
+
+    def _reconcile_thread_since_cursor_unlocked(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        historical: bool = False,
     ) -> None:
         if self._stop_requested():
             return
@@ -313,18 +441,6 @@ class SlackWatcher:
         if record is None:
             return
         cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
-        delivered_timestamps = set(
-            self.state_store.list_delivered_outbound_message_timestamps(
-                workspace_name,
-                channel_name,
-                thread_ts,
-            )
-        )
-        pending_outbound_texts = self._pending_outbound_texts_for_thread(
-            workspace_name,
-            channel_name,
-            thread_ts,
-        )
         current_cursor = cursor
         legacy_thread = self._is_legacy_configured_bob_thread(
             workspace_name,
@@ -359,6 +475,13 @@ class SlackWatcher:
                 if historical:
                     self._record_historical_sweep_success(workspace_name)
                 return
+            outbound_echo_candidates = self._outbound_echo_candidates_for_thread(
+                workspace_name,
+                channel_name,
+                thread_ts,
+            )
+            delivered_timestamps = _delivered_outbound_timestamps(outbound_echo_candidates)
+            pending_outbound_texts = _pending_outbound_texts(outbound_echo_candidates)
             for reply in replies:
                 if self._stop_requested():
                     return
@@ -370,6 +493,7 @@ class SlackWatcher:
                     delivered_timestamps,
                     pending_outbound_texts,
                     self._assistant_names_for_record(record),
+                    outbound_echo_candidates,
                 ):
                     continue
                 if self._should_route_ultimate_invocation(reply.text) and (
@@ -416,22 +540,40 @@ class SlackWatcher:
         cursor = self.state_store.get_channel_cursor(workspace_name, channel_name)
         if not _is_newer_timestamp(message_ts, cursor):
             return
-        message = self._find_root_message(workspace_name, channel_name, message_ts)
-        if message is None:
+        lease_scope = self._channel_lease_scope(workspace_name, channel_name)
+        if not self._try_acquire_watcher_lease(lease_scope, "event-hydration"):
             self._workspaces_pending_reconcile.add(workspace_name)
             return
-        self.orchestrator.handle_new_root_message(
-            workspace_name=message.workspace_name,
-            channel_name=message.channel_name,
-            message_ts=message.message_ts,
-            author_actor_id=message.author_actor_id,
-            text=message.text,
-        )
-        self.state_store.upsert_channel_cursor(
-            workspace_name,
-            channel_name,
-            message.message_ts,
-        )
+        try:
+            try:
+                message = self._find_root_message(workspace_name, channel_name, message_ts)
+            except RuntimeError as exc:
+                self._log_warning(
+                    "slack root hydration failed workspace=%s channel=%s message=%s error=%s",
+                    workspace_name,
+                    channel_name,
+                    message_ts,
+                    exc,
+                )
+                self._workspaces_pending_reconcile.add(workspace_name)
+                return
+            if message is None:
+                self._workspaces_pending_reconcile.add(workspace_name)
+                return
+            self.orchestrator.handle_new_root_message(
+                workspace_name=message.workspace_name,
+                channel_name=message.channel_name,
+                message_ts=message.message_ts,
+                author_actor_id=message.author_actor_id,
+                text=message.text,
+            )
+            self.state_store.upsert_channel_cursor(
+                workspace_name,
+                channel_name,
+                message.message_ts,
+            )
+        finally:
+            self._release_watcher_lease(lease_scope, "event-hydration")
 
     def _handle_thread_reply_event(
         self,
@@ -444,80 +586,97 @@ class SlackWatcher:
         cursor = self.state_store.get_thread_cursor(workspace_name, channel_name, thread_ts)
         if not _is_newer_timestamp(message_ts, cursor):
             return
-        reply = self._find_thread_reply(workspace_name, channel_name, thread_ts, message_ts)
-        if reply is None:
+        lease_scope = self._thread_lease_scope(workspace_name, channel_name, thread_ts)
+        if not self._try_acquire_watcher_lease(lease_scope, "event-hydration"):
             self._threads_pending_reconcile.add((workspace_name, channel_name, thread_ts))
             return
-        legacy_thread = self._is_legacy_configured_bob_thread(
-            workspace_name,
-            channel_name,
-            thread_ts,
-        )
-        if self._is_runtime_channel(channel_name) or not legacy_thread:
-            if self._should_route_ultimate_invocation(reply.text):
-                self.orchestrator.handle_ultimate_invocation(
-                    workspace_name=reply.workspace_name,
-                    channel_name=reply.channel_name,
-                    thread_ts=reply.thread_ts,
-                    message_ts=reply.message_ts,
-                    author_actor_id=reply.author_actor_id,
-                    text=reply.text,
+        try:
+            reply = self._find_thread_reply(workspace_name, channel_name, thread_ts, message_ts)
+            if reply is None:
+                self._threads_pending_reconcile.add((workspace_name, channel_name, thread_ts))
+                return
+            legacy_thread = self._is_legacy_configured_bob_thread(
+                workspace_name,
+                channel_name,
+                thread_ts,
+            )
+            if self._is_outbound_echo_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=reply.message_ts,
+                text=reply.text,
+            ):
+                self.state_store.upsert_thread_cursor(
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    reply.message_ts,
                 )
+                return
+            if self._is_runtime_channel(channel_name) or not legacy_thread:
+                if self._should_route_ultimate_invocation(reply.text):
+                    self.orchestrator.handle_ultimate_invocation(
+                        workspace_name=reply.workspace_name,
+                        channel_name=reply.channel_name,
+                        thread_ts=reply.thread_ts,
+                        message_ts=reply.message_ts,
+                        author_actor_id=reply.author_actor_id,
+                        text=reply.text,
+                    )
+                self.state_store.upsert_thread_cursor(
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    reply.message_ts,
+                )
+                return
+            if record is None:
+                self.state_store.upsert_thread_cursor(
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    reply.message_ts,
+                )
+                return
+            outbound_echo_candidates = self._outbound_echo_candidates_for_thread(
+                workspace_name,
+                channel_name,
+                thread_ts,
+            )
+            delivered_timestamps = _delivered_outbound_timestamps(outbound_echo_candidates)
+            pending_outbound_texts = _pending_outbound_texts(outbound_echo_candidates)
+            if not _should_route_reply(
+                reply,
+                record.created_at,
+                delivered_timestamps,
+                pending_outbound_texts,
+                self._assistant_names_for_record(record),
+                outbound_echo_candidates,
+            ):
+                self.state_store.upsert_thread_cursor(
+                    workspace_name,
+                    channel_name,
+                    thread_ts,
+                    reply.message_ts,
+                )
+                return
+            self.orchestrator.handle_thread_reply(
+                workspace_name=reply.workspace_name,
+                channel_name=reply.channel_name,
+                thread_ts=reply.thread_ts,
+                message_ts=reply.message_ts,
+                author_actor_id=reply.author_actor_id,
+                text=reply.text,
+            )
             self.state_store.upsert_thread_cursor(
                 workspace_name,
                 channel_name,
                 thread_ts,
                 reply.message_ts,
             )
-            return
-        if record is None:
-            self.state_store.upsert_thread_cursor(
-                workspace_name,
-                channel_name,
-                thread_ts,
-                reply.message_ts,
-            )
-            return
-        delivered_timestamps = set(
-            self.state_store.list_delivered_outbound_message_timestamps(
-                workspace_name,
-                channel_name,
-                thread_ts,
-            )
-        )
-        pending_outbound_texts = self._pending_outbound_texts_for_thread(
-            workspace_name,
-            channel_name,
-            thread_ts,
-        )
-        if not _should_route_reply(
-            reply,
-            record.created_at,
-            delivered_timestamps,
-            pending_outbound_texts,
-            self._assistant_names_for_record(record),
-        ):
-            self.state_store.upsert_thread_cursor(
-                workspace_name,
-                channel_name,
-                thread_ts,
-                reply.message_ts,
-            )
-            return
-        self.orchestrator.handle_thread_reply(
-            workspace_name=reply.workspace_name,
-            channel_name=reply.channel_name,
-            thread_ts=reply.thread_ts,
-            message_ts=reply.message_ts,
-            author_actor_id=reply.author_actor_id,
-            text=reply.text,
-        )
-        self.state_store.upsert_thread_cursor(
-            workspace_name,
-            channel_name,
-            thread_ts,
-            reply.message_ts,
-        )
+        finally:
+            self._release_watcher_lease(lease_scope, "event-hydration")
 
     def _find_root_message(
         self,
@@ -557,25 +716,58 @@ class SlackWatcher:
                 return reply
         return None
 
-    def _pending_outbound_texts_for_thread(
+    def _outbound_echo_candidates_for_thread(
         self,
         workspace_name: str,
         channel_name: str,
         thread_ts: str,
-    ) -> Set[str]:
-        texts = set()
-        for intent in self.state_store.list_pending_outbound_intents():
-            if (
-                intent.workspace_name != workspace_name
-                or intent.channel_name != channel_name
-                or intent.thread_ts != thread_ts
-                or intent.action != "post_thread_reply"
-            ):
+    ) -> List[_OutboundEchoCandidate]:
+        candidates = []
+        for intent in self.state_store.list_outbound_intents_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        ):
+            if intent.action != "post_thread_reply":
+                continue
+            if intent.delivery_state not in {"pending", "attempted", "delivered"}:
                 continue
             normalized = _normalize_reply_text(intent.text)
             if normalized:
-                texts.add(normalized)
-        return texts
+                candidates.append(
+                    _OutboundEchoCandidate(
+                        normalized_text=normalized,
+                        delivery_state=intent.delivery_state,
+                        message_ts=intent.message_ts,
+                        created_at=intent.created_at,
+                        updated_at=intent.updated_at,
+                    )
+                )
+        return candidates
+
+    def _is_outbound_echo_message(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+        message_ts: str,
+        text: str,
+    ) -> bool:
+        normalized_text = _normalize_reply_text(text)
+        if not normalized_text:
+            return False
+        outbound_echo_candidates = self._outbound_echo_candidates_for_thread(
+            workspace_name,
+            channel_name,
+            thread_ts,
+        )
+        return _matches_outbound_echo(
+            message_ts=message_ts,
+            normalized_text=normalized_text,
+            delivered_timestamps=_delivered_outbound_timestamps(outbound_echo_candidates),
+            pending_outbound_texts=_pending_outbound_texts(outbound_echo_candidates),
+            outbound_echo_candidates=outbound_echo_candidates,
+        )
 
     def _workspace_config(self, workspace_name: str):
         for workspace in self.config.workspaces:
@@ -601,19 +793,42 @@ class SlackWatcher:
             if self._stop_requested():
                 return
             key = (workspace_name, conversation_id)
-            if key in self._channel_name_by_id:
+            if self._channel_name_for_id(workspace_name, conversation_id) is not None:
                 continue
-            self._channel_name_by_id[key] = runtime_channel_name(conversation_id)
+            self._remember_channel_name(
+                workspace_name,
+                conversation_id,
+                runtime_channel_name(conversation_id),
+            )
 
     def _reconcile_recent_ultimate_invocations(self) -> None:
         if not self.config.watcher.bob_ultimate_mode:
             return
-        for workspace in self.config.workspaces:
-            if self._stop_requested():
-                return
-            self._reconcile_recent_ultimate_invocations_for_workspace(workspace.name)
+        jobs = [
+            lambda workspace_name=workspace.name: (
+                self._reconcile_recent_ultimate_invocations_for_workspace(workspace_name)
+            )
+            for workspace in self.config.workspaces
+        ]
+        self._run_blocking_jobs(
+            jobs,
+            max_workers=self.config.watcher.ultimate_search_workers,
+            thread_name_prefix="bob-watch-ultimate",
+        )
 
     def _reconcile_recent_ultimate_invocations_for_workspace(self, workspace_name: str) -> None:
+        lease_scope = self._ultimate_search_lease_scope(workspace_name)
+        if not self._try_acquire_watcher_lease(lease_scope, "ultimate-search"):
+            return
+        try:
+            self._reconcile_recent_ultimate_invocations_for_workspace_unlocked(workspace_name)
+        finally:
+            self._release_watcher_lease(lease_scope, "ultimate-search")
+
+    def _reconcile_recent_ultimate_invocations_for_workspace_unlocked(
+        self,
+        workspace_name: str,
+    ) -> None:
         floor = self._ultimate_search_cursor.get(workspace_name)
         if floor is None:
             floor = time.time()
@@ -656,10 +871,10 @@ class SlackWatcher:
                 continue
             if _is_escaped_thread_reply(message.text):
                 continue
-            channel_name = self._channel_name_by_id.get((workspace_name, message.channel_id))
+            channel_name = self._channel_name_for_id(workspace_name, message.channel_id)
             if channel_name is None:
                 channel_name = runtime_channel_name(message.channel_id)
-                self._channel_name_by_id[(workspace_name, message.channel_id)] = channel_name
+                self._remember_channel_name(workspace_name, message.channel_id, channel_name)
             thread_ts = message.thread_ts or message.message_ts
             if (
                 not self._is_runtime_channel(channel_name)
@@ -674,6 +889,14 @@ class SlackWatcher:
                 )
             ):
                 continue
+            if self._is_outbound_echo_message(
+                workspace_name=workspace_name,
+                channel_name=channel_name,
+                thread_ts=thread_ts,
+                message_ts=message.message_ts,
+                text=message.text,
+            ):
+                continue
             self.orchestrator.handle_ultimate_invocation(
                 workspace_name=workspace_name,
                 channel_name=channel_name,
@@ -681,6 +904,63 @@ class SlackWatcher:
                 message_ts=message.message_ts,
                 author_actor_id=message.author_actor_id,
                 text=message.text,
+            )
+
+    def _submit_runtime_backfill(self) -> None:
+        if self._closed:
+            return
+        if not self.config.watcher.bob_ultimate_mode:
+            return
+        self._prune_runtime_backfill_futures()
+        executor = self._runtime_executor()
+        for workspace in self.config.workspaces:
+            if self._stop_requested():
+                return
+            if self._runtime_backfill_active(workspace.name):
+                continue
+            future = executor.submit(
+                self._run_runtime_backfill_workspace_safely,
+                workspace.name,
+            )
+            with self._runtime_executor_lock:
+                self._runtime_backfill_futures[workspace.name] = future
+
+    def _run_runtime_backfill_workspace_safely(self, workspace_name: str) -> None:
+        try:
+            self._reconcile_runtime_backfill_workspace(workspace_name)
+        except Exception:
+            self._log_exception(
+                "runtime backfill failed workspace=%s",
+                workspace_name,
+            )
+
+    def _reconcile_runtime_backfill_workspace(self, workspace_name: str) -> None:
+        if not self.config.watcher.bob_ultimate_mode:
+            return
+        if self._stop_requested():
+            return
+        runtime_channels = self._runtime_channel_names_for_workspace(workspace_name)
+        if not runtime_channels:
+            return
+        with self._runtime_reconcile_lock:
+            cursor = self._runtime_reconcile_cursor.get(workspace_name, 0)
+            batch_size = min(
+                max(1, int(self.config.watcher.runtime_channel_reconcile_batch_size)),
+                len(runtime_channels),
+            )
+            selected_channels = [
+                runtime_channels[(cursor + offset) % len(runtime_channels)]
+                for offset in range(batch_size)
+            ]
+            self._runtime_reconcile_cursor[workspace_name] = cursor + batch_size
+        for channel_name in selected_channels:
+            if self._stop_requested():
+                return
+            self.reconcile_channel_since_cursor(
+                workspace_name,
+                channel_name,
+                max_batches=1,
+                lease_owner="runtime-backfill",
             )
 
     def _stop_requested(self) -> bool:
@@ -691,21 +971,155 @@ class SlackWatcher:
         except Exception:
             return False
 
-    def _channel_names_for_workspace(self, workspace_name: str):
+    def _run_blocking_jobs(
+        self,
+        jobs,
+        max_workers: int,
+        thread_name_prefix: str,
+    ) -> None:
+        if not jobs:
+            return
+        worker_count = max(1, int(max_workers))
+        if worker_count <= 1 or len(jobs) <= 1:
+            for job in jobs:
+                if self._stop_requested():
+                    return
+                job()
+            return
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix=thread_name_prefix,
+        ) as executor:
+            futures = [executor.submit(job) for job in jobs]
+            wait(futures)
+            for future in futures:
+                future.result()
+
+    def _runtime_executor(self) -> ThreadPoolExecutor:
+        with self._runtime_executor_lock:
+            if self._runtime_backfill_executor is None:
+                self._runtime_backfill_executor = ThreadPoolExecutor(
+                    max_workers=max(1, int(self.config.watcher.runtime_backfill_workers)),
+                    thread_name_prefix="bob-watch-runtime",
+                )
+            return self._runtime_backfill_executor
+
+    def _runtime_backfill_active(self, workspace_name: str) -> bool:
+        with self._runtime_executor_lock:
+            future = self._runtime_backfill_futures.get(workspace_name)
+            return future is not None and not future.done()
+
+    def _prune_runtime_backfill_futures(self) -> None:
+        with self._runtime_executor_lock:
+            completed = [
+                workspace_name
+                for workspace_name, future in self._runtime_backfill_futures.items()
+                if future.done()
+            ]
+            futures = [
+                self._runtime_backfill_futures.pop(workspace_name)
+                for workspace_name in completed
+            ]
+        for future in futures:
+            try:
+                future.result()
+            except Exception:
+                self._log_exception("runtime backfill worker failed")
+
+    def _configured_channel_names_for_workspace(self, workspace_name: str):
         workspace = self._workspace_config(workspace_name)
         if workspace is None:
             return []
+        return [channel.name for channel in workspace.channels]
+
+    def _configured_channel_ids_for_workspace(self, workspace_name: str) -> Set[str]:
+        channel_ids = set()
+        for channel_name in self._configured_channel_names_for_workspace(workspace_name):
+            try:
+                channel_ids.add(self.browser.get_channel_id(workspace_name, channel_name))
+            except Exception:
+                continue
+        return channel_ids
+
+    def _runtime_channel_names_for_workspace(self, workspace_name: str):
         self._register_runtime_channels(workspace_name)
-        channel_names = [channel.name for channel in workspace.channels]
-        seen = set(channel_names)
+        seen = set(self._configured_channel_names_for_workspace(workspace_name))
+        configured_channel_ids = self._configured_channel_ids_for_workspace(workspace_name)
+        channel_names = []
         if not self.config.watcher.bob_ultimate_mode:
             return channel_names
-        for (item_workspace, _channel_id), channel_name in self._channel_name_by_id.items():
-            if item_workspace != workspace_name or channel_name in seen:
+        with self._channel_map_lock:
+            channel_items = list(self._channel_name_by_id.items())
+        for (item_workspace, channel_id), channel_name in channel_items:
+            if item_workspace != workspace_name:
+                continue
+            if channel_name in seen or channel_id in configured_channel_ids:
+                continue
+            if not self._is_runtime_channel(channel_name):
                 continue
             channel_names.append(channel_name)
             seen.add(channel_name)
         return channel_names
+
+    def _remember_channel_name(
+        self,
+        workspace_name: str,
+        channel_id: str,
+        channel_name: str,
+    ) -> None:
+        with self._channel_map_lock:
+            self._channel_name_by_id[(workspace_name, channel_id)] = channel_name
+
+    def _channel_name_for_id(
+        self,
+        workspace_name: str,
+        channel_id: str,
+    ) -> Optional[str]:
+        with self._channel_map_lock:
+            return self._channel_name_by_id.get((workspace_name, channel_id))
+
+    def _channel_lease_scope(self, workspace_name: str, channel_name: str) -> str:
+        try:
+            channel_id = self.browser.get_channel_id(workspace_name, channel_name)
+        except Exception:
+            channel_id = channel_name
+        return "channel:{0}:{1}".format(workspace_name, channel_id)
+
+    def _thread_lease_scope(
+        self,
+        workspace_name: str,
+        channel_name: str,
+        thread_ts: str,
+    ) -> str:
+        try:
+            channel_id = self.browser.get_channel_id(workspace_name, channel_name)
+        except Exception:
+            channel_id = channel_name
+        return "thread:{0}:{1}:{2}".format(workspace_name, channel_id, thread_ts)
+
+    def _ultimate_search_lease_scope(self, workspace_name: str) -> str:
+        return "ultimate-search:{0}".format(workspace_name)
+
+    def _try_acquire_watcher_lease(self, scope: str, owner: str) -> bool:
+        return self.state_store.try_acquire_watcher_lease(
+            scope=scope,
+            owner=self._watcher_lease_owner(owner),
+            now_epoch=int(time.time()),
+            ttl_seconds=int(self.config.watcher.watcher_lease_ttl_seconds),
+        )
+
+    def _release_watcher_lease(self, scope: str, owner: str) -> bool:
+        return self.state_store.release_watcher_lease(
+            scope=scope,
+            owner=self._watcher_lease_owner(owner),
+        )
+
+    def _watcher_lease_owner(self, owner: str) -> str:
+        return "{0}:{1}:thread-{2}".format(
+            self._lease_owner_prefix,
+            owner,
+            threading.get_ident(),
+        )
 
     def _is_runtime_channel(self, channel_name: str) -> bool:
         return slack_channel_id_from_runtime_channel_name(channel_name) is not None
@@ -773,7 +1187,7 @@ class SlackWatcher:
         workspace = self._workspace_config(workspace_name)
         if workspace is None:
             return None
-        for channel_name in self._channel_names_for_workspace(workspace_name):
+        for channel_name in self._configured_channel_names_for_workspace(workspace_name):
             sessions = self.state_store.list_sessions(workspace_name, channel_name)
             _recent_sessions, historical_sessions = self._partition_terminal_sessions(sessions)
             candidates.extend(historical_sessions)
@@ -874,6 +1288,11 @@ class SlackWatcher:
             return
         self.logger.warning(message, *args)
 
+    def _log_exception(self, message: str, *args) -> None:
+        if self.logger is None:
+            return
+        self.logger.exception(message, *args)
+
     def _thread_reply_backoff_active(self, workspace_name: str) -> bool:
         until = self._thread_reply_backoff_until.get(workspace_name)
         if until is None:
@@ -909,13 +1328,18 @@ def _should_route_reply(
     delivered_timestamps: Set[str],
     pending_outbound_texts: Set[str],
     assistant_names: List[str],
+    outbound_echo_candidates: Optional[List[_OutboundEchoCandidate]] = None,
 ) -> bool:
     normalized_text = _normalize_reply_text(reply.text)
     if not normalized_text:
         return False
-    if reply.message_ts in delivered_timestamps:
-        return False
-    if normalized_text in pending_outbound_texts:
+    if _matches_outbound_echo(
+        message_ts=reply.message_ts,
+        normalized_text=normalized_text,
+        delivered_timestamps=delivered_timestamps,
+        pending_outbound_texts=pending_outbound_texts,
+        outbound_echo_candidates=outbound_echo_candidates or [],
+    ):
         return False
     if _is_assistant_generated_reply_text(normalized_text, assistant_names):
         return False
@@ -926,11 +1350,117 @@ def _should_route_reply(
     except (TypeError, ValueError):
         return False
 
+
+def _matches_outbound_echo(
+    message_ts: str,
+    normalized_text: str,
+    delivered_timestamps: Set[str],
+    pending_outbound_texts: Set[str],
+    outbound_echo_candidates: List[_OutboundEchoCandidate],
+) -> bool:
+    if message_ts in delivered_timestamps:
+        return True
+    if normalized_text in pending_outbound_texts:
+        return True
+    for candidate in outbound_echo_candidates:
+        if candidate.message_ts and message_ts == candidate.message_ts:
+            return True
+        if normalized_text == candidate.normalized_text:
+            return True
+        if _is_recent_large_outbound_fragment(
+            message_ts,
+            normalized_text,
+            candidate,
+        ):
+            return True
+    return False
+
+
+def _delivered_outbound_timestamps(
+    outbound_echo_candidates: List[_OutboundEchoCandidate],
+) -> Set[str]:
+    return {
+        candidate.message_ts
+        for candidate in outbound_echo_candidates
+        if candidate.delivery_state == "delivered" and candidate.message_ts
+    }
+
+
+def _pending_outbound_texts(
+    outbound_echo_candidates: List[_OutboundEchoCandidate],
+) -> Set[str]:
+    return {
+        candidate.normalized_text
+        for candidate in outbound_echo_candidates
+        if candidate.delivery_state in {"pending", "attempted"}
+    }
+
+
+def _is_recent_large_outbound_fragment(
+    message_ts: str,
+    normalized_text: str,
+    candidate: _OutboundEchoCandidate,
+) -> bool:
+    if len(normalized_text) < _OUTBOUND_ECHO_FRAGMENT_MIN_CHARS:
+        return False
+    if len(candidate.normalized_text) < _OUTBOUND_ECHO_FRAGMENT_MIN_CHARS:
+        return False
+    if (
+        normalized_text not in candidate.normalized_text
+        and candidate.normalized_text not in normalized_text
+    ):
+        return False
+    return _message_near_outbound_candidate(message_ts, candidate)
+
+
+def _message_near_outbound_candidate(
+    message_ts: str,
+    candidate: _OutboundEchoCandidate,
+) -> bool:
+    message_time = _timestamp_float(message_ts)
+    if message_time is None:
+        return False
+    candidate_times = [
+        item
+        for item in (
+            _timestamp_float(candidate.message_ts),
+            float(candidate.created_at) if candidate.created_at else None,
+            float(candidate.updated_at) if candidate.updated_at else None,
+        )
+        if item is not None
+    ]
+    return any(
+        abs(message_time - candidate_time) <= _OUTBOUND_ECHO_FRAGMENT_WINDOW_SECONDS
+        for candidate_time in candidate_times
+    )
+
+
+def _timestamp_float(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_reply_text(text: str) -> str:
-    normalized = normalize_slack_markdown(text or "").strip()
+    normalized = html.unescape(normalize_slack_markdown(text or "")).strip()
+    normalized = _SLACK_LINK_PATTERN.sub(_normalize_slack_link, normalized)
     normalized = normalized.lstrip("_*`~> ")
+    normalized = re.sub(r":([A-Za-z0-9_+-]+):[:*_`~]+", r":\1:", normalized)
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized
+
+
+def _normalize_slack_link(match: re.Match) -> str:
+    target = match.group(1)
+    label = match.group(2)
+    if label:
+        return label
+    if target.startswith("mailto:"):
+        return target[len("mailto:") :]
+    return target
 
 
 def _is_assistant_generated_reply_text(

@@ -278,6 +278,93 @@ def test_search_messages_uses_expected_private_api_post_shape():
     ]
 
 
+def test_web_client_bootstrap_api_methods_use_expected_private_api_shapes():
+    calls = []
+
+    def fake_call(method_name, params):
+        calls.append((method_name, params))
+        return {"ok": True}
+
+    client = SlackApiClient(
+        workspace_name="workspace",
+        session=SlackApiSession(
+            origin="https://example.enterprise.slack.com",
+            token="xoxc-demo-token",
+        ),
+        call_api=fake_call,
+    )
+
+    client.client_user_boot(reason="deferred-data")
+    client.users_channel_sections_list(cursor="cursor-1", limit=25)
+    client.client_counts()
+    client.conversations_view(channel_id="C123", limit=50)
+    client.conversations_list_prefs(channel_id="C123")
+
+    assert calls == [
+        ("client.userBoot", {"_x_reason": "deferred-data"}),
+        ("users.channelSections.list", {"cursor": "cursor-1", "limit": 25}),
+        ("client.counts", {}),
+        ("conversations.view", {"channel": "C123", "limit": 50}),
+        ("conversations.listPrefs", {"channel": "C123"}),
+    ]
+
+
+def test_playwright_adapter_exposes_raw_web_client_api_helpers():
+    adapter = PlaywrightSlackAdapter(
+        browser_mode="shared_browser",
+        cdp_url="http://127.0.0.1:9222",
+        slack_signin_url="https://slack.com/signin?entry_point=nav_menu#/signin",
+    )
+    adapter._discover_api_session = lambda workspace_name: (  # type: ignore[method-assign]
+        "xoxc-demo-token",
+        "https://example.enterprise.slack.com",
+    )
+    calls = []
+
+    def fake_call(workspace_name, method_name, params, retry_on_auth_error=True):
+        calls.append((workspace_name, method_name, params, retry_on_auth_error))
+        return {"ok": True, "method": method_name}
+
+    adapter._call_slack_api = fake_call  # type: ignore[method-assign]
+
+    assert adapter.client_user_boot("workspace", reason="deferred-data") == {
+        "ok": True,
+        "method": "client.userBoot",
+    }
+    assert adapter.users_channel_sections_list(
+        "workspace",
+        cursor="cursor-1",
+        limit=25,
+    ) == {"ok": True, "method": "users.channelSections.list"}
+    assert adapter.client_counts("workspace") == {"ok": True, "method": "client.counts"}
+    assert adapter.conversations_view("workspace", channel_id="C123", limit=50) == {
+        "ok": True,
+        "method": "conversations.view",
+    }
+    assert adapter.conversations_list_prefs("workspace", channel_id="C123") == {
+        "ok": True,
+        "method": "conversations.listPrefs",
+    }
+
+    assert calls == [
+        (
+            "workspace",
+            "client.userBoot",
+            {"_x_reason": "deferred-data"},
+            True,
+        ),
+        (
+            "workspace",
+            "users.channelSections.list",
+            {"cursor": "cursor-1", "limit": 25},
+            True,
+        ),
+        ("workspace", "client.counts", {}, True),
+        ("workspace", "conversations.view", {"channel": "C123", "limit": 50}, True),
+        ("workspace", "conversations.listPrefs", {"channel": "C123"}, True),
+    ]
+
+
 def test_file_upload_api_methods_use_expected_private_api_shapes():
     calls = []
 

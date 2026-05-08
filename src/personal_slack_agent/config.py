@@ -314,6 +314,24 @@ def dump_config(config: AppConfig) -> str:
             "thread_reply_rate_limit_backoff_seconds = {0}".format(
                 _render_number(config.watcher.thread_reply_rate_limit_backoff_seconds)
             ),
+            "heartbeat_stale_seconds = {0}".format(
+                _render_number(config.watcher.heartbeat_stale_seconds)
+            ),
+            "watcher_lease_ttl_seconds = {0}".format(
+                _render_number(config.watcher.watcher_lease_ttl_seconds)
+            ),
+            "ultimate_search_workers = {0}".format(
+                config.watcher.ultimate_search_workers
+            ),
+            "configured_channel_workers = {0}".format(
+                config.watcher.configured_channel_workers
+            ),
+            "runtime_backfill_workers = {0}".format(
+                config.watcher.runtime_backfill_workers
+            ),
+            "runtime_channel_reconcile_batch_size = {0}".format(
+                config.watcher.runtime_channel_reconcile_batch_size
+            ),
             "recent_terminal_thread_reconcile_limit = {0}".format(
                 config.watcher.recent_terminal_thread_reconcile_limit
             ),
@@ -724,6 +742,56 @@ def _parse_watcher(
             default=60.0,
         )
         or 60.0,
+        heartbeat_stale_seconds=_optional_positive_float(
+            raw_watcher.get(
+                "heartbeat_stale_seconds",
+                legacy_defaults.get("heartbeat_stale_seconds"),
+            ),
+            "watcher.heartbeat_stale_seconds",
+            default=5 * 60.0,
+        )
+        or 5 * 60.0,
+        watcher_lease_ttl_seconds=_optional_positive_float(
+            raw_watcher.get(
+                "watcher_lease_ttl_seconds",
+                legacy_defaults.get("watcher_lease_ttl_seconds"),
+            ),
+            "watcher.watcher_lease_ttl_seconds",
+            default=2 * 60.0,
+        )
+        or 2 * 60.0,
+        ultimate_search_workers=_positive_int(
+            raw_watcher.get(
+                "ultimate_search_workers",
+                legacy_defaults.get("ultimate_search_workers"),
+            ),
+            "watcher.ultimate_search_workers",
+            default=1,
+        ),
+        configured_channel_workers=_positive_int(
+            raw_watcher.get(
+                "configured_channel_workers",
+                legacy_defaults.get("configured_channel_workers"),
+            ),
+            "watcher.configured_channel_workers",
+            default=1,
+        ),
+        runtime_backfill_workers=_positive_int(
+            raw_watcher.get(
+                "runtime_backfill_workers",
+                legacy_defaults.get("runtime_backfill_workers"),
+            ),
+            "watcher.runtime_backfill_workers",
+            default=1,
+        ),
+        runtime_channel_reconcile_batch_size=_positive_int(
+            raw_watcher.get(
+                "runtime_channel_reconcile_batch_size",
+                legacy_defaults.get("runtime_channel_reconcile_batch_size"),
+            ),
+            "watcher.runtime_channel_reconcile_batch_size",
+            default=1,
+        ),
         recent_terminal_thread_reconcile_limit=_positive_int(
             raw_watcher.get(
                 "recent_terminal_thread_reconcile_limit",

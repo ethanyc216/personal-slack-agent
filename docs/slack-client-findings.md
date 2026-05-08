@@ -31,6 +31,11 @@ Observed high-value route bootstrap calls:
   - Returns broad workspace bootstrap state.
   - May include a partial `channels` object list and a larger `channels_priority` map keyed by channel id.
   - In testing, this was not a reliable full name-to-id directory for all sidebar-visible channels.
+- `users.channelSections.list`
+  - Returns the user's sidebar section model.
+  - In a later fresh-load capture, this was the clearest source for sidebar section names and ordering.
+  - The response included `channel_sections`, `count`, `cursor`, `entities`, `last_updated`, and `ok`.
+  - Each section item included `channel_section_id`, `name`, `type`, `channel_ids_page`, `next_channel_section_id`, and `last_updated`.
 
 Other calls observed during bootstrap included:
 
@@ -44,12 +49,72 @@ Other calls observed during bootstrap included:
 - `client.extras`
 - `drafts.list`
 - `drafts.listActive`
-- `users.channelSections.list`
 - `conversations.listPrefs`
 - `conversations.historyChanges`
 - `bookmarks.list`
 - `conversations.bulkReacjiTriggers`
 - `conversations.genericInfo`
+
+## Sidebar Section Bootstrap
+
+On 2026-05-06, a fresh load of `https://app.slack.com/client/<team>/<channel>`
+was captured with cache disabled and service-worker bypass enabled for the temporary inspection tab.
+Sensitive tokens, cookies, and concrete channel/user ids were not recorded in the durable notes.
+
+Observed request pattern:
+
+- `client.userBoot`
+  - Returned broad workspace boot state.
+  - Observed structural counts:
+    - `channels: list[200]`
+    - `ims: list[38]`
+    - `prefs: dict[676]`
+  - Channel objects included ids, names, normalized names, membership-ish flags, sharing flags, topic, purpose, and member lists.
+  - IM objects included id, user, `is_open`, `is_im`, and update metadata.
+- `users.channelSections.list`
+  - Returned `channel_sections: list[14]`.
+  - Section types observed included:
+    - `recent_apps`
+    - `standard`
+    - `direct_messages`
+    - `slack_connect`
+    - `stars`
+    - `salesforce_records`
+    - `channels`
+    - `agents`
+  - `channel_ids_page` was an object containing `channel_ids`, `count`, and sometimes `cursor`.
+  - Several custom `standard` sections had non-empty channel-id pages; examples of observed page sizes were 3, 35, 46, 15, 126, 15, and 32.
+  - The terms corresponding to user-visible sidebar sections such as Bob, Priority, Direct Messages, OHAI, and Tools appeared in this response.
+- `client.counts`
+  - Returned read/unread metadata.
+  - Observed structural counts:
+    - `channels: list[264]`
+    - `ims: list[38]`
+    - `mpims: list[0]`
+  - Items included `id`, `latest`, `last_read`, `mention_count`, `has_unreads`, `history_invalid`, and `updated`.
+- `conversations.view`
+  - Returned the selected channel object plus initial visible history for the URL's channel id.
+  - This appears to be route hydration, not broad sidebar discovery.
+- `conversations.history`
+  - Fetched the selected channel's visible message history.
+- `conversations.listPrefs`
+  - Fetched preferences for the selected channel id.
+- `wss://wss-primary.slack.com/...`
+  - The websocket URL included flags such as `lazy_channels=1` and `no_query_on_subscribe=1`.
+  - This likely keeps sidebar and unread state live after boot.
+
+Notably, this fresh-load capture did not use `users.conversations` to build the visible sidebar.
+
+Bob now has raw, unused wrappers for future experiments with the most relevant private web-client endpoints:
+
+- `SlackApiClient.client_user_boot()`
+- `SlackApiClient.users_channel_sections_list()`
+- `SlackApiClient.client_counts()`
+- `SlackApiClient.conversations_view()`
+- `SlackApiClient.conversations_list_prefs()`
+- Matching passthrough methods on `PlaywrightSlackAdapter`
+
+These wrappers are intentionally not wired into watcher runtime discovery, configured-channel watching, or ultimate-search logic yet.
 
 ## Sidebar Click Behavior
 

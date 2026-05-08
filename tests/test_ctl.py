@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import sys
 
 import pytest
@@ -44,6 +45,38 @@ def test_status_reports_running_from_pid_file_when_lock_is_missing(tmp_path, mon
 
     assert exit_code == 0
     assert "running" in captured.out.lower()
+
+
+def test_status_reports_running_but_stale_when_heartbeat_is_old(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[watcher]",
+                "heartbeat_stale_seconds = 120",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    paths = build_runtime_paths()
+    paths.pid_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.pid_file.write_text("43210", encoding="utf-8")
+    paths.lock_file.write_text("43210", encoding="utf-8")
+    os.utime(paths.pid_file, (700.0, 700.0))
+    os.utime(paths.lock_file, (700.0, 700.0))
+    monkeypatch.setattr(ctl_module.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(ctl_module, "_is_pid_running", lambda pid: pid == 43210)
+    monkeypatch.setattr(ctl_module, "_log_writer_pids", lambda log_file: [])
+
+    exit_code = ctl_main(["status"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "running but stale" in captured.out
+    assert "last loop heartbeat 5m ago" in captured.out
+    assert "pid 43210" in captured.out
 
 
 def test_install_chrome_launcher_command_prints_installed_path(tmp_path, monkeypatch, capsys):
@@ -254,6 +287,40 @@ def test_doctor_reports_config_and_cdp_health(tmp_path, monkeypatch, capsys):
     assert "workspace_count: 1" in captured.out
     assert "channel_count: 1" in captured.out
     assert "bob_company:bob_channel" in captured.out
+
+
+def test_doctor_reports_stale_heartbeat(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_file = tmp_path / ".config" / "personal-slack-agent" / "bob.toml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        "\n".join(
+            [
+                "[watcher]",
+                "heartbeat_stale_seconds = 120",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    paths = build_runtime_paths()
+    paths.pid_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.pid_file.write_text("43210", encoding="utf-8")
+    paths.lock_file.write_text("43210", encoding="utf-8")
+    os.utime(paths.pid_file, (700.0, 700.0))
+    os.utime(paths.lock_file, (700.0, 700.0))
+    monkeypatch.setattr(ctl_module.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(ctl_module, "_is_pid_running", lambda pid: pid == 43210)
+    monkeypatch.setattr(ctl_module, "_log_writer_pids", lambda log_file: [])
+    monkeypatch.setattr(ctl_module, "_is_cdp_reachable", lambda url: False)
+
+    exit_code = ctl_main(["doctor"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "heartbeat_status: running but stale: last loop heartbeat 5m ago" in captured.out
+    assert "heartbeat_stale: True" in captured.out
+    assert "heartbeat_age: 5m ago" in captured.out
+    assert "heartbeat_pid: 43210" in captured.out
 
 
 def test_doctor_reports_active_browser_and_slack_probes(tmp_path, monkeypatch, capsys):
