@@ -1674,6 +1674,7 @@ def test_call_slack_api_rediscovers_when_seeded_workspace_auth_is_invalid():
     discovery_page = DiscoveryPage()
     tokens = []
     adapter._workspace_page = lambda workspace_name: discovery_page  # type: ignore[method-assign]
+    adapter._origin_cookie_header = lambda origin: ""  # type: ignore[method-assign]
     adapter._post_slack_api_form = lambda origin, method_name, token, params, cookie_header=None: (  # type: ignore[method-assign]
         tokens.append(token) or (
             {"ok": False, "error": "invalid_auth"}
